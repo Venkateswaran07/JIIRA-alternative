@@ -581,7 +581,7 @@ function Shell({
       .flatMap((g) => g.items)
       .find((i) => loc.pathname.startsWith(i[0]))?.[2] ||
     fmt(loc.pathname.split("/").filter(Boolean).at(-1) || "Dashboard");
-  const effectiveRole = (serverData.user?.role || role) as Role;
+  const effectiveRole = (currentUser?.role || role) as Role;
 
   const unreadCount = notifications.filter((n: any) => !n.readAt).length;
 
@@ -3336,6 +3336,8 @@ function Reports() {
 }
 
 function AIPage({ toast }: { toast: (s: string) => void }) {
+  const { dashboard, refetch } = useWorkspace();
+  const navigate = useNavigate();
   const [plan, setPlan] = useState<any>(null),
     [prompt, setPrompt] = useState(""),
     [busy, setBusy] = useState(false);
@@ -3355,9 +3357,9 @@ function AIPage({ toast }: { toast: (s: string) => void }) {
     }
   };
   const confirm = async () => {
-    const project = serverData.dashboard?.projects?.[0],
-      sprint = serverData.dashboard?.sprints?.[0],
-      assignee = serverData.dashboard?.users?.[0];
+    const project = dashboard?.projects?.[0],
+      sprint = dashboard?.sprints?.[0],
+      assignee = dashboard?.users?.[0];
     if (!project || !sprint || !assignee)
       return toast("Create a project, sprint, and user first");
     await api("/ai/confirm-ticket-plan", {
@@ -3370,7 +3372,8 @@ function AIPage({ toast }: { toast: (s: string) => void }) {
       }),
     });
     toast("Ticket plan created");
-    window.location.href = "/tickets";
+    await refetch();
+    navigate("/tickets");
   };
   return (
     <>
@@ -5670,7 +5673,7 @@ function AuditLogsLive() {
 }
 
 function DashboardLive() {
-  const d = serverData.dashboard || {};
+  const { dashboard: d = {}, user: currentUser, organization, projects, tickets, people, risk } = useWorkspace();
   const summary = d.summary || {};
   const active =
     (d.sprints || []).find((s: any) => s.status === "active") || d.sprints?.[0];
@@ -5703,7 +5706,7 @@ function DashboardLive() {
     [
       "Blocked tasks",
       summary.blockedTasks ?? 0,
-      `${tickets.filter((t) => t.blocked && t.priority === "critical").length} critical`,
+      `${tickets.filter((t: any) => t.blocked && t.priority === "critical").length} critical`,
       "CircleSlash2",
       "red",
     ],
@@ -5725,8 +5728,8 @@ function DashboardLive() {
             month: "long",
           })
           .toUpperCase()}
-        title={`Good morning, ${serverData.user?.name?.split(" ")[0] || "there"}`}
-        desc={`Live delivery data from ${serverData.organization?.name}.`}
+        title={`Good morning, ${currentUser?.name?.split(" ")[0] || "there"}`}
+        desc={`Live delivery data from ${organization?.name || "Workspace"}.`}
       />
       <div className="metrics">
         {metrics.map(([label, value, sub, icon, tone]) => {
@@ -5802,7 +5805,7 @@ function DashboardLive() {
             sub="Capacity from workspace users"
           />
           <div className="workloads">
-            {people.map((p) => (
+            {people.map((p: any) => (
               <div key={p.email}>
                 <Avatar name={p.name} color={p.color} />
                 <span>
