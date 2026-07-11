@@ -3,6 +3,7 @@ import OpenAI from "openai";
 import { z } from "zod";
 import { env } from "../config/env.js";
 import { requireAuth, requireRole, type AuthRequest } from "../middleware/auth.js";
+import { enforceApiAccess } from "../middleware/access.js";
 import { Project } from "../models/Project.js";
 import { Sprint } from "../models/Sprint.js";
 import { Ticket } from "../models/Ticket.js";
@@ -11,6 +12,7 @@ import { generatedTicketSchema } from "../schemas/ai.js";
 
 const router = Router();
 router.use(requireAuth);
+router.use(enforceApiAccess);
 
 function getClient() {
   if (!env.openaiApiKey) throw new Error("OPENAI_API_KEY is not configured");

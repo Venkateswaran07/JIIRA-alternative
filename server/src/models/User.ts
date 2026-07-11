@@ -1,7 +1,7 @@
 import mongoose, { Schema } from "mongoose";
 
 export type UserRole = "admin" | "manager" | "engineer" | "designer";
-export type InviteStatus = "active" | "invited";
+export type InviteStatus = "active" | "invited" | "disabled";
 
 export interface IUser {
   name: string;

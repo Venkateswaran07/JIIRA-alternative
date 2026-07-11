@@ -2,7 +2,9 @@ import { Router } from "express";
 import { z } from "zod";
 import { listQuerySchema, pageMeta, parseOr400 } from "../lib/http.js";
 import { requireAuth, requireRole, type AuthRequest } from "../middleware/auth.js";
+import { enforceApiAccess } from "../middleware/access.js";
 import { Organization } from "../models/Organization.js";
+import { Counter } from "../models/Counter.js";
 import { Project } from "../models/Project.js";
 import { Sprint } from "../models/Sprint.js";
 import { Ticket, type TicketStatus } from "../models/Ticket.js";
@@ -10,6 +12,7 @@ import { User } from "../models/User.js";
 
 const router = Router();
 router.use(requireAuth);
+router.use(enforceApiAccess);
 
 const statuses = ["Backlog", "To Do", "In Progress", "In Review", "Done"] as const;
 const priorities = ["low", "medium", "high", "critical"] as const;
@@ -89,8 +92,12 @@ const settingsSchema = z.object({
 async function nextTicketId(req: AuthRequest, projectId: string) {
   const project = await Project.findOne({ _id: projectId, organization: orgId(req) });
   if (!project) throw new Error("Project not found");
-  const count = await Ticket.countDocuments({ organization: orgId(req), project: project._id });
-  return `${project.key}-${String(count + 101).padStart(3, "0")}`;
+  const counter = await Counter.findOneAndUpdate(
+    { organization: orgId(req), scope: `ticket:${project._id}` },
+    { $inc: { value: 1 } },
+    { upsert: true, new: true, setDefaultsOnInsert: true },
+  );
+  return `${project.key}-${String(counter.value).padStart(3, "0")}`;
 }
 
 router.get("/me", async (req: AuthRequest, res) => {
