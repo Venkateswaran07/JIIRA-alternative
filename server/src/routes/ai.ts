@@ -1,9 +1,11 @@
 import { Router } from "express";
 import OpenAI from "openai";
 import { z } from "zod";
+import { aiEndpointsForRole, canRoleAccessAiEndpoint, isConfirmationRequired, normalizeAiPath } from "../aiAccess.js";
 import { env } from "../config/env.js";
 import { requireAuth, requireRole, type AuthRequest } from "../middleware/auth.js";
 import { enforceApiAccess } from "../middleware/access.js";
+import { AuditEvent } from "../models/Operational.js";
 import { Project } from "../models/Project.js";
 import { Sprint } from "../models/Sprint.js";
 import { Ticket } from "../models/Ticket.js";
@@ -18,6 +20,70 @@ function getClient() {
   if (!env.openaiApiKey) throw new Error("OPENAI_API_KEY is not configured");
   return new OpenAI({ apiKey: env.openaiApiKey, baseURL: env.openaiBaseUrl });
 }
+
+router.get("/endpoints", (req: AuthRequest, res) => {
+  return res.json({ endpoints: aiEndpointsForRole(req.user!.role) });
+});
+
+router.post("/execute", async (req: AuthRequest, res) => {
+  const parsed = z.object({
+    method: z.enum(["GET", "POST", "PUT", "PATCH", "DELETE"]),
+    path: z.string().min(1),
+    body: z.unknown().optional(),
+    confirmed: z.boolean().default(false),
+  }).safeParse(req.body);
+  if (!parsed.success) return res.status(400).json({ message: "Invalid AI endpoint execution request", issues: parsed.error.issues });
+
+  const method = parsed.data.method;
+  const path = normalizeAiPath(parsed.data.path);
+  if (path.startsWith("/ai/execute")) return res.status(400).json({ message: "AI execution cannot call itself" });
+
+  const access = canRoleAccessAiEndpoint(req.user!.role, method, path);
+  if (!access.allowed) {
+    return res.status(403).json({
+      message: "Your role cannot access this endpoint through AI",
+      allowedRoles: access.roles,
+    });
+  }
+
+  if (isConfirmationRequired(method, path) && !parsed.data.confirmed) {
+    return res.status(409).json({
+      requiresConfirmation: true,
+      action: `${method} ${path}`,
+      message: "Confirm this destructive action before AI performs it.",
+    });
+  }
+
+  const url = new URL(`/api/v1${path}`, `http://127.0.0.1:${env.port}`);
+  const response = await fetch(url, {
+    method,
+    headers: {
+      authorization: req.headers.authorization ?? "",
+      ...(method === "GET" || method === "DELETE" ? {} : { "content-type": "application/json" }),
+    },
+    body: method === "GET" || method === "DELETE" ? undefined : JSON.stringify(parsed.data.body ?? {}),
+  });
+  const text = await response.text();
+  const contentType = response.headers.get("content-type") ?? "application/json";
+  const payload = contentType.includes("application/json") && text ? JSON.parse(text) : text;
+
+  if (method !== "GET") {
+    await AuditEvent.create({
+      organization: req.user!.organizationId,
+      actor: req.user!.userId,
+      action: "ai.endpoint_executed",
+      metadata: {
+        method,
+        path,
+        endpoint: access.endpoint,
+        confirmed: parsed.data.confirmed,
+        status: response.status,
+      },
+    });
+  }
+
+  return res.status(response.status).json(payload);
+});
 
 router.get("/models", async (_req, res) => {
   try {

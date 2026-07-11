@@ -1,4 +1,5 @@
 import { apiCatalog } from "./apiCatalog.js";
+import { isConfirmationRequired } from "./aiAccess.js";
 import { rolesForEndpoint } from "./middleware/access.js";
 
 const publicAuthPaths = new Set(["/auth/register", "/auth/login", "/auth/refresh", "/auth/logout", "/auth/forgot-password", "/auth/reset-password", "/auth/accept-invite"]);
@@ -13,6 +14,7 @@ function operation(method: string, path: string, group: string) {
     operationId: `${method.toLowerCase()}_${path.replace(/[:/\-]+/g, "_").replace(/^_|_$/g, "")}`,
     ...(parameters.length ? { parameters } : {}),
     ...(isPublic ? { security: [] } : { security: [{ bearerAuth: [] }], "x-allowed-roles": roles }),
+    ...(isConfirmationRequired(method, path) ? { "x-requires-confirmation": true } : {}),
     ...(method !== "GET" && method !== "DELETE" ? { requestBody: { required: false, content: { "application/json": { schema: { type: "object", additionalProperties: true } } } } } : {}),
     responses: {
       "200": { description: "Successful response", content: { "application/json": { schema: { type: "object" } } } },
