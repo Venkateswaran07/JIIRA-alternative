@@ -237,6 +237,36 @@ function ApiGate({
 
   const loadData = async () => {
     try {
+      const isReports = location.pathname.startsWith("/reports");
+      const isSessions = location.pathname.startsWith("/sessions") || location.pathname.startsWith("/settings");
+      const isAuditLogs = location.pathname.startsWith("/audit-logs");
+      const isIntegrations = location.pathname.startsWith("/integrations");
+      const isResources = location.pathname.startsWith("/resources") || location.pathname.startsWith("/organization");
+
+      const mePromise = api<any>("/auth/me");
+      const dashboardPromise = api<any>("/dashboard");
+      const notificationsPromise = api<any>("/notifications").catch(() => ({ notifications: [] }));
+
+      const reportsPromise = isReports
+        ? api<any>("/reports").catch(() => null)
+        : Promise.resolve(null);
+
+      const sessionsPromise = isSessions
+        ? api<any>("/auth/sessions").catch(() => ({ sessions: [] }))
+        : Promise.resolve({ sessions: [] });
+
+      const auditLogsPromise = isAuditLogs
+        ? api<any>("/audit-logs").catch(() => ({ events: [] }))
+        : Promise.resolve({ events: [] });
+
+      const apiTokensPromise = isIntegrations
+        ? api<any>("/integrations/api-token").catch(() => ({ integrations: [] }))
+        : Promise.resolve({ integrations: [] });
+
+      const webhooksPromise = isIntegrations
+        ? api<any>("/integrations/webhook").catch(() => ({ integrations: [] }))
+        : Promise.resolve({ integrations: [] });
+
       const [
         me,
         dashboard,
@@ -247,26 +277,30 @@ function ApiGate({
         apiTokens,
         webhooks,
       ] = await Promise.all([
-        api<any>("/auth/me"),
-        api<any>("/dashboard"),
-        api<any>("/notifications").catch(() => ({ notifications: [] })),
-        api<any>("/reports").catch(() => null),
-        api<any>("/auth/sessions").catch(() => ({ sessions: [] })),
-        api<any>("/audit-logs").catch(() => ({ events: [] })),
-        api<any>("/integrations/api-token").catch(() => ({ integrations: [] })),
-        api<any>("/integrations/webhook").catch(() => ({ integrations: [] })),
+        mePromise,
+        dashboardPromise,
+        notificationsPromise,
+        reportsPromise,
+        sessionsPromise,
+        auditLogsPromise,
+        apiTokensPromise,
+        webhooksPromise,
       ]);
 
-      const resourcePairs = await Promise.all(
-        resourceKinds.map(async (kind) => [
-          kind,
-          (
-            await api<any>(`/resources/${kind}`).catch(() => ({
-              resources: [],
-            }))
-          ).resources,
-        ]),
-      );
+      let resourcesObj = serverData.resources || {};
+      if (isResources) {
+        const resourcePairs = await Promise.all(
+          resourceKinds.map(async (kind) => [
+            kind,
+            (
+              await api<any>(`/resources/${kind}`).catch(() => ({
+                resources: [],
+              }))
+            ).resources,
+          ]),
+        );
+        resourcesObj = Object.fromEntries(resourcePairs);
+      }
 
       const parsedPeople = (dashboard.users || []).map((u: any) => ({
         name: u.name,
@@ -326,14 +360,16 @@ function ApiGate({
         organization: me.organization,
         dashboard,
         notifications: notificationsData.notifications || [],
-        reports: reportsData?.reports,
-        sessions: sessionsData.sessions || [],
-        auditLogs: auditLogsData.events || [],
-        integrations: [
-          ...(apiTokens.integrations || []),
-          ...(webhooks.integrations || []),
-        ],
-        resources: Object.fromEntries(resourcePairs),
+        reports: isReports ? reportsData?.reports : serverData.reports,
+        sessions: isSessions ? sessionsData.sessions || [] : serverData.sessions || [],
+        auditLogs: isAuditLogs ? auditLogsData.events || [] : serverData.auditLogs || [],
+        integrations: isIntegrations
+          ? [
+              ...(apiTokens.integrations || []),
+              ...(webhooks.integrations || []),
+            ]
+          : serverData.integrations || [],
+        resources: resourcesObj,
         projects: parsedProjects,
         tickets: parsedTickets,
         people: parsedPeople,
@@ -353,14 +389,16 @@ function ApiGate({
         organization: me.organization,
         dashboard,
         notifications: notificationsData.notifications || [],
-        reports: reportsData?.reports,
-        sessions: sessionsData.sessions || [],
-        auditLogs: auditLogsData.events || [],
-        integrations: [
-          ...(apiTokens.integrations || []),
-          ...(webhooks.integrations || []),
-        ],
-        resources: Object.fromEntries(resourcePairs),
+        reports: isReports ? reportsData?.reports : serverData.reports,
+        sessions: isSessions ? sessionsData.sessions || [] : serverData.sessions || [],
+        auditLogs: isAuditLogs ? auditLogsData.events || [] : serverData.auditLogs || [],
+        integrations: isIntegrations
+          ? [
+              ...(apiTokens.integrations || []),
+              ...(webhooks.integrations || []),
+            ]
+          : serverData.integrations || [],
+        resources: resourcesObj,
       });
 
       setLoading(false);
@@ -574,6 +612,7 @@ function Shell({
     [mobile, setMobile] = useState(false),
     [search, setSearch] = useState(false),
     [workspaceMenu, setWorkspaceMenu] = useState(false);
+  const [aiPanel, setAiPanel] = useState(false);
   const loc = useLocation();
   const navigate = useNavigate();
   const label =
@@ -718,6 +757,11 @@ function Shell({
             <Icons.Plus size={17} />
             Create
           </button>
+          <button className="ai-agent-toggle" onClick={() => setAiPanel(!aiPanel)}>
+              <span className="pulse-dot" />
+              <Icons.Bot size={16} />
+              <span>AI Agent</span>
+            </button>
           <button
             className="icon-btn"
             onClick={() => setTheme(theme === "dark" ? "light" : "dark")}
@@ -756,6 +800,7 @@ function Shell({
       <button className="fab" onClick={() => navigate("/tickets/new")}>
         <Icons.Plus />
       </button>
+      <AiAgentPanel open={aiPanel} onClose={() => setAiPanel(false)} toast={toast} />
     </div>
   );
 }
@@ -803,6 +848,176 @@ function Command({
           })}
       </div>
     </div>
+  );
+}
+
+type AiChatMessage = {
+  id: number;
+  role: "user" | "assistant";
+  content: string;
+  toolCalls?: { name: string; args: any; result: any; error?: boolean }[];
+  requiresConfirmation?: boolean;
+  pendingAction?: { method: string; path: string; body?: any; description: string };
+};
+
+function AiAgentPanel({ open, onClose, toast }: { open: boolean; onClose: () => void; toast: (s: string) => void }) {
+  const [messages, setMessages] = useState<AiChatMessage[]>([]);
+  const [input, setInput] = useState("");
+  const [loading, setLoading] = useState(false);
+  const [expandedTools, setExpandedTools] = useState<Set<number>>(new Set());
+  const bodyRef = React.useRef<HTMLDivElement>(null);
+  const inputRef = React.useRef<HTMLTextAreaElement>(null);
+  const { user } = useWorkspace();
+
+  useEffect(() => {
+    if (open && inputRef.current) inputRef.current.focus();
+  }, [open]);
+
+  useEffect(() => {
+    if (bodyRef.current) bodyRef.current.scrollTop = bodyRef.current.scrollHeight;
+  }, [messages, loading]);
+
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      if ((e.ctrlKey || e.metaKey) && e.key === "j") { e.preventDefault(); onClose(); }
+    };
+    window.addEventListener("keydown", handler);
+    return () => window.removeEventListener("keydown", handler);
+  }, [onClose]);
+
+  const sendMessage = async (text: string, confirmed?: { action: string }) => {
+    if (!text.trim() && !confirmed) return;
+    const userMsg: AiChatMessage = { id: Date.now(), role: "user", content: text };
+    if (!confirmed) setMessages((m) => [...m, userMsg]);
+    setInput("");
+    setLoading(true);
+    try {
+      const history = messages.filter((m) => !m.requiresConfirmation).map((m) => ({ role: m.role, content: m.content }));
+      const res = await api<any>("/ai/chat", {
+        method: "POST",
+        body: JSON.stringify({ message: text, history, ...(confirmed ? { confirmed } : {}) }),
+      });
+      const assistantMsg: AiChatMessage = {
+        id: Date.now() + 1,
+        role: "assistant",
+        content: res.reply || "I couldn't process that request.",
+        toolCalls: res.toolCalls,
+        requiresConfirmation: res.requiresConfirmation,
+        pendingAction: res.pendingAction,
+      };
+      setMessages((m) => [...m, assistantMsg]);
+    } catch (e) {
+      setMessages((m) => [...m, {
+        id: Date.now() + 1,
+        role: "assistant",
+        content: e instanceof Error ? `Sorry, something went wrong: ${e.message}` : "An unexpected error occurred.",
+      }]);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleConfirm = (msg: AiChatMessage) => {
+    if (!msg.pendingAction) return;
+    const lastUserMsg = [...messages].reverse().find((m) => m.role === "user");
+    sendMessage(lastUserMsg?.content || "confirm", { action: msg.pendingAction.description });
+  };
+
+  const handleDeny = (msg: AiChatMessage) => {
+    setMessages((m) => [...m, { id: Date.now(), role: "assistant", content: "Understood — action cancelled. How else can I help?" }]);
+  };
+
+  const toggleTool = (id: number) => setExpandedTools((s) => { const n = new Set(s); n.has(id) ? n.delete(id) : n.add(id); return n; });
+
+  const clearChat = () => { setMessages([]); setExpandedTools(new Set()); };
+
+  const quickActions = ["Show my tickets", "Sprint status", "Create a ticket", "Team overview", "Show backlog"];
+
+  if (!open) return null;
+
+  return (
+    <>
+      <div className="ai-panel-backdrop" onClick={onClose} />
+      <aside className="ai-panel">
+        <div className="ai-panel-head">
+          <div className="ai-panel-icon"><Icons.Bot size={20} /></div>
+          <div>
+            <b>I-TRACK AI Agent</b>
+            <small>Powered by AI · Ready to help</small>
+          </div>
+          <div className="ai-panel-actions">
+            <button className="icon-btn" onClick={clearChat} title="Clear chat"><Icons.Trash2 size={16} /></button>
+            <button className="icon-btn" onClick={onClose} title="Close (Ctrl+J)"><Icons.X size={18} /></button>
+          </div>
+        </div>
+        <div className="ai-chat-body" ref={bodyRef}>
+          {messages.length === 0 && (
+            <div className="ai-welcome">
+              <div className="ai-welcome-icon"><Icons.Sparkles size={28} /></div>
+              <h3>Hey{user?.name ? `, ${user.name.split(" ")[0]}` : ""}!</h3>
+              <p>I can manage your tickets, projects, sprints, and more. Just ask me in natural language.</p>
+              <div className="ai-quick-actions">
+                {quickActions.map((q) => (
+                  <button key={q} onClick={() => sendMessage(q)}>{q}</button>
+                ))}
+              </div>
+            </div>
+          )}
+          {messages.map((msg) => (
+            <div className={cx("ai-msg", msg.role)} key={msg.id}>
+              <div className="ai-msg-avatar">
+                {msg.role === "assistant" ? <Icons.Bot size={16} /> : <Icons.User size={16} />}
+              </div>
+              <div>
+                <div className="ai-msg-bubble">{msg.content}</div>
+                {msg.toolCalls?.map((tc, i) => (
+                  <div key={i}>
+                    <div className={cx("ai-tool-badge", tc.error && "error")} onClick={() => toggleTool(msg.id * 100 + i)}>
+                      {tc.error ? <Icons.AlertCircle size={12} /> : <Icons.Zap size={12} />}
+                      {tc.name.replace("execute_itrack_api", "API Call")}: {tc.args?.method} {tc.args?.path}
+                    </div>
+                    {expandedTools.has(msg.id * 100 + i) && (
+                      <div className="ai-tool-detail">{JSON.stringify(tc.result, null, 2)}</div>
+                    )}
+                  </div>
+                ))}
+                {msg.requiresConfirmation && msg.pendingAction && (
+                  <div className="ai-confirm-bar">
+                    <p><Icons.ShieldAlert size={14} /> Confirmation Required</p>
+                    <span>{msg.pendingAction.description}</span>
+                    <div>
+                      <button className="btn-confirm" onClick={() => handleConfirm(msg)}>Yes, proceed</button>
+                      <button className="btn-deny" onClick={() => handleDeny(msg)}>Cancel</button>
+                    </div>
+                  </div>
+                )}
+              </div>
+            </div>
+          ))}
+          {loading && (
+            <div className="ai-typing">
+              <div className="ai-msg-avatar" style={{ background: "linear-gradient(135deg, var(--purple), var(--blue))", color: "#fff", width: 30, height: 30, borderRadius: 9, display: "flex", alignItems: "center", justifyContent: "center" }}>
+                <Icons.Bot size={16} />
+              </div>
+              <div className="ai-typing-dots"><span /><span /><span /></div>
+            </div>
+          )}
+        </div>
+        <div className="ai-panel-input">
+          <textarea
+            ref={inputRef}
+            value={input}
+            onChange={(e) => setInput(e.target.value)}
+            onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); sendMessage(input); } }}
+            placeholder="Ask me anything about your workspace…"
+            rows={1}
+          />
+          <button className="ai-send-btn" disabled={!input.trim() || loading} onClick={() => sendMessage(input)}>
+            <Icons.SendHorizonal size={18} />
+          </button>
+        </div>
+      </aside>
+    </>
   );
 }
 
@@ -1546,7 +1761,36 @@ function ProjectDetail() {
 function TicketTable({ rows }: { rows?: Ticket[] }) {
   const { tickets: wsTickets } = useWorkspace();
   const nav = useNavigate();
+  const [params] = useSearchParams();
+  const q = params.get("q") || "";
+  const filter = params.get("filter") || "";
+  const sort = params.get("sort") || "";
+
   const data = rows || wsTickets;
+
+  // Filter
+  const filtered = data.filter((t) => {
+    const matchesQ = q
+      ? t.title.toLowerCase().includes(q.toLowerCase()) ||
+        t.key.toLowerCase().includes(q.toLowerCase())
+      : true;
+    const matchesFilter = filter === "open" ? t.status !== "Done" : true;
+    return matchesQ && matchesFilter;
+  });
+
+  // Sort
+  const sorted = sort
+    ? [...filtered].sort((a, b) => {
+        const valA = a.title.toLowerCase();
+        const valB = b.title.toLowerCase();
+        if (sort === "desc") {
+          return valA > valB ? -1 : valA < valB ? 1 : 0;
+        } else {
+          return valA < valB ? -1 : valA > valB ? 1 : 0;
+        }
+      })
+    : filtered;
+
   return (
     <div className="table-wrap">
       <table>
@@ -1560,7 +1804,7 @@ function TicketTable({ rows }: { rows?: Ticket[] }) {
           </tr>
         </thead>
         <tbody>
-          {data.map((t) => (
+          {sorted.map((t) => (
             <tr
               key={t.id}
               onClick={() => nav(`/tickets/${t.key}`)}
@@ -1650,14 +1894,31 @@ function Board({
     "Done",
   ];
 
+  const filter = params.get("filter") || "";
+  const sort = params.get("sort") || "";
+
   // Filter tickets
-  const activeTickets = wsTickets.filter((t) => {
+  const filteredTickets = wsTickets.filter((t) => {
     if (projectFilter && t.project !== projectFilter) return false;
     const matchesQ =
       t.title.toLowerCase().includes(q.toLowerCase()) ||
       t.key.toLowerCase().includes(q.toLowerCase());
-    return matchesQ;
+    const matchesFilter = filter === "open" ? t.status !== "Done" : true;
+    return matchesQ && matchesFilter;
   });
+
+  // Sort tickets
+  const activeTickets = sort
+    ? [...filteredTickets].sort((a, b) => {
+        const valA = a.title.toLowerCase();
+        const valB = b.title.toLowerCase();
+        if (sort === "desc") {
+          return valA > valB ? -1 : valA < valB ? 1 : 0;
+        } else {
+          return valA < valB ? -1 : valA > valB ? 1 : 0;
+        }
+      })
+    : filteredTickets;
 
   const move = async (id: string, status: TicketStatus) => {
     try {
@@ -1752,6 +2013,7 @@ function Board({
           </button>
         )}
       </PageHead>
+      {filters && <FilterBar placeholder="Search tickets…" />}
       <div className="board-toolbar">
         <div className="segmented">
           <button
@@ -2731,6 +2993,9 @@ function Team() {
 
   const users = dashboard?.users || [];
 
+  const filter = params.get("filter") || "";
+  const sort = params.get("sort") || "";
+
   // Filter
   const filtered = users.filter((u: any) => {
     const matchesQ =
@@ -2739,8 +3004,22 @@ function Team() {
       (u.skills || []).some((s: string) =>
         s.toLowerCase().includes(q.toLowerCase()),
       );
-    return matchesQ;
+    const matchesFilter = filter === "open" ? u.inviteStatus !== "disabled" : true;
+    return matchesQ && matchesFilter;
   });
+
+  // Sort
+  const sorted = sort
+    ? [...filtered].sort((a: any, b: any) => {
+        const valA = a.name.toLowerCase();
+        const valB = b.name.toLowerCase();
+        if (sort === "desc") {
+          return valA > valB ? -1 : valA < valB ? 1 : 0;
+        } else {
+          return valA < valB ? -1 : valA > valB ? 1 : 0;
+        }
+      })
+    : filtered;
 
   const isLeader = ["admin", "manager"].includes(role);
 
@@ -2772,22 +3051,6 @@ function Team() {
     }
   };
 
-  const toggleDeactivate = async (u: any) => {
-    const action = u.inviteStatus === "disabled" ? "enable" : "disable";
-    if (
-      !window.confirm(
-        `Are you sure you want to ${action === "enable" ? "activate" : "deactivate"} ${u.name}?`,
-      )
-    )
-      return;
-    try {
-      await api(`/users/${u._id}/${action}`, { method: "POST" });
-      toast(`User ${action === "enable" ? "activated" : "deactivated"}`);
-      await refetch();
-    } catch (err) {
-      toast(err instanceof Error ? err.message : "Failed to toggle status");
-    }
-  };
 
   return (
     <>
@@ -2804,7 +3067,7 @@ function Team() {
       </PageHead>
       <FilterBar placeholder="Search people or skills…" />
       <div className="team-grid">
-        {filtered.map((u: any) => {
+        {sorted.map((u: any) => {
           const workload = u.capacity
             ? Math.min(100, Math.round(((u.capacity || 0) / 40) * 100))
             : 0;
@@ -2815,47 +3078,8 @@ function Team() {
               onClick={() => nav(`/team/${u._id}`)}
               style={{ cursor: "pointer" }}
             >
-              <div
-                style={{
-                  display: "flex",
-                  justifyContent: "space-between",
-                  alignItems: "flex-start",
-                  width: "100%",
-                }}
-              >
-                <Avatar name={u.name} color={u.avatarColor || "#A47BEF"} />
-                {isLeader && u.inviteStatus === "invited" && (
-                  <div
-                    style={{ display: "flex", gap: "5px" }}
-                    onClick={(e) => e.stopPropagation()}
-                  >
-                    <button
-                      className="btn text-btn"
-                      onClick={() => resendInvite(u._id)}
-                    >
-                      Resend
-                    </button>
-                    <button
-                      className="btn text-btn danger"
-                      onClick={() => cancelInvite(u._id)}
-                    >
-                      Cancel
-                    </button>
-                  </div>
-                )}
-                {isLeader && u.inviteStatus !== "invited" && (
-                  <button
-                    className={`btn text-btn ${u.inviteStatus === "disabled" ? "" : "danger"}`}
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      toggleDeactivate(u);
-                    }}
-                  >
-                    {u.inviteStatus === "disabled" ? "Activate" : "Deactivate"}
-                  </button>
-                )}
-              </div>
-              <div style={{ marginTop: "10px" }}>
+              <Avatar name={u.name} color={u.avatarColor || "#A47BEF"} />
+              <div>
                 <h2>{u.name}</h2>
                 <p>{u.email}</p>
                 <div style={{ display: "flex", gap: "5px", marginTop: "5px" }}>
@@ -2875,6 +3099,27 @@ function Team() {
                   </Badge>
                 </div>
               </div>
+              {isLeader && u.inviteStatus === "invited" && (
+                <div
+                  style={{ display: "flex", justifyContent: "flex-end" }}
+                  onClick={(e) => e.stopPropagation()}
+                >
+                  <div style={{ display: "flex", gap: "5px" }}>
+                    <button
+                      className="btn text-btn"
+                      onClick={() => resendInvite(u._id)}
+                    >
+                      Resend
+                    </button>
+                    <button
+                      className="btn text-btn danger"
+                      onClick={() => cancelInvite(u._id)}
+                    >
+                      Cancel
+                    </button>
+                  </div>
+                </div>
+              )}
               <div className="skills">
                 {(u.skills || []).map((s: string) => (
                   <Badge key={s}>{s}</Badge>
@@ -3340,13 +3585,39 @@ function AIPage({ toast }: { toast: (s: string) => void }) {
   const navigate = useNavigate();
   const [plan, setPlan] = useState<any>(null),
     [prompt, setPrompt] = useState(""),
-    [busy, setBusy] = useState(false);
+    [busy, setBusy] = useState(false),
+    [models, setModels] = useState<string[]>([]),
+    [selectedModel, setSelectedModel] = useState(""),
+    [loadingModels, setLoadingModels] = useState(true);
+
+  useEffect(() => {
+    let active = true;
+    const loadModels = async () => {
+      try {
+        const result = await api<{ models: string[] }>("/ai/models");
+        if (!active) return;
+        setModels(result.models);
+        setSelectedModel((current) => current || result.models[0] || "");
+      } catch (error) {
+        if (active) {
+          toast(error instanceof Error ? error.message : "Unable to load provider models");
+        }
+      } finally {
+        if (active) setLoadingModels(false);
+      }
+    };
+    void loadModels();
+    return () => {
+      active = false;
+    };
+  }, [toast]);
+
   const generate = async () => {
     setBusy(true);
     try {
       const result = await api<any>("/ai/generate-tickets", {
         method: "POST",
-        body: JSON.stringify({ prompt }),
+        body: JSON.stringify({ prompt, ...(selectedModel ? { model: selectedModel } : {}) }),
       });
       setPlan(result.plan);
       toast("Ticket plan generated");
@@ -3395,7 +3666,20 @@ function AIPage({ toast }: { toast: (s: string) => void }) {
             </span>
             <div>
               <small>MODEL</small>
-              <b>Claude Sonnet 4</b>
+              <select
+                value={selectedModel}
+                onChange={(e) => setSelectedModel(e.target.value)}
+                disabled={loadingModels || models.length === 0}
+              >
+                <option value="" disabled>
+                  {loadingModels ? "Loading provider models…" : "Select a provider model"}
+                </option>
+                {models.map((model) => (
+                  <option key={model} value={model}>
+                    {model}
+                  </option>
+                ))}
+              </select>
             </div>
             <Icons.ChevronDown />
           </div>
@@ -5328,7 +5612,34 @@ function ResourcesLive({ toast }: { toast: (s: string) => void }) {
   const isLeader = ["admin", "manager"].includes(role);
 
   if (kind) {
-    const rows = resources[kind] || [];
+    const rawRows = resources[kind] || [];
+    const [params] = useSearchParams();
+    const q = params.get("q") || "";
+    const filter = params.get("filter") || "";
+    const sort = params.get("sort") || "";
+
+    // Filter
+    const filtered = rawRows.filter((item: any) => {
+      const matchesQ = q
+        ? item.name.toLowerCase().includes(q.toLowerCase()) ||
+          (item.description || "").toLowerCase().includes(q.toLowerCase())
+        : true;
+      const matchesFilter = filter === "open" ? item.status === "active" : true;
+      return matchesQ && matchesFilter;
+    });
+
+    // Sort
+    const rows = sort
+      ? [...filtered].sort((a: any, b: any) => {
+          const valA = a.name.toLowerCase();
+          const valB = b.name.toLowerCase();
+          if (sort === "desc") {
+            return valA > valB ? -1 : valA < valB ? 1 : 0;
+          } else {
+            return valA < valB ? -1 : valA > valB ? 1 : 0;
+          }
+        })
+      : filtered;
 
     const create = async () => {
       const name = window.prompt(`Name for the new ${fmt(kind)}`);
@@ -5618,13 +5929,28 @@ function AuditLogsLive() {
   const [params] = useSearchParams();
   const q = params.get("q") || "";
 
+  const filter = params.get("filter") || "";
+  const sort = params.get("sort") || "";
+
   const filtered = rows.filter((item: any) => {
-    return (
+    const matchesQ =
       item.action.toLowerCase().includes(q.toLowerCase()) ||
       (item.actor?.name || "System").toLowerCase().includes(q.toLowerCase()) ||
-      (item.entityType || "").toLowerCase().includes(q.toLowerCase())
-    );
+      (item.entityType || "").toLowerCase().includes(q.toLowerCase());
+    return matchesQ;
   });
+
+  const sorted = sort
+    ? [...filtered].sort((a: any, b: any) => {
+        const valA = new Date(a.createdAt).getTime();
+        const valB = new Date(b.createdAt).getTime();
+        if (sort === "desc") {
+          return valB - valA;
+        } else {
+          return valA - valB;
+        }
+      })
+    : filtered;
 
   return (
     <>
@@ -5645,7 +5971,7 @@ function AuditLogsLive() {
               </tr>
             </thead>
             <tbody>
-              {filtered.map((item: any) => (
+              {sorted.map((item: any) => (
                 <tr key={item._id}>
                   <td>
                     <Badge tone="purple">{item.action}</Badge>

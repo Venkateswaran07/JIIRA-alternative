@@ -1,3 +1,4 @@
+// Trigger server reload to pick up glm-4.7 config
 import cors from "cors";
 import express from "express";
 import rateLimit from "express-rate-limit";
@@ -18,7 +19,7 @@ app.use(helmet());
 app.use(cors({ origin: env.clientOrigin }));
 app.use(express.json({ limit: "1mb" }));
 app.use(morgan("dev"));
-app.use(rateLimit({ windowMs: 60_000, limit: 120 }));
+app.use(rateLimit({ windowMs: 60_000, limit: 1000 }));
 
 app.get("/api/health", (_req, res) => res.json({ ok: true, service: "itrack-api" }));
 app.get("/api/v1/health", (_req, res) => res.json({ ok: true, service: "itrack-api", version: "v1" }));

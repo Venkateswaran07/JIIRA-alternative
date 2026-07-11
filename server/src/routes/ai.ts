@@ -21,6 +21,26 @@ function getClient() {
   return new OpenAI({ apiKey: env.openaiApiKey, baseURL: env.openaiBaseUrl });
 }
 
+function parseJsonPayload(raw: string) {
+  const trimmed = raw.trim();
+  try {
+    return JSON.parse(trimmed);
+  } catch {
+    const fenced = trimmed.match(/```json\s*([\s\S]*?)\s*```/i);
+    if (fenced?.[1]) {
+      return JSON.parse(fenced[1]);
+    }
+
+    const firstObject = trimmed.indexOf("{");
+    const lastObject = trimmed.lastIndexOf("}");
+    if (firstObject !== -1 && lastObject > firstObject) {
+      return JSON.parse(trimmed.slice(firstObject, lastObject + 1));
+    }
+
+    throw new Error("AI response did not contain valid JSON");
+  }
+}
+
 router.get("/endpoints", (req: AuthRequest, res) => {
   return res.json({ endpoints: aiEndpointsForRole(req.user!.role) });
 });
@@ -107,7 +127,6 @@ router.post("/generate-tickets", async (req, res) => {
     const completion = await getClient().chat.completions.create({
       model,
       temperature: 0.2,
-      response_format: { type: "json_object" },
       messages: [
         {
           role: "system",
@@ -117,7 +136,7 @@ router.post("/generate-tickets", async (req, res) => {
       ],
     });
     const raw = completion.choices[0]?.message?.content;
-    const json = raw ? JSON.parse(raw) : null;
+    const json = raw ? parseJsonPayload(raw) : null;
     const validation = generatedTicketSchema.safeParse(json);
     if (!validation.success) {
       return res.status(422).json({ message: "AI output did not match the ticket schema", issues: validation.error.issues });
@@ -199,6 +218,158 @@ router.post("/confirm-ticket-plan", requireRole(["admin", "manager"]), async (re
 
   const tickets = await Ticket.insertMany(docs);
   return res.status(201).json({ tickets });
+});
+
+router.post("/chat", async (req, res) => {
+  const parsed = z.object({
+    message: z.string().min(1),
+    history: z.array(z.object({
+      role: z.enum(["user", "assistant"]),
+      content: z.string(),
+    })).optional(),
+    confirmed: z.object({ action: z.string() }).optional(),
+  }).safeParse(req.body);
+  if (!parsed.success) return res.status(400).json({ message: "Invalid chat request", issues: parsed.error.issues });
+
+  const authReq = req as AuthRequest;
+  const userRole = authReq.user!.role;
+  const endpoints = aiEndpointsForRole(userRole);
+  const endpointList = endpoints.map((ep) => `${ep.method} ${ep.path}${ep.requiresConfirmation ? " [requires confirmation]" : ""}`).join("\n");
+
+  const systemPrompt = [
+    "You are the I-TRACK project-management assistant. You operate as the authenticated user.",
+    "Use ONLY the following endpoints available for the user's role:",
+    endpointList,
+    "",
+    "Rules:",
+    "- For destructive or irreversible actions (DELETE, archive, deactivate, etc.), describe what will happen and ask for explicit confirmation before proceeding.",
+    "- Never expose credentials, tokens, or internal secrets.",
+    "- Report backend errors accurately — include status codes and messages.",
+    "- When you need to call an I-TRACK API, use the execute_itrack_api tool.",
+  ].join("\n");
+
+  const messages: OpenAI.Chat.Completions.ChatCompletionMessageParam[] = [
+    { role: "system", content: systemPrompt },
+    ...(parsed.data.history ?? []).map((m) => ({ role: m.role as "user" | "assistant", content: m.content })),
+    { role: "user", content: parsed.data.message },
+  ];
+
+  const tools: OpenAI.Chat.Completions.ChatCompletionTool[] = [
+    {
+      type: "function",
+      function: {
+        name: "execute_itrack_api",
+        description: "Execute an allowed I-TRACK backend operation as the signed-in user.",
+        parameters: {
+          type: "object",
+          required: ["method", "path"],
+          properties: {
+            method: { type: "string", enum: ["GET", "POST", "PUT", "PATCH", "DELETE"] },
+            path: { type: "string", description: "API path like /tickets or /tickets/:id/status" },
+            body: { type: "object", description: "Request body for POST/PUT/PATCH" },
+          },
+        },
+      },
+    },
+  ];
+
+  try {
+    const client = getClient();
+    const model = env.openaiModel || "grok-3-mini";
+    const allToolCalls: { name: string; arguments: unknown; result: unknown }[] = [];
+    const MAX_ITERATIONS = 5;
+
+    let response = await client.chat.completions.create({
+      model,
+      temperature: 0.3,
+      messages,
+      tools,
+    });
+
+    for (let iteration = 0; iteration < MAX_ITERATIONS; iteration++) {
+      const choice = response.choices[0];
+      if (!choice) break;
+
+      const assistantMessage = choice.message;
+      messages.push(assistantMessage);
+
+      if (choice.finish_reason !== "tool_calls" || !assistantMessage.tool_calls?.length) {
+        return res.json({ reply: assistantMessage.content ?? "", ...(allToolCalls.length ? { toolCalls: allToolCalls } : {}) });
+      }
+
+      for (const toolCall of assistantMessage.tool_calls) {
+        if (toolCall.type !== "function") {
+          messages.push({ role: "tool", tool_call_id: toolCall.id, content: JSON.stringify({ error: "Unsupported tool type" }) });
+          continue;
+        }
+
+        if (toolCall.function.name !== "execute_itrack_api") {
+          messages.push({ role: "tool", tool_call_id: toolCall.id, content: JSON.stringify({ error: "Unknown tool" }) });
+          continue;
+        }
+
+        let args: { method: string; path: string; body?: Record<string, unknown> };
+        try {
+          args = JSON.parse(toolCall.function.arguments);
+        } catch {
+          const errResult = { error: "Invalid tool arguments" };
+          messages.push({ role: "tool", tool_call_id: toolCall.id, content: JSON.stringify(errResult) });
+          allToolCalls.push({ name: toolCall.function.name, arguments: toolCall.function.arguments, result: errResult });
+          continue;
+        }
+
+        const { method, path, body } = args;
+        const actionKey = `${method} ${path}`;
+
+        if (isConfirmationRequired(method, path) && parsed.data.confirmed?.action !== actionKey) {
+          return res.json({
+            reply: `I need your confirmation to perform a destructive action: **${actionKey}**. Please confirm to proceed.`,
+            requiresConfirmation: true,
+            pendingAction: {
+              method,
+              path,
+              body: body ?? null,
+              description: actionKey,
+            },
+          });
+        }
+
+        const executeUrl = `http://127.0.0.1:${env.port}/api/v1/ai/execute`;
+        const executeRes = await fetch(executeUrl, {
+          method: "POST",
+          headers: {
+            authorization: req.headers.authorization ?? "",
+            "content-type": "application/json",
+          },
+          body: JSON.stringify({ method, path, body, confirmed: true }),
+        });
+
+        const resultText = await executeRes.text();
+        let result: unknown;
+        try {
+          result = JSON.parse(resultText);
+        } catch {
+          result = resultText;
+        }
+
+        allToolCalls.push({ name: toolCall.function.name, arguments: args, result });
+        messages.push({ role: "tool", tool_call_id: toolCall.id, content: typeof result === "string" ? result : JSON.stringify(result) });
+      }
+
+
+      response = await client.chat.completions.create({
+        model,
+        temperature: 0.3,
+        messages,
+        tools,
+      });
+    }
+
+    const finalChoice = response.choices[0];
+    return res.json({ reply: finalChoice?.message?.content ?? "", ...(allToolCalls.length ? { toolCalls: allToolCalls } : {}) });
+  } catch (error) {
+    return res.status(500).json({ message: "AI chat failed", detail: error instanceof Error ? error.message : "Unknown error" });
+  }
 });
 
 export default router;

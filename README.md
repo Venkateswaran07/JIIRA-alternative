@@ -34,7 +34,13 @@ Start MongoDB locally, then seed demo data:
 npm run seed
 ```
 
-Run the API and client in separate terminals:
+Run the API and client concurrently in a single terminal:
+
+```powershell
+npm start
+```
+
+Or run them in separate terminals if preferred:
 
 ```powershell
 npm run dev:server
