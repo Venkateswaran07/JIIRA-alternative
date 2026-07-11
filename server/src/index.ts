@@ -69,16 +69,16 @@ app.get("/api/docs", (_req, res) => res.type("html").send(`<!doctype html>
   </script>
 </body>
 </html>`));
-app.use("/api/auth", authRoutes);
-app.use("/api", dataRoutes);
-app.use("/api/analysis", analysisRoutes);
-app.use("/api/ai", aiRoutes);
-app.use("/api", extendedRoutes);
 app.use("/api/v1/auth", authRoutes);
 app.use("/api/v1/analysis", analysisRoutes);
 app.use("/api/v1/ai", aiRoutes);
 app.use("/api/v1", dataRoutes);
 app.use("/api/v1", extendedRoutes);
+app.use("/api/auth", authRoutes);
+app.use("/api", dataRoutes);
+app.use("/api/analysis", analysisRoutes);
+app.use("/api/ai", aiRoutes);
+app.use("/api", extendedRoutes);
 
 app.use((_req, res) => res.status(404).json({ error: { code: "NOT_FOUND", message: "Endpoint not found" } }));
 

@@ -27,6 +27,7 @@ const destructiveOperations = [
   "DELETE /resources/:kind/:id",
   "POST /notifications/read-all",
   "DELETE /integrations/:kind/:id",
+  "DELETE /organization",
 ] as const;
 
 const destructiveKeys = new Set<string>(destructiveOperations);

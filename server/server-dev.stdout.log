@@ -18,3 +18,9 @@ I-TRACK API listening on http://localhost:4000
 11:31:10 AM [tsx] change in ./src\openapi.ts Restarting...
 c◇ injected env (8) from .env // tip: ⌘ multiple files { path: ['.env.local', '.env'] }
 I-TRACK API listening on http://localhost:4000
+11:35:26 AM [tsx] change in ./src\openapi.ts Restarting...
+c◇ injected env (8) from .env // tip: ⌁ auth for agents [www.vestauth.com]
+I-TRACK API listening on http://localhost:4000
+11:55:37 AM [tsx] change in ./src\index.ts Restarting...
+c◇ injected env (8) from .env // tip: ⌘ suppress logs { quiet: true }
+I-TRACK API listening on http://localhost:4000

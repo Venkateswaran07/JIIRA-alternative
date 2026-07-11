@@ -1,6 +1,7 @@
 import bcrypt from "bcryptjs";
 import crypto from "node:crypto";
 import { Router } from "express";
+import mongoose from "mongoose";
 import { z } from "zod";
 import { env } from "../config/env.js";
 import { parseOr400 } from "../lib/http.js";
@@ -101,6 +102,25 @@ router.route("/integrations/:kind").get(requireRole(["admin"]), async (req: Auth
 router.delete("/integrations/:kind/:id", requireRole(["admin"]), async (req: AuthRequest, res) => { const item = await Integrations.findOneAndDelete({ _id: String(req.params.id), organization: oid(req), kind: String(req.params.kind) }); return item ? res.status(204).send() : res.status(404).json({ message: "Integration not found" }); });
 
 router.patch("/organization", requireRole(["admin"]), async (req: AuthRequest, res) => { const body = parseOr400(z.object({ name: z.string().min(2).optional(), plan: z.enum(["starter", "scale", "enterprise"]).optional() }), req.body, res); if (!body) return; const organization = await Organization.findByIdAndUpdate(oid(req), body, { new: true }); return res.json({ organization }); });
+router.delete("/organization", requireRole(["admin"]), async (req: AuthRequest, res) => {
+  const body = parseOr400(z.object({ confirmationName: z.string().min(1) }), req.body, res); if (!body) return;
+  const organization = await Organization.findById(oid(req));
+  if (!organization) return res.status(404).json({ message: "Organization not found" });
+  if (body.confirmationName !== organization.name) return res.status(409).json({ message: "Organization name does not match" });
+  const session = await mongoose.startSession();
+  try {
+    await session.withTransaction(async () => {
+      const filter = { organization: organization._id };
+      await Promise.all([
+        Session.deleteMany(filter, { session }), ActionToken.deleteMany(filter, { session }), Notification.deleteMany(filter, { session }), AuditEvent.deleteMany(filter, { session }),
+        Integration.deleteMany(filter, { session }), Counter.deleteMany(filter, { session }), WorkspaceResource.deleteMany(filter, { session }), Ticket.deleteMany(filter, { session }), Sprint.deleteMany(filter, { session }), Project.deleteMany(filter, { session }), User.deleteMany(filter, { session }),
+      ]);
+      const result = await Organization.deleteOne({ _id: organization._id }, { session });
+      if (result.deletedCount !== 1) throw new Error("Organization deletion failed");
+    });
+    return res.status(204).send();
+  } finally { await session.endSession(); }
+});
 router.get("/organization/usage", requireRole(["admin"]), async (req: AuthRequest, res) => { const [users, projects, tickets, storage] = await Promise.all([User.countDocuments({ organization: oid(req) }), Project.countDocuments({ organization: oid(req) }), Ticket.countDocuments({ organization: oid(req) }), Resources.countDocuments({ organization: oid(req) })]); return res.json({ usage: { users, projects, tickets, resources: storage } }); });
 router.get("/export", requireRole(["admin"]), async (req: AuthRequest, res) => { const [organization, users, projects, sprints, tickets, resources] = await Promise.all([Organization.findById(oid(req)), User.find({ organization: oid(req) }).select("-passwordHash"), Project.find({ organization: oid(req) }), Sprint.find({ organization: oid(req) }), Ticket.find({ organization: oid(req) }), Resources.find({ organization: oid(req) })]); return res.json({ exportedAt: new Date(), organization, users, projects, sprints, tickets, resources }); });
 router.post("/import/resources", requireRole(["admin"]), async (req: AuthRequest, res) => { const body = parseOr400(z.object({ resources: z.array(z.object({ kind: z.enum(resourceKinds), name: z.string().min(1), project: z.string().optional(), key: z.string().optional(), description: z.string().default(""), status: z.string().default("active"), order: z.number().default(0), config: z.record(z.string(), z.unknown()).default({}) })).max(1000) }), req.body, res); if (!body) return; const result = await Resources.insertMany(body.resources.map((resource: object) => ({ ...resource, organization: oid(req) })), { ordered: false }); await audit(req, "resources.imported", "workspace-resource", undefined, { count: result.length }); return res.status(201).json({ imported: result.length }); });

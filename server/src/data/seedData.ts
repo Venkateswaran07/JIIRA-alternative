@@ -1,8 +1,8 @@
 export const seedUsers = [
-  { name: "Maya Chen", email: "maya@itrack.dev", role: "manager", skills: ["Planning", "Risk", "API"], availability: 1, capacity: 34, avatarColor: "#00AEEF" },
-  { name: "Arjun Mehta", email: "arjun@itrack.dev", role: "engineer", skills: ["React", "Node", "AI"], availability: 0.9, capacity: 32, avatarColor: "#16D9E3" },
-  { name: "Lena Ortiz", email: "lena@itrack.dev", role: "designer", skills: ["UX", "Research", "Systems"], availability: 0.85, capacity: 28, avatarColor: "#FF3F7F" },
-  { name: "Noah Singh", email: "noah@itrack.dev", role: "engineer", skills: ["MongoDB", "Security", "DevOps"], availability: 1, capacity: 36, avatarColor: "#145CFF" },
+  { name: "Maya Chen", email: "maya@itrack.dev", role: "manager", skills: ["Planning", "Risk", "API"], availability: 1, capacity: 34, avatarColor: "#A47BEF" },
+  { name: "Arjun Mehta", email: "arjun@itrack.dev", role: "engineer", skills: ["React", "Node", "AI"], availability: 0.9, capacity: 32, avatarColor: "#4F86F7" },
+  { name: "Lena Ortiz", email: "lena@itrack.dev", role: "designer", skills: ["UX", "Research", "Systems"], availability: 0.85, capacity: 28, avatarColor: "#E95A5A" },
+  { name: "Noah Singh", email: "noah@itrack.dev", role: "engineer", skills: ["MongoDB", "Security", "DevOps"], availability: 1, capacity: 36, avatarColor: "#4CC38A" },
 ] as const;
 
 export const ticketTemplates = [

@@ -60,3 +60,5 @@ Invoke-RestMethod http://localhost:4000/api/health
 ```
 
 AI ticket generation requires choosing a real provider model first. The backend exposes `GET /api/ai/models` for model inspection and `POST /api/ai/generate-tickets` for validated JSON generation.
+
+For an external LLM or agent integration, follow [LLM_BACKEND_API_GUIDE.md](./LLM_BACKEND_API_GUIDE.md). The complete endpoint catalog remains in [api.md](./api.md).

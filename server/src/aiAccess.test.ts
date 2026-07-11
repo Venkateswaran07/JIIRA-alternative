@@ -19,6 +19,7 @@ test("AI endpoint discovery only returns endpoints available to the user role", 
 
 test("AI execution requires confirmation for delete and destructive actions", () => {
   assert.equal(isConfirmationRequired("DELETE", "/tickets/example"), true);
+  assert.equal(isConfirmationRequired("DELETE", "/organization"), true);
   assert.equal(isConfirmationRequired("POST", "/projects/example/archive"), true);
   assert.equal(isConfirmationRequired("POST", "/notifications/read-all"), true);
   assert.equal(isConfirmationRequired("PATCH", "/tickets/example/status"), false);
@@ -36,4 +37,17 @@ test("OpenAPI marks destructive endpoints as requiring confirmation", () => {
   assert.equal(deleteTicket["x-requires-confirmation"], true);
   assert.equal(archiveProject["x-requires-confirmation"], true);
   assert.equal(statusUpdate["x-requires-confirmation"], undefined);
+});
+
+test("OpenAPI documents AI execution request and confirmation response", () => {
+  const execute = openApiDocument.paths["/ai/execute"]?.post as {
+    requestBody?: { content?: { "application/json"?: { schema?: { required?: string[] } } } };
+    responses?: Record<string, unknown>;
+  };
+  const endpoints = openApiDocument.paths["/ai/endpoints"]?.get as { responses?: Record<string, unknown> };
+  assert.deepEqual(execute.requestBody?.content?.["application/json"]?.schema?.required, ["method", "path"]);
+  assert.ok(execute.responses?.["409"]);
+  assert.ok(endpoints.responses?.["200"]);
+  assert.ok(openApiDocument.components.schemas.AiExecuteRequest);
+  assert.ok(openApiDocument.components.schemas.AiEndpoint);
 });

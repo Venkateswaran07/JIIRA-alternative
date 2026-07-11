@@ -6,6 +6,7 @@ import { openApiDocument } from "./openapi.js";
 test("RBAC protects administrative and planning endpoints", () => {
   assert.deepEqual(rolesForEndpoint("GET", "/audit-logs"), ["admin"]);
   assert.deepEqual(rolesForEndpoint("POST", "/invitations"), ["admin"]);
+  assert.deepEqual(rolesForEndpoint("DELETE", "/organization"), ["admin"]);
   assert.deepEqual(rolesForEndpoint("POST", "/projects"), ["admin", "manager"]);
   assert.deepEqual(rolesForEndpoint("POST", "/sprints/123/start"), ["admin", "manager"]);
   assert.deepEqual(rolesForEndpoint("PATCH", "/tickets/123"), ["admin", "manager"]);
