@@ -23,10 +23,17 @@ app.use("/api/auth", authRoutes);
 app.use("/api", dataRoutes);
 app.use("/api/analysis", analysisRoutes);
 app.use("/api/ai", aiRoutes);
+app.get("/api/v1/health", (_req, res) => res.json({ ok: true, service: "itrack-api", version: "v1" }));
+app.use("/api/v1/auth", authRoutes);
+app.use("/api/v1/analysis", analysisRoutes);
+app.use("/api/v1/ai", aiRoutes);
+app.use("/api/v1", dataRoutes);
+
+app.use((_req, res) => res.status(404).json({ error: { code: "NOT_FOUND", message: "Endpoint not found" } }));
 
 app.use((error: unknown, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
   const message = error instanceof Error ? error.message : "Unexpected server error";
-  res.status(500).json({ message });
+  res.status(500).json({ error: { code: "INTERNAL_ERROR", message } });
 });
 
 await connectDb();

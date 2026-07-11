@@ -1,6 +1,6 @@
 import { Router } from "express";
-import type { Response } from "express";
 import { z } from "zod";
+import { listQuerySchema, pageMeta, parseOr400 } from "../lib/http.js";
 import { requireAuth, requireRole, type AuthRequest } from "../middleware/auth.js";
 import { Organization } from "../models/Organization.js";
 import { Project } from "../models/Project.js";
@@ -93,15 +93,6 @@ async function nextTicketId(req: AuthRequest, projectId: string) {
   return `${project.key}-${String(count + 101).padStart(3, "0")}`;
 }
 
-function parseOr400<T extends z.ZodTypeAny>(schema: T, body: unknown, res: Response) {
-  const parsed = schema.safeParse(body);
-  if (!parsed.success) {
-    res.status(400).json({ message: "Invalid request body", issues: parsed.error.issues });
-    return null;
-  }
-  return parsed.data as z.infer<T>;
-}
-
 router.get("/me", async (req: AuthRequest, res) => {
   const [user, organization] = await Promise.all([
     User.findById(userId(req)).select("-passwordHash"),
@@ -156,7 +147,16 @@ router.get("/dashboard", async (req: AuthRequest, res) => {
 });
 
 router.route("/projects")
-  .get(async (req: AuthRequest, res) => res.json({ projects: await Project.find(orgFilter(req)).populate("members", "name role avatarColor organization") }))
+  .get(async (req: AuthRequest, res) => {
+    const query = parseOr400(listQuerySchema, req.query, res);
+    if (!query) return;
+    const filter = { ...orgFilter(req), ...(query.search ? { $or: [{ name: { $regex: query.search, $options: "i" } }, { key: { $regex: query.search, $options: "i" } }] } : {}) };
+    const [projects, total] = await Promise.all([
+      Project.find(filter).sort(query.sort).skip((query.page - 1) * query.limit).limit(query.limit).populate("members", "name role avatarColor organization"),
+      Project.countDocuments(filter),
+    ]);
+    return res.json({ projects, meta: pageMeta(query.page, query.limit, total) });
+  })
   .post(requireRole(["admin", "manager"]), async (req: AuthRequest, res) => {
     const body = parseOr400(projectSchema, req.body, res);
     if (!body) return;
@@ -168,6 +168,10 @@ router.route("/projects/:id")
   .patch(requireRole(["admin", "manager"]), async (req: AuthRequest, res) => {
     const body = parseOr400(projectSchema.partial(), req.body, res);
     if (!body) return;
+    if (body.members) {
+      const memberCount = await User.countDocuments({ _id: { $in: body.members }, organization: orgId(req) });
+      if (memberCount !== new Set(body.members).size) return res.status(400).json({ message: "One or more project members are invalid" });
+    }
     const project = await Project.findOneAndUpdate({ _id: req.params.id, organization: orgId(req) }, body, { new: true }).populate("members", "name role avatarColor organization");
     if (!project) return res.status(404).json({ message: "Project not found" });
     return res.json({ project });
@@ -194,6 +198,7 @@ router.route("/sprints/:id")
   .patch(requireRole(["admin", "manager"]), async (req: AuthRequest, res) => {
     const body = parseOr400(sprintSchema.partial(), req.body, res);
     if (!body) return;
+    if (body.project && !(await Project.exists({ _id: body.project, organization: orgId(req) }))) return res.status(404).json({ message: "Project not found" });
     const sprint = await Sprint.findOneAndUpdate({ _id: req.params.id, organization: orgId(req) }, body, { new: true }).populate("project", "key name organization");
     if (!sprint) return res.status(404).json({ message: "Sprint not found" });
     return res.json({ sprint });
@@ -206,7 +211,14 @@ router.route("/sprints/:id")
   });
 
 router.route("/tickets")
-  .get(async (req: AuthRequest, res) => res.json({ tickets: await Ticket.find(orgFilter(req)).populate(populateTicket) }))
+  .get(async (req: AuthRequest, res) => {
+    const querySchema = listQuerySchema.extend({ status: z.enum(statuses).optional(), priority: z.enum(priorities).optional(), project: z.string().optional(), sprint: z.string().optional(), assignee: z.string().optional() });
+    const query = parseOr400(querySchema, req.query, res);
+    if (!query) return;
+    const filter = { ...orgFilter(req), ...(query.status && { status: query.status }), ...(query.priority && { priority: query.priority }), ...(query.project && { project: query.project }), ...(query.sprint && { sprint: query.sprint }), ...(query.assignee && { assignee: query.assignee }), ...(query.search ? { $or: [{ title: { $regex: query.search, $options: "i" } }, { ticketId: { $regex: query.search, $options: "i" } }] } : {}) };
+    const [tickets, total] = await Promise.all([Ticket.find(filter).sort(query.sort).skip((query.page - 1) * query.limit).limit(query.limit).populate(populateTicket), Ticket.countDocuments(filter)]);
+    return res.json({ tickets, meta: pageMeta(query.page, query.limit, total) });
+  })
   .post(requireRole(["admin", "manager"]), async (req: AuthRequest, res) => {
     const body = parseOr400(ticketSchema, req.body, res);
     if (!body) return;
@@ -229,6 +241,12 @@ router.get("/tickets/:ticketId", async (req: AuthRequest, res) => {
 router.patch("/tickets/:id", requireRole(["admin", "manager"]), async (req: AuthRequest, res) => {
   const body = parseOr400(ticketSchema.partial(), req.body, res);
   if (!body) return;
+  const checks = await Promise.all([
+    body.assignee ? User.exists({ _id: body.assignee, organization: orgId(req) }) : true,
+    body.project ? Project.exists({ _id: body.project, organization: orgId(req) }) : true,
+    body.sprint ? Sprint.exists({ _id: body.sprint, organization: orgId(req), ...(body.project ? { project: body.project } : {}) }) : true,
+  ]);
+  if (checks.some((value) => !value)) return res.status(400).json({ message: "Assignee, project, or sprint is invalid for this organization" });
   const ticket = await Ticket.findOneAndUpdate({ _id: req.params.id, organization: orgId(req) }, body, { new: true }).populate(populateTicket);
   if (!ticket) return res.status(404).json({ message: "Ticket not found" });
   return res.json({ ticket });

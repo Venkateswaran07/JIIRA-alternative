@@ -29,7 +29,7 @@ export interface ITicket {
 const ticketSchema = new Schema<ITicket>(
   {
     organization: { type: Schema.Types.ObjectId, ref: "Organization", required: true },
-    ticketId: { type: String, required: true, unique: true },
+    ticketId: { type: String, required: true },
     title: { type: String, required: true },
     description: { type: String, required: true },
     acceptanceCriteria: [{ type: String }],

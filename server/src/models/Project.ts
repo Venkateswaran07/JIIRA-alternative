@@ -17,7 +17,7 @@ export interface IProject {
 const projectSchema = new Schema<IProject>(
   {
     organization: { type: Schema.Types.ObjectId, ref: "Organization", required: true },
-    key: { type: String, required: true, unique: true },
+    key: { type: String, required: true },
     name: { type: String, required: true },
     description: { type: String, required: true },
     status: { type: String, required: true },
