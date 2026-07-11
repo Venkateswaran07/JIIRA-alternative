@@ -102,7 +102,7 @@ function App() {
   };
   return (
     <BrowserRouter>
-      <ApiGate>
+      <ApiGate toast={toast}>
         <Routes>
           <Route path="/login" element={<AuthPageLive type="login" />} />
           <Route path="/register" element={<AuthPageLive type="register" />} />
@@ -150,11 +150,83 @@ function App() {
   );
 }
 
-function ApiGate({ children }: { children: React.ReactNode }) {
+const resourceKinds = [
+  "epic",
+  "label",
+  "component",
+  "release",
+  "issue-type",
+  "priority",
+  "workflow",
+  "custom-field",
+  "template",
+  "board",
+  "milestone",
+];
+
+const WorkspaceContext = React.createContext<{
+  user: any;
+  organization: any;
+  dashboard: any;
+  notifications: any[];
+  reports: any;
+  sessions: any[];
+  auditLogs: any[];
+  integrations: any[];
+  resources: Record<string, any[]>;
+  projects: any[];
+  tickets: any[];
+  people: any[];
+  velocity: any[];
+  risk: any[];
+  role: string;
+  loading: boolean;
+  error: string;
+  refetch: () => Promise<void>;
+  updateData: (updater: (prev: any) => any) => void;
+  mutate: (
+    apiCall: () => Promise<any>,
+    optimisticUpdate?: (prev: any) => any,
+    rollback?: () => void,
+  ) => Promise<any>;
+  toast: (s: string) => void;
+} | null>(null);
+
+export function useWorkspace() {
+  const context = React.useContext(WorkspaceContext);
+  if (!context)
+    throw new Error("useWorkspace must be used within a WorkspaceProvider");
+  return context;
+}
+
+function ApiGate({
+  children,
+  toast,
+}: {
+  children: React.ReactNode;
+  toast: (s: string) => void;
+}) {
   const location = useLocation();
   const navigate = useNavigate();
-  const [state, setState] = useState<"loading" | "ready" | "error">("loading");
+  const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
+  const [workspace, setWorkspace] = useState<any>({
+    user: null,
+    organization: null,
+    dashboard: null,
+    notifications: [],
+    reports: null,
+    sessions: [],
+    auditLogs: [],
+    integrations: [],
+    resources: {},
+    projects: [],
+    tickets: [],
+    people: [],
+    velocity: [],
+    risk: [],
+  });
+
   const publicPath = [
     "/login",
     "/register",
@@ -162,129 +234,253 @@ function ApiGate({ children }: { children: React.ReactNode }) {
     "/reset-password",
     "/accept-invite",
   ].includes(location.pathname);
+
+  const loadData = async () => {
+    try {
+      const [
+        me,
+        dashboard,
+        notificationsData,
+        reportsData,
+        sessionsData,
+        auditLogsData,
+        apiTokens,
+        webhooks,
+      ] = await Promise.all([
+        api<any>("/auth/me"),
+        api<any>("/dashboard"),
+        api<any>("/notifications").catch(() => ({ notifications: [] })),
+        api<any>("/reports").catch(() => null),
+        api<any>("/auth/sessions").catch(() => ({ sessions: [] })),
+        api<any>("/audit-logs").catch(() => ({ events: [] })),
+        api<any>("/integrations/api-token").catch(() => ({ integrations: [] })),
+        api<any>("/integrations/webhook").catch(() => ({ integrations: [] })),
+      ]);
+
+      const resourcePairs = await Promise.all(
+        resourceKinds.map(async (kind) => [
+          kind,
+          (
+            await api<any>(`/resources/${kind}`).catch(() => ({
+              resources: [],
+            }))
+          ).resources,
+        ]),
+      );
+
+      const parsedPeople = (dashboard.users || []).map((u: any) => ({
+        name: u.name,
+        email: u.email,
+        role: u.role,
+        skills: u.skills || [],
+        load:
+          Math.round((1 - (u.availability ?? 1)) * 100) ||
+          Math.min(100, Math.round(((u.capacity || 0) / 40) * 100)),
+        color: u.avatarColor || "#A47BEF",
+      }));
+
+      const parsedProjects = (dashboard.projects || []).map((p: any) => ({
+        key: p.key,
+        name: p.name,
+        description: p.description,
+        progress: p.progress,
+        risk: p.riskLevel,
+        members: p.members?.length || 0,
+        sprint: p.activeSprint,
+      }));
+
+      const parsedTickets = (dashboard.tickets || []).map((t: any) => ({
+        id: t._id,
+        key: t.ticketId,
+        title: t.title,
+        status: t.status,
+        priority: t.priority,
+        points: t.storyPoints,
+        assignee: t.assignee?.name || "Unassigned",
+        project: t.project?.name || "",
+        labels: t.labels || [],
+        blocked: t.blocked,
+        watched: (t.watchers || []).some(
+          (w: any) => String(w._id || w) === String(me.user.id),
+        ),
+        sprintId:
+          t.sprint?._id || (typeof t.sprint === "string" ? t.sprint : ""),
+        sprintName: t.sprint?.name || "",
+      }));
+
+      const activeSprint =
+        (dashboard.sprints || []).find((s: any) => s.status === "active") ||
+        dashboard.sprints?.[0];
+
+      const parsedVelocity = (activeSprint?.velocityHistory || []).map(
+        (v: number, i: number) => ({ n: `S${i + 1}`, v }),
+      );
+
+      let parsedRisk = (dashboard.sprints || [])
+        .slice(-5)
+        .map((s: any) => ({ n: s.name, v: s.riskScore }));
+      if (!parsedRisk.length) parsedRisk = [{ n: "Current", v: 0 }];
+
+      const stateVal = {
+        user: me.user,
+        organization: me.organization,
+        dashboard,
+        notifications: notificationsData.notifications || [],
+        reports: reportsData?.reports,
+        sessions: sessionsData.sessions || [],
+        auditLogs: auditLogsData.events || [],
+        integrations: [
+          ...(apiTokens.integrations || []),
+          ...(webhooks.integrations || []),
+        ],
+        resources: Object.fromEntries(resourcePairs),
+        projects: parsedProjects,
+        tickets: parsedTickets,
+        people: parsedPeople,
+        velocity: parsedVelocity,
+        risk: parsedRisk,
+      };
+
+      setWorkspace(stateVal);
+      // Synchronize globals as well for non-react components
+      tickets = parsedTickets;
+      projects = parsedProjects;
+      people = parsedPeople;
+      velocity = parsedVelocity;
+      risk = parsedRisk;
+      Object.assign(serverData, {
+        user: me.user,
+        organization: me.organization,
+        dashboard,
+        notifications: notificationsData.notifications || [],
+        reports: reportsData?.reports,
+        sessions: sessionsData.sessions || [],
+        auditLogs: auditLogsData.events || [],
+        integrations: [
+          ...(apiTokens.integrations || []),
+          ...(webhooks.integrations || []),
+        ],
+        resources: Object.fromEntries(resourcePairs),
+      });
+
+      setLoading(false);
+    } catch (e) {
+      if (e instanceof Error && e.message.includes("401")) {
+        clearSession();
+        navigate("/login", { replace: true });
+      } else {
+        setError(e instanceof Error ? e.message : "Unable to load workspace");
+        setLoading(false);
+      }
+    }
+  };
+
   useEffect(() => {
     if (publicPath) {
-      setState("ready");
+      setLoading(false);
       return;
     }
     if (!getToken()) {
       navigate("/login", { replace: true });
-      setState("ready");
+      setLoading(false);
       return;
     }
-    let active = true;
-    (async () => {
-      try {
-        const [
-          me,
-          dashboard,
-          notifications,
-          reports,
-          sessions,
-          auditLogs,
-          apiTokens,
-          webhooks,
-        ] = await Promise.all([
-          api<any>("/auth/me"),
-          api<any>("/dashboard"),
-          api<any>("/notifications").catch(() => ({ notifications: [] })),
-          api<any>("/reports").catch(() => null),
-          api<any>("/auth/sessions").catch(() => ({ sessions: [] })),
-          api<any>("/audit-logs").catch(() => ({ events: [] })),
-          api<any>("/integrations/api-token").catch(() => ({
-            integrations: [],
-          })),
-          api<any>("/integrations/webhook").catch(() => ({ integrations: [] })),
-        ]);
-        const resourcePairs = await Promise.all(
-          resourceKinds.map(async (kind) => [
-            kind,
-            (
-              await api<any>(`/resources/${kind}`).catch(() => ({
-                resources: [],
-              }))
-            ).resources,
-          ]),
-        );
-        serverData.user = me.user;
-        serverData.organization = me.organization;
-        serverData.dashboard = dashboard;
-        serverData.notifications = notifications.notifications || [];
-        serverData.reports = reports?.reports;
-        serverData.sessions = sessions.sessions || [];
-        serverData.auditLogs = auditLogs.events || [];
-        serverData.integrations = [
-          ...(apiTokens.integrations || []),
-          ...(webhooks.integrations || []),
-        ];
-        serverData.resources = Object.fromEntries(resourcePairs);
-        people = (dashboard.users || []).map((u: any) => ({
-          name: u.name,
-          email: u.email,
-          role: u.role,
-          skills: u.skills || [],
-          load:
-            Math.round((1 - (u.availability ?? 1)) * 100) ||
-            Math.min(100, Math.round(((u.capacity || 0) / 40) * 100)),
-          color: u.avatarColor || "#A47BEF",
-        }));
-        projects = (dashboard.projects || []).map((p: any) => ({
-          key: p.key,
-          name: p.name,
-          description: p.description,
-          progress: p.progress,
-          risk: p.riskLevel,
-          members: p.members?.length || 0,
-          sprint: p.activeSprint,
-        }));
-        tickets = (dashboard.tickets || []).map((t: any) => ({
-          id: t._id,
-          key: t.ticketId,
-          title: t.title,
-          status: t.status,
-          priority: t.priority,
-          points: t.storyPoints,
-          assignee: t.assignee?.name || "Unassigned",
-          project: t.project?.name || "",
-          labels: t.labels || [],
-          blocked: t.blocked,
-          watched: (t.watchers || []).some(
-            (w: any) => String(w._id || w) === String(me.user.id),
-          ),
-        }));
-        const activeSprint =
-          (dashboard.sprints || []).find((s: any) => s.status === "active") ||
-          dashboard.sprints?.[0];
-        velocity = (activeSprint?.velocityHistory || []).map(
-          (v: number, i: number) => ({ n: `S${i + 1}`, v }),
-        );
-        risk = (dashboard.sprints || [])
-          .slice(-5)
-          .map((s: any) => ({ n: s.name, v: s.riskScore }));
-        if (!risk.length) risk = [{ n: "Current", v: 0 }];
-        if (active) setState("ready");
-      } catch (e) {
-        if (e instanceof Error && e.message.includes("401")) {
-          clearSession();
-          navigate("/login", { replace: true });
-        } else {
-          setError(e instanceof Error ? e.message : "Unable to load workspace");
-          setState("error");
-        }
-      }
-    })();
-    return () => {
-      active = false;
-    };
+    loadData();
   }, [location.pathname, publicPath, navigate]);
-  if (state === "loading")
+
+  const mutate = async (
+    apiCall: () => Promise<any>,
+    optimisticUpdate?: (prev: any) => any,
+    rollback?: () => void,
+  ) => {
+    const previousState = { ...workspace };
+    if (optimisticUpdate) {
+      setWorkspace((prev: any) => {
+        const next = optimisticUpdate(prev);
+        // Sync globals too
+        tickets = next.tickets;
+        projects = next.projects;
+        people = next.people;
+        velocity = next.velocity;
+        risk = next.risk;
+        Object.assign(serverData, {
+          user: next.user,
+          organization: next.organization,
+          dashboard: next.dashboard,
+          notifications: next.notifications,
+          reports: next.reports,
+          sessions: next.sessions,
+          auditLogs: next.auditLogs,
+          integrations: next.integrations,
+          resources: next.resources,
+        });
+        return next;
+      });
+    }
+    try {
+      const result = await apiCall();
+      await loadData();
+      return result;
+    } catch (err) {
+      if (rollback) {
+        rollback();
+      } else {
+        setWorkspace(previousState);
+        tickets = previousState.tickets;
+        projects = previousState.projects;
+        people = previousState.people;
+        velocity = previousState.velocity;
+        risk = previousState.risk;
+        Object.assign(serverData, previousState);
+      }
+      throw err;
+    }
+  };
+
+  const updateData = (updater: (prev: any) => any) => {
+    setWorkspace((prev: any) => {
+      const next = updater(prev);
+      tickets = next.tickets;
+      projects = next.projects;
+      people = next.people;
+      velocity = next.velocity;
+      risk = next.risk;
+      Object.assign(serverData, {
+        user: next.user,
+        organization: next.organization,
+        dashboard: next.dashboard,
+        notifications: next.notifications,
+        reports: next.reports,
+        sessions: next.sessions,
+        auditLogs: next.auditLogs,
+        integrations: next.integrations,
+        resources: next.resources,
+      });
+      return next;
+    });
+  };
+
+  const val = {
+    ...workspace,
+    role: workspace.user?.role || "admin",
+    loading,
+    error,
+    refetch: loadData,
+    updateData,
+    mutate,
+    toast,
+  };
+
+  if (loading) {
     return (
       <div className="app-loading">
         <span className="brand-mark">I</span>
         <b>Loading workspace…</b>
       </div>
     );
-  if (state === "error")
+  }
+
+  if (error) {
     return (
       <div className="app-loading error">
         <Icons.CloudOff />
@@ -298,7 +494,13 @@ function ApiGate({ children }: { children: React.ReactNode }) {
         </button>
       </div>
     );
-  return <>{children}</>;
+  }
+
+  return (
+    <WorkspaceContext.Provider value={val}>
+      {children}
+    </WorkspaceContext.Provider>
+  );
 }
 
 type NavItem = [string, string, string];
@@ -363,6 +565,11 @@ function Shell({
   setRole: (r: Role) => void;
   toast: (s: string) => void;
 }) {
+  const {
+    organization,
+    user: currentUser,
+    notifications = [],
+  } = useWorkspace();
   const [collapsed, setCollapsed] = useState(false),
     [mobile, setMobile] = useState(false),
     [search, setSearch] = useState(false),
@@ -374,6 +581,10 @@ function Shell({
       .flatMap((g) => g.items)
       .find((i) => loc.pathname.startsWith(i[0]))?.[2] ||
     fmt(loc.pathname.split("/").filter(Boolean).at(-1) || "Dashboard");
+  const effectiveRole = (serverData.user?.role || role) as Role;
+
+  const unreadCount = notifications.filter((n: any) => !n.readAt).length;
+
   return (
     <div className={cx("app", collapsed && "collapsed")}>
       <aside className={cx("sidebar", mobile && "open")}>
@@ -395,17 +606,15 @@ function Shell({
             onClick={() => setWorkspaceMenu(!workspaceMenu)}
           >
             <span className="avatar square">
-              {(serverData.organization?.name || "Workspace")
+              {(organization?.name || "Workspace")
                 .split(" ")
                 .map((x: string) => x[0])
                 .join("")
                 .slice(0, 2)}
             </span>
             <span>
-              <b>{serverData.organization?.name || "Workspace"}</b>
-              <small>
-                {fmt(serverData.organization?.plan || "starter")} workspace
-              </small>
+              <b>{organization?.name || "Workspace"}</b>
+              <small>{fmt(organization?.plan || "starter")} workspace</small>
             </span>
             <Icons.ChevronsUpDown size={15} />
           </button>
@@ -417,16 +626,14 @@ function Shell({
                 role="menuitem"
                 onClick={() => {
                   setWorkspaceMenu(false);
-                  toast(`${serverData.organization?.name} selected`);
+                  toast(`${organization?.name} selected`);
                 }}
               >
                 <span className="avatar square">
-                  {(serverData.organization?.name || "W")
-                    .slice(0, 2)
-                    .toUpperCase()}
+                  {(organization?.name || "W").slice(0, 2).toUpperCase()}
                 </span>
                 <span>
-                  <b>{serverData.organization?.name}</b>
+                  <b>{organization?.name}</b>
                   <small>Current workspace</small>
                 </span>
                 <Icons.Check size={16} />
@@ -450,7 +657,7 @@ function Shell({
         </div>
         <nav>
           {nav
-            .filter((g) => !g.admin || role === "admin")
+            .filter((g) => !g.admin || effectiveRole === "admin")
             .map((g) => (
               <div className="nav-group" key={g.group}>
                 <p>{g.group}</p>
@@ -465,7 +672,9 @@ function Shell({
                     >
                       <Icon size={19} />
                       <span>{label}</span>
-                      {label === "Notifications" && <em>4</em>}
+                      {label === "Notifications" && unreadCount > 0 && (
+                        <em>{unreadCount}</em>
+                      )}
                     </NavLink>
                   );
                 })}
@@ -474,12 +683,12 @@ function Shell({
         </nav>
         <div className="sidebar-user">
           <Avatar
-            name={serverData.user?.name || "User"}
-            color={serverData.user?.avatarColor}
+            name={currentUser?.name || "User"}
+            color={currentUser?.avatarColor}
           />
           <span>
-            <b>{serverData.user?.name || "User"}</b>
-            <small>{fmt(serverData.user?.role || role)}</small>
+            <b>{currentUser?.name || "User"}</b>
+            <small>{fmt(currentUser?.role || role)}</small>
           </span>
           <Icons.MoreHorizontal size={18} />
         </div>
@@ -492,7 +701,7 @@ function Shell({
           <Icons.Menu />
         </button>
         <div className="crumb">
-          <span>{serverData.organization?.name || "Workspace"}</span>
+          <span>{organization?.name || "Workspace"}</span>
           <Icons.ChevronRight size={15} />
           <b>{label}</b>
         </div>
@@ -520,7 +729,7 @@ function Shell({
             onClick={() => navigate("/notifications")}
           >
             <Icons.Bell />
-            <i />
+            {unreadCount > 0 && <i />}
           </button>
         </div>
       </header>
@@ -547,20 +756,6 @@ function Shell({
       <button className="fab" onClick={() => navigate("/tickets/new")}>
         <Icons.Plus />
       </button>
-      <div className="dev-role">
-        <span>Preview as</span>
-        <select
-          value={role}
-          onChange={(e) => {
-            setRole(e.target.value as Role);
-            toast(`Role changed to ${fmt(e.target.value)}`);
-          }}
-        >
-          {["admin", "manager", "engineer", "designer"].map((r) => (
-            <option key={r}>{r}</option>
-          ))}
-        </select>
-      </div>
     </div>
   );
 }
@@ -653,7 +848,7 @@ function AppRoutes({
       />
       <Route
         path="/tickets/:ticketId"
-        element={<TicketDetail toast={toast} />}
+        element={<TicketDetailLive toast={toast} />}
       />
       <Route path="/team" element={<Team />} />
       <Route
@@ -676,9 +871,7 @@ function AppRoutes({
       />
       <Route
         path="/change-password"
-        element={
-          <Settings density={density} setDensity={setDensity} toast={toast} />
-        }
+        element={<ChangePasswordLive toast={toast} />}
       />
       <Route path="/sessions" element={<Sessions toast={toast} />} />
       <Route
@@ -686,8 +879,8 @@ function AppRoutes({
         element={<IntegrationsLive toast={toast} />}
       />
       <Route path="/audit-logs" element={<AuditLogsLive />} />
-      <Route path="/import" element={<ImportExport toast={toast} />} />
-      <Route path="/export" element={<ImportExport toast={toast} />} />
+      <Route path="/import" element={<ImportExportLive toast={toast} />} />
+      <Route path="/export" element={<ImportExportLive toast={toast} />} />
       <Route path="/403" element={<ErrorPage code="403" />} />
       <Route path="/500" element={<ErrorPage code="500" />} />
       <Route path="/offline" element={<ErrorPage code="Offline" />} />
@@ -703,8 +896,8 @@ function PageHead({
   children,
 }: {
   eyebrow?: string;
-  title: string;
-  desc?: string;
+  title: React.ReactNode;
+  desc?: React.ReactNode;
   children?: React.ReactNode;
 }) {
   return (
@@ -823,133 +1016,6 @@ function Empty({
   );
 }
 
-function Dashboard() {
-  return (
-    <>
-      <PageHead eyebrow="SATURDAY, 11 JULY" title="Good morning, Maya">
-        <p>Here’s what needs your attention across Northstar Labs.</p>
-      </PageHead>
-      <div className="metrics">
-        {[
-          ["Active projects", "12", "+2 this month", "FolderKanban", "blue"],
-          ["Sprints in progress", "4", "96 points planned", "Timer", "purple"],
-          ["At-risk sprints", "2", "Needs attention", "Activity", "orange"],
-          ["Blocked tasks", "7", "3 critical", "CircleSlash2", "red"],
-          ["Sprint health", "82%", "Up 6%", "HeartPulse", "green"],
-        ].map(([l, v, s, i, t]) => {
-          const Icon = (Icons as any)[i];
-          return (
-            <article className="metric" key={l}>
-              <div>
-                <span>{l}</span>
-                <strong>{v}</strong>
-                <small>{s}</small>
-              </div>
-              <b className={t}>
-                <Icon />
-              </b>
-            </article>
-          );
-        })}
-      </div>
-      <div className="dashboard-grid">
-        <section className="card span-2">
-          <CardTitle
-            title="Delivery pulse"
-            sub="Risk and velocity across the current sprint"
-          >
-            <Badge tone="green">On track</Badge>
-          </CardTitle>
-          <div className="chart">
-            <ResponsiveContainer>
-              <AreaChart data={risk}>
-                <defs>
-                  <linearGradient id="purple" x1="0" y1="0" x2="0" y2="1">
-                    <stop offset="0" stopColor="#A47BEF" stopOpacity=".45" />
-                    <stop offset="1" stopColor="#A47BEF" stopOpacity="0" />
-                  </linearGradient>
-                </defs>
-                <CartesianGrid strokeDasharray="4 4" vertical={false} />
-                <XAxis dataKey="n" />
-                <YAxis />
-                <Tooltip />
-                <Area
-                  type="monotone"
-                  dataKey="v"
-                  stroke="#A47BEF"
-                  strokeWidth={3}
-                  fill="url(#purple)"
-                />
-              </AreaChart>
-            </ResponsiveContainer>
-          </div>
-        </section>
-        <section className="card">
-          <CardTitle title="Active sprint" sub="Sprint 24 · 6 days left" />
-          <div className="ring-wrap">
-            <div className="score-ring">
-              <strong>72%</strong>
-              <span>complete</span>
-            </div>
-          </div>
-          <Progress value={72} />
-          <div className="split">
-            <span>
-              <b>68</b> completed
-            </span>
-            <span>
-              <b>26</b> remaining
-            </span>
-          </div>
-        </section>
-        <section className="card span-2">
-          <CardTitle
-            title="Team workload"
-            sub="Capacity across active projects"
-          >
-            <button className="text-btn">
-              View team <Icons.ArrowRight />
-            </button>
-          </CardTitle>
-          <div className="workloads">
-            {people.map((p) => (
-              <div key={p.name}>
-                <Avatar name={p.name} color={p.color} />
-                <span>
-                  <b>{p.name}</b>
-                  <small>{p.role}</small>
-                </span>
-                <Progress
-                  value={p.load}
-                  tone={p.load > 80 ? "orange" : "purple"}
-                />
-                <strong>{p.load}%</strong>
-              </div>
-            ))}
-          </div>
-        </section>
-        <section className="card insight">
-          <div className="insight-icon">
-            <Icons.Sparkles />
-          </div>
-          <Badge tone="lime">AI INSIGHT</Badge>
-          <h2>Resolve blockers before scope grows</h2>
-          <p>
-            Three critical tickets are blocked by the SSO dependency. Reassign
-            API review capacity today to protect the sprint goal.
-          </p>
-          <div className="confidence">
-            <span>Confidence</span>
-            <b>82%</b>
-          </div>
-          <button className="btn dark">
-            Review recommendation <Icons.ArrowUpRight />
-          </button>
-        </section>
-      </div>
-    </>
-  );
-}
 function CardTitle({
   title,
   sub,
@@ -971,68 +1037,389 @@ function CardTitle({
 }
 
 function Projects() {
+  const { projects, people, role } = useWorkspace();
   const nav = useNavigate();
+  const [params] = useSearchParams();
+
+  const q = params.get("q") || "";
+  const filter = params.get("filter") || "";
+  const sort = params.get("sort") || "";
+  const view = params.get("view") || "grid";
+
+  // Filter
+  const filtered = projects.filter((p) => {
+    const matchesQuery =
+      p.name.toLowerCase().includes(q.toLowerCase()) ||
+      p.key.toLowerCase().includes(q.toLowerCase()) ||
+      p.description.toLowerCase().includes(q.toLowerCase());
+    const matchesFilter = filter === "open" ? p.status === "active" : true;
+    return matchesQuery && matchesFilter;
+  });
+
+  // Sort
+  const sorted = [...filtered].sort((a, b) => {
+    const valA = a.name.toLowerCase();
+    const valB = b.name.toLowerCase();
+    if (sort === "desc") {
+      return valA > valB ? -1 : valA < valB ? 1 : 0;
+    } else {
+      return valA < valB ? -1 : valA > valB ? 1 : 0;
+    }
+  });
+
+  const isLeader = ["admin", "manager"].includes(role);
+
   return (
     <>
       <PageHead
         title="Projects"
         desc="Plan, track, and deliver work across every initiative."
       >
-        <button className="btn" onClick={() => nav("/import")}>
-          <Icons.Upload />
-          Import
-        </button>
-        <button className="btn primary" onClick={() => nav("/projects/new")}>
-          <Icons.Plus />
-          New project
-        </button>
+        {isLeader && (
+          <>
+            <button className="btn" onClick={() => nav("/import")}>
+              <Icons.Upload />
+              Import
+            </button>
+            <button
+              className="btn primary"
+              onClick={() => nav("/projects/new")}
+            >
+              <Icons.Plus />
+              New project
+            </button>
+          </>
+        )}
       </PageHead>
       <FilterBar placeholder="Search projects…" />
-      <div className="project-grid">
-        {projects.map((p, i) => (
-          <article
-            className="project-card"
-            key={p.key}
-            onClick={() => nav(`/projects/${p.key}`)}
-          >
-            <div className="project-top">
-              <span className={`project-icon p${i}`}>{p.key.slice(0, 2)}</span>
-              <Badge tone={p.risk}>{p.risk} risk</Badge>
-            </div>
-            <h2>{p.name}</h2>
-            <p>{p.description}</p>
-            <div className="project-meta">
-              <span>
-                <Icons.Timer /> {p.sprint}
-              </span>
-              <span>
-                <Icons.Users /> {p.members}
-              </span>
-            </div>
-            <div className="progress-label">
-              <span>Progress</span>
-              <b>{p.progress}%</b>
-            </div>
-            <Progress
-              value={p.progress}
-              tone={p.risk === "high" ? "orange" : "purple"}
-            />
-            <div className="avatar-stack">
-              {people.slice(0, 3).map((x) => (
-                <Avatar key={x.name} name={x.name} color={x.color} />
+      {view === "list" ? (
+        <div className="card no-pad">
+          <table className="table">
+            <thead>
+              <tr>
+                <th>Project</th>
+                <th>Key</th>
+                <th>Status</th>
+                <th>Progress</th>
+                <th>Members</th>
+              </tr>
+            </thead>
+            <tbody>
+              {sorted.map((p) => (
+                <tr
+                  key={p.key}
+                  onClick={() => nav(`/projects/${p.key}`)}
+                  style={{ cursor: "pointer" }}
+                >
+                  <td>
+                    <b>{p.name}</b>
+                  </td>
+                  <td>
+                    <code>{p.key}</code>
+                  </td>
+                  <td>
+                    <Badge tone={p.risk === "high" ? "orange" : "green"}>
+                      {p.risk} risk
+                    </Badge>
+                  </td>
+                  <td>{p.progress}%</td>
+                  <td>{p.members} members</td>
+                </tr>
               ))}
-              <span>+{p.members - 3}</span>
-            </div>
-          </article>
-        ))}
-      </div>
+            </tbody>
+          </table>
+        </div>
+      ) : (
+        <div className="project-grid">
+          {sorted.map((p, i) => (
+            <article
+              className="project-card"
+              key={p.key}
+              onClick={() => nav(`/projects/${p.key}`)}
+            >
+              <div className="project-top">
+                <span className={`project-icon p${i % 4}`}>
+                  {p.key.slice(0, 2)}
+                </span>
+                <Badge tone={p.risk}>{p.risk} risk</Badge>
+              </div>
+              <h2>{p.name}</h2>
+              <p>{p.description}</p>
+              <div className="project-meta">
+                <span>
+                  <Icons.Timer /> {p.sprint}
+                </span>
+                <span>
+                  <Icons.Users /> {p.members}
+                </span>
+              </div>
+              <div className="progress-label">
+                <span>Progress</span>
+                <b>{p.progress}%</b>
+              </div>
+              <Progress
+                value={p.progress}
+                tone={p.risk === "high" ? "orange" : "purple"}
+              />
+              <div className="avatar-stack">
+                {people.slice(0, 3).map((x: any) => (
+                  <Avatar key={x.name} name={x.name} color={x.color} />
+                ))}
+                <span>+{Math.max(0, p.members - 3)}</span>
+              </div>
+            </article>
+          ))}
+        </div>
+      )}
     </>
   );
 }
+
+function ProjectSettings({
+  project,
+  refetch,
+  toast,
+}: {
+  project: any;
+  refetch: () => Promise<void>;
+  toast: (s: string) => void;
+}) {
+  const { dashboard } = useWorkspace();
+  const nav = useNavigate();
+  const [name, setName] = useState(project.name);
+  const [description, setDescription] = useState(project.description);
+  const [status, setStatus] = useState(project.status || "active");
+  const [riskLevel, setRiskLevel] = useState(project.risk || "medium");
+  const [busy, setBusy] = useState(false);
+
+  // Members selection
+  const allUsers = dashboard?.users || [];
+  const dashboardProj = (dashboard?.projects || []).find(
+    (x: any) => x.key === project.key,
+  );
+  const currentMemberIds = (dashboardProj?.members || []).map(
+    (m: any) => m._id || m,
+  );
+  const [selectedMembers, setSelectedMembers] =
+    useState<string[]>(currentMemberIds);
+
+  const save = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setBusy(true);
+    try {
+      await api(`/projects/${dashboardProj._id}`, {
+        method: "PATCH",
+        body: JSON.stringify({ name, description, status, riskLevel }),
+      });
+      toast("Project updated successfully");
+      await refetch();
+    } catch (err) {
+      toast(err instanceof Error ? err.message : "Update failed");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const updateMembers = async () => {
+    try {
+      await api(`/projects/${dashboardProj._id}/members`, {
+        method: "PUT",
+        body: JSON.stringify({ userIds: selectedMembers }),
+      });
+      toast("Project members updated");
+      await refetch();
+    } catch (err) {
+      toast(err instanceof Error ? err.message : "Update failed");
+    }
+  };
+
+  const archive = async () => {
+    try {
+      await api(`/projects/${dashboardProj._id}/archive`, { method: "POST" });
+      toast("Project archived");
+      await refetch();
+    } catch (err) {
+      toast(err instanceof Error ? err.message : "Archive failed");
+    }
+  };
+
+  const restore = async () => {
+    try {
+      await api(`/projects/${dashboardProj._id}/restore`, { method: "POST" });
+      toast("Project restored");
+      await refetch();
+    } catch (err) {
+      toast(err instanceof Error ? err.message : "Restore failed");
+    }
+  };
+
+  const remove = async () => {
+    const confirmation = window.prompt(
+      `Type ${project.key} to permanently delete this project.`,
+    );
+    if (confirmation !== project.key) return;
+    try {
+      await api(`/projects/${dashboardProj._id}`, { method: "DELETE" });
+      toast("Project deleted");
+      nav("/projects");
+    } catch (err) {
+      toast(err instanceof Error ? err.message : "Delete failed");
+    }
+  };
+
+  const handleMemberToggle = (userId: string) => {
+    setSelectedMembers((prev) =>
+      prev.includes(userId)
+        ? prev.filter((id) => id !== userId)
+        : [...prev, userId],
+    );
+  };
+
+  return (
+    <div className="project-settings">
+      <div className="two-col">
+        <section className="card">
+          <CardTitle title="Project details" />
+          <form onSubmit={save} className="form-grid">
+            <label className="field full">
+              <span>Project name</span>
+              <input
+                value={name}
+                onChange={(e) => setName(e.target.value)}
+                required
+              />
+            </label>
+            <label className="field">
+              <span>Status</span>
+              <select
+                value={status}
+                onChange={(e) => setStatus(e.target.value)}
+              >
+                <option value="planning">Planning</option>
+                <option value="active">Active</option>
+                <option value="paused">Paused</option>
+                <option value="done">Done</option>
+              </select>
+            </label>
+            <label className="field">
+              <span>Risk level</span>
+              <select
+                value={riskLevel}
+                onChange={(e) => setRiskLevel(e.target.value)}
+              >
+                <option value="low">Low</option>
+                <option value="medium">Medium</option>
+                <option value="high">High</option>
+                <option value="critical">Critical</option>
+              </select>
+            </label>
+            <label className="field full">
+              <span>Description</span>
+              <textarea
+                value={description}
+                onChange={(e) => setDescription(e.target.value)}
+                required
+              />
+            </label>
+            <button className="btn primary" type="submit" disabled={busy}>
+              Save details
+            </button>
+          </form>
+        </section>
+
+        <section className="card">
+          <CardTitle title="Manage members" />
+          <div
+            className="member-list"
+            style={{
+              maxHeight: "250px",
+              overflowY: "auto",
+              marginBottom: "1rem",
+            }}
+          >
+            {allUsers.map((u: any) => (
+              <label
+                key={u._id}
+                className="check"
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  gap: "8px",
+                  margin: "8px 0",
+                  cursor: "pointer",
+                }}
+              >
+                <input
+                  type="checkbox"
+                  checked={selectedMembers.includes(u._id)}
+                  onChange={() => handleMemberToggle(u._id)}
+                />
+                <span>
+                  <b>{u.name}</b> ({u.role})
+                </span>
+              </label>
+            ))}
+          </div>
+          <button className="btn" onClick={updateMembers}>
+            Update members
+          </button>
+        </section>
+      </div>
+
+      <section className="card danger-zone" style={{ marginTop: "2rem" }}>
+        <CardTitle
+          title="Danger zone"
+          sub="Archive or permanently delete this project."
+        />
+        <div style={{ display: "flex", gap: "12px", marginTop: "1rem" }}>
+          {status === "done" ? (
+            <button className="btn" onClick={restore}>
+              Restore project
+            </button>
+          ) : (
+            <button className="btn warning" onClick={archive}>
+              Archive project
+            </button>
+          )}
+          <button className="btn danger" onClick={remove}>
+            Delete project
+          </button>
+        </div>
+      </section>
+    </div>
+  );
+}
+
 function ProjectDetail() {
   const { projectId } = useParams();
+  const { projects, tickets, refetch, toast, role } = useWorkspace();
   const nav = useNavigate();
-  const p = projects.find((x) => x.key === projectId) || projects[0];
+  const loc = useLocation();
+
+  const p = projects.find((x) => x.key === projectId);
+  if (!p)
+    return (
+      <Empty
+        title="Project not found"
+        body="The requested project key does not exist."
+      />
+    );
+
+  const tab = loc.pathname.endsWith("/settings")
+    ? "Settings"
+    : loc.pathname.endsWith("/board")
+      ? "Board"
+      : loc.pathname.endsWith("/backlog")
+        ? "Backlog"
+        : loc.pathname.endsWith("/sprints")
+          ? "Sprints"
+          : loc.pathname.endsWith("/tickets")
+            ? "Tickets"
+            : "Overview";
+
+  // Filter project tickets
+  const projTickets = tickets.filter((t) => t.project === p.name);
+
   return (
     <>
       <PageHead eyebrow={p.key} title={p.name} desc={p.description}>
@@ -1046,96 +1433,120 @@ function ProjectDetail() {
         </button>
       </PageHead>
       <div className="tabs">
-        {[
-          "Overview",
-          "Board",
-          "Backlog",
-          "Sprints",
-          "Tickets",
-          "Releases",
-          "Resources",
-          "Reports",
-          "Settings",
-        ].map((x) => (
-          <button
-            className={x === "Overview" ? "active" : ""}
-            onClick={() =>
-              nav(
-                x === "Overview"
-                  ? `/projects/${p.key}`
-                  : x === "Settings"
-                    ? `/projects/${p.key}/settings`
-                    : `/${x.toLowerCase()}`,
-              )
-            }
-            key={x}
-          >
-            {x}
-          </button>
-        ))}
+        {["Overview", "Board", "Backlog", "Sprints", "Tickets", "Settings"].map(
+          (x) => (
+            <button
+              className={x === tab ? "active" : ""}
+              onClick={() =>
+                nav(
+                  x === "Overview"
+                    ? `/projects/${p.key}`
+                    : `/projects/${p.key}/${x.toLowerCase()}`,
+                )
+              }
+              key={x}
+            >
+              {x}
+            </button>
+          ),
+        )}
       </div>
-      <div className="metrics compact">
-        <article className="metric">
-          <div>
-            <span>Progress</span>
-            <strong>{p.progress}%</strong>
-            <small>Across current scope</small>
-          </div>
-        </article>
-        <article className="metric">
-          <div>
-            <span>Open work</span>
-            <strong>34</strong>
-            <small>7 due this week</small>
-          </div>
-        </article>
-        <article className="metric">
-          <div>
-            <span>Team</span>
-            <strong>{p.members}</strong>
-            <small>2 near capacity</small>
-          </div>
-        </article>
-        <article className="metric">
-          <div>
-            <span>Risk</span>
-            <strong>{fmt(p.risk)}</strong>
-            <small>Stable this week</small>
-          </div>
-        </article>
-      </div>
-      <div className="two-col">
-        <section className="card">
-          <CardTitle title="Recent work" sub="Updates across this project" />
-          <TicketTable rows={tickets.slice(0, 4)} />
-        </section>
-        <section className="card">
-          <CardTitle title="Milestones" />
-          <div className="timeline">
-            {[
-              "Design system ready",
-              "Private beta",
-              "General availability",
-            ].map((x, i) => (
-              <div key={x}>
-                <i className={i === 0 ? "done" : ""} />
-                <span>
-                  <b>{x}</b>
-                  <small>
-                    {i === 0 ? "Completed 8 Jul" : `Due ${18 + i * 7} Jul`}
-                  </small>
-                </span>
+
+      {tab === "Overview" && (
+        <>
+          <div className="metrics compact">
+            <article className="metric">
+              <div>
+                <span>Progress</span>
+                <strong>{p.progress}%</strong>
+                <small>Across current scope</small>
               </div>
-            ))}
+            </article>
+            <article className="metric">
+              <div>
+                <span>Open work</span>
+                <strong>
+                  {projTickets.filter((t) => t.status !== "Done").length}
+                </strong>
+                <small>
+                  {projTickets.filter((t) => t.blocked).length} blocked
+                </small>
+              </div>
+            </article>
+            <article className="metric">
+              <div>
+                <span>Team</span>
+                <strong>{p.members}</strong>
+                <small>contributors</small>
+              </div>
+            </article>
+            <article className="metric">
+              <div>
+                <span>Risk</span>
+                <strong>{fmt(p.risk)}</strong>
+                <small>Stable this week</small>
+              </div>
+            </article>
           </div>
+          <div className="two-col">
+            <section className="card">
+              <CardTitle
+                title="Recent work"
+                sub="Updates across this project"
+              />
+              <TicketTable rows={projTickets.slice(0, 4)} />
+            </section>
+            <section className="card">
+              <CardTitle title="Milestones" />
+              <div className="timeline">
+                {[
+                  "Design system ready",
+                  "Private beta",
+                  "General availability",
+                ].map((x, i) => (
+                  <div key={x}>
+                    <i className={i === 0 ? "done" : ""} />
+                    <span>
+                      <b>{x}</b>
+                      <small>
+                        {i === 0 ? "Completed 8 Jul" : `Due ${18 + i * 7} Jul`}
+                      </small>
+                    </span>
+                  </div>
+                ))}
+              </div>
+            </section>
+          </div>
+        </>
+      )}
+
+      {tab === "Board" && <Board toast={toast} projectFilter={p.name} />}
+
+      {tab === "Backlog" && (
+        <BacklogLive toast={toast} projectFilter={p.name} />
+      )}
+
+      {tab === "Sprints" && (
+        <SprintsLive toast={toast} projectFilter={p.name} />
+      )}
+
+      {tab === "Tickets" && (
+        <section className="card no-pad">
+          <TicketTable rows={projTickets} />
         </section>
-      </div>
+      )}
+
+      {tab === "Settings" && (
+        <ProjectSettings project={p} refetch={refetch} toast={toast} />
+      )}
     </>
   );
 }
 
-function TicketTable({ rows = tickets }: { rows?: Ticket[] }) {
+function TicketTable({ rows }: { rows?: Ticket[] }) {
+  const { tickets: wsTickets } = useWorkspace();
   const nav = useNavigate();
+  const data = rows || wsTickets;
   return (
     <div className="table-wrap">
       <table>
@@ -1149,8 +1560,12 @@ function TicketTable({ rows = tickets }: { rows?: Ticket[] }) {
           </tr>
         </thead>
         <tbody>
-          {rows.map((t) => (
-            <tr key={t.id} onClick={() => nav(`/tickets/${t.key}`)}>
+          {data.map((t) => (
+            <tr
+              key={t.id}
+              onClick={() => nav(`/tickets/${t.key}`)}
+              style={{ cursor: "pointer" }}
+            >
               <td>
                 <small>{t.key}</small>
                 <b>{t.title}</b>
@@ -1200,11 +1615,33 @@ function TicketList() {
     </>
   );
 }
-function Board({ toast }: { toast: (s: string) => void }) {
+function Board({
+  toast,
+  projectFilter,
+}: {
+  toast: (s: string) => void;
+  projectFilter?: string;
+}) {
+  const {
+    tickets: wsTickets,
+    people: wsPeople,
+    dashboard,
+    mutate,
+    role,
+  } = useWorkspace();
   const nav = useNavigate();
-  const [data, setData] = useState(tickets);
+  const [params] = useSearchParams();
+  const q = params.get("q") || "";
   const [view, setView] = useState<"board" | "list">("board");
   const [filters, setFilters] = useState(false);
+  const [selectedTickets, setSelectedTickets] = useState<string[]>([]);
+
+  // Bulk actions fields
+  const [bulkStatus, setBulkStatus] = useState("");
+  const [bulkPriority, setBulkPriority] = useState("");
+  const [bulkAssignee, setBulkAssignee] = useState("");
+  const [bulkSprint, setBulkSprint] = useState("");
+
   const statuses: TicketStatus[] = [
     "Backlog",
     "To Do",
@@ -1212,23 +1649,94 @@ function Board({ toast }: { toast: (s: string) => void }) {
     "In Review",
     "Done",
   ];
+
+  // Filter tickets
+  const activeTickets = wsTickets.filter((t) => {
+    if (projectFilter && t.project !== projectFilter) return false;
+    const matchesQ =
+      t.title.toLowerCase().includes(q.toLowerCase()) ||
+      t.key.toLowerCase().includes(q.toLowerCase());
+    return matchesQ;
+  });
+
   const move = async (id: string, status: TicketStatus) => {
-    const previous = data;
-    setData((d) => d.map((t) => (t.id === id ? { ...t, status } : t)));
     try {
-      await api(`/tickets/${id}/status`, {
-        method: "PATCH",
-        body: JSON.stringify({ status }),
-      });
+      await mutate(
+        () =>
+          api(`/tickets/${id}/status`, {
+            method: "PATCH",
+            body: JSON.stringify({ status }),
+          }),
+        (prev) => ({
+          ...prev,
+          tickets: prev.tickets.map((t: any) =>
+            t.id === id ? { ...t, status } : t,
+          ),
+        }),
+      );
       toast(`Ticket moved to ${status}`);
     } catch (error) {
-      setData(previous);
       toast(error instanceof Error ? error.message : "Move failed");
     }
   };
+
+  const changeRank = async (
+    id: string,
+    currentRank: number,
+    increment: number,
+  ) => {
+    const nextRank = (currentRank || 0) + increment;
+    try {
+      await mutate(
+        () =>
+          api(`/tickets/${id}/rank`, {
+            method: "PATCH",
+            body: JSON.stringify({ rank: nextRank }),
+          }),
+        (prev) => ({
+          ...prev,
+          tickets: prev.tickets.map((t: any) =>
+            t.id === id ? { ...t, rank: nextRank } : t,
+          ),
+        }),
+      );
+      toast("Ticket rank updated");
+    } catch (error) {
+      toast(error instanceof Error ? error.message : "Ranking failed");
+    }
+  };
+
+  const handleBulkUpdate = async () => {
+    if (!selectedTickets.length) return;
+    const update: any = {};
+    if (bulkStatus) update.status = bulkStatus;
+    if (bulkPriority) update.priority = bulkPriority;
+    if (bulkAssignee) update.assignee = bulkAssignee;
+    if (bulkSprint) update.sprint = bulkSprint;
+
+    try {
+      await mutate(() =>
+        api("/tickets/bulk", {
+          method: "POST",
+          body: JSON.stringify({ ids: selectedTickets, update }),
+        }),
+      );
+      toast(`Bulk updated ${selectedTickets.length} tickets`);
+      setSelectedTickets([]);
+      setBulkStatus("");
+      setBulkPriority("");
+      setBulkAssignee("");
+      setBulkSprint("");
+    } catch (error) {
+      toast(error instanceof Error ? error.message : "Bulk update failed");
+    }
+  };
+
+  const isLeader = ["admin", "manager"].includes(role);
+
   return (
     <>
-      <PageHead title="Sprint board" desc="Sprint 24 · 6 days remaining">
+      <PageHead title="Sprint board" desc="Live delivery board.">
         <button
           className="btn"
           onClick={() => setFilters(!filters)}
@@ -1237,10 +1745,12 @@ function Board({ toast }: { toast: (s: string) => void }) {
           <Icons.Filter />
           Filters
         </button>
-        <button className="btn primary" onClick={() => nav("/tickets/new")}>
-          <Icons.Plus />
-          Create ticket
-        </button>
+        {isLeader && (
+          <button className="btn primary" onClick={() => nav("/tickets/new")}>
+            <Icons.Plus />
+            Create ticket
+          </button>
+        )}
       </PageHead>
       <div className="board-toolbar">
         <div className="segmented">
@@ -1257,16 +1767,149 @@ function Board({ toast }: { toast: (s: string) => void }) {
             List
           </button>
         </div>
-        <span>24 tickets · 94 points</span>
+        <span>{activeTickets.length} tickets</span>
         <div className="avatar-stack">
-          {people.map((p) => (
-            <Avatar key={p.name} name={p.name} color={p.color} />
+          {wsPeople.map((p) => (
+            <Avatar key={p.email} name={p.name} color={p.color} />
           ))}
         </div>
       </div>
+
+      {selectedTickets.length > 0 && (
+        <div
+          className="card"
+          style={{
+            display: "flex",
+            gap: "10px",
+            alignItems: "center",
+            padding: "10px",
+            margin: "10px 0",
+            background: "#f3f0fc",
+            border: "1px solid #dcd3f9",
+          }}
+        >
+          <span>
+            <b>{selectedTickets.length}</b> selected:{" "}
+          </span>
+          <select
+            value={bulkStatus}
+            onChange={(e) => setBulkStatus(e.target.value)}
+          >
+            <option value="">(Change Status)</option>
+            {statuses.map((s) => (
+              <option key={s} value={s}>
+                {s}
+              </option>
+            ))}
+          </select>
+          <select
+            value={bulkPriority}
+            onChange={(e) => setBulkPriority(e.target.value)}
+          >
+            <option value="">(Change Priority)</option>
+            <option value="low">Low</option>
+            <option value="medium">Medium</option>
+            <option value="high">High</option>
+            <option value="critical">Critical</option>
+          </select>
+          <select
+            value={bulkAssignee}
+            onChange={(e) => setBulkAssignee(e.target.value)}
+          >
+            <option value="">(Change Assignee)</option>
+            {(dashboard?.users || []).map((u: any) => (
+              <option key={u._id} value={u._id}>
+                {u.name}
+              </option>
+            ))}
+          </select>
+          <select
+            value={bulkSprint}
+            onChange={(e) => setBulkSprint(e.target.value)}
+          >
+            <option value="">(Change Sprint)</option>
+            {(dashboard?.sprints || []).map((s: any) => (
+              <option key={s._id} value={s._id}>
+                {s.name}
+              </option>
+            ))}
+          </select>
+          <button className="btn primary" onClick={handleBulkUpdate}>
+            Apply
+          </button>
+          <button className="btn" onClick={() => setSelectedTickets([])}>
+            Cancel
+          </button>
+        </div>
+      )}
+
       {view === "list" ? (
         <section className="card no-pad">
-          <TicketTable rows={data} />
+          <div className="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Select</th>
+                  <th>Ticket</th>
+                  <th>Status</th>
+                  <th>Priority</th>
+                  <th>Assignee</th>
+                  <th>Points</th>
+                  <th>Rank</th>
+                </tr>
+              </thead>
+              <tbody>
+                {activeTickets.map((t) => (
+                  <tr key={t.id}>
+                    <td>
+                      <input
+                        type="checkbox"
+                        checked={selectedTickets.includes(t.id)}
+                        onChange={() =>
+                          setSelectedTickets((prev) =>
+                            prev.includes(t.id)
+                              ? prev.filter((x) => x !== t.id)
+                              : [...prev, t.id],
+                          )
+                        }
+                      />
+                    </td>
+                    <td
+                      onClick={() => nav(`/tickets/${t.key}`)}
+                      style={{ cursor: "pointer" }}
+                    >
+                      <small>{t.key}</small>
+                      <b>{t.title}</b>
+                    </td>
+                    <td>
+                      <Badge tone={t.status.toLowerCase().replaceAll(" ", "")}>
+                        {t.status}
+                      </Badge>
+                    </td>
+                    <td>
+                      <Badge tone={t.priority}>{t.priority}</Badge>
+                    </td>
+                    <td>{t.assignee}</td>
+                    <td>{t.points}</td>
+                    <td>
+                      <button
+                        className="icon-btn"
+                        onClick={() => changeRank(t.id, t.rank || 0, 1)}
+                      >
+                        <Icons.ChevronUp size={14} />
+                      </button>
+                      <button
+                        className="icon-btn"
+                        onClick={() => changeRank(t.id, t.rank || 0, -1)}
+                      >
+                        <Icons.ChevronDown size={14} />
+                      </button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
         </section>
       ) : (
         <div className="kanban">
@@ -1275,15 +1918,40 @@ function Board({ toast }: { toast: (s: string) => void }) {
               <header>
                 <i className={s.replaceAll(" ", "").toLowerCase()} />
                 <b>{s}</b>
-                <span>{data.filter((t) => t.status === s).length}</span>
-                <Icons.MoreHorizontal />
+                <span>
+                  {activeTickets.filter((t) => t.status === s).length}
+                </span>
               </header>
-              {data
+              {activeTickets
                 .filter((t) => t.status === s)
                 .map((t) => (
                   <article className="ticket-card" key={t.id}>
-                    <div>
-                      <small>{t.key}</small>
+                    <div
+                      style={{
+                        display: "flex",
+                        justifyContent: "space-between",
+                      }}
+                    >
+                      <label
+                        style={{
+                          display: "flex",
+                          gap: "5px",
+                          alignItems: "center",
+                        }}
+                      >
+                        <input
+                          type="checkbox"
+                          checked={selectedTickets.includes(t.id)}
+                          onChange={() =>
+                            setSelectedTickets((prev) =>
+                              prev.includes(t.id)
+                                ? prev.filter((x) => x !== t.id)
+                                : [...prev, t.id],
+                            )
+                          }
+                        />
+                        <small>{t.key}</small>
+                      </label>
                       {t.blocked && (
                         <Badge tone="red">
                           <Icons.CircleSlash2 />
@@ -1291,9 +1959,14 @@ function Board({ toast }: { toast: (s: string) => void }) {
                         </Badge>
                       )}
                     </div>
-                    <h3>{t.title}</h3>
+                    <h3
+                      onClick={() => nav(`/tickets/${t.key}`)}
+                      style={{ cursor: "pointer" }}
+                    >
+                      {t.title}
+                    </h3>
                     <div className="labels">
-                      {t.labels.map((l) => (
+                      {t.labels.map((l: string) => (
                         <Badge key={l}>{l}</Badge>
                       ))}
                     </div>
@@ -1305,23 +1978,51 @@ function Board({ toast }: { toast: (s: string) => void }) {
                       <span>{t.points} pts</span>
                       <Avatar name={t.assignee} />
                     </div>
-                    <select
-                      value={t.status}
-                      aria-label="Move ticket"
-                      onChange={(e) =>
-                        move(t.id, e.target.value as TicketStatus)
-                      }
+                    <div
+                      style={{
+                        display: "flex",
+                        justifyContent: "space-between",
+                        alignItems: "center",
+                        marginTop: "8px",
+                      }}
                     >
-                      {statuses.map((x) => (
-                        <option key={x}>{x}</option>
-                      ))}
-                    </select>
+                      <select
+                        value={t.status}
+                        aria-label="Move ticket"
+                        onChange={(e) =>
+                          move(t.id, e.target.value as TicketStatus)
+                        }
+                      >
+                        {statuses.map((x) => (
+                          <option key={x}>{x}</option>
+                        ))}
+                      </select>
+                      <div>
+                        <button
+                          className="icon-btn"
+                          onClick={() => changeRank(t.id, t.rank || 0, 1)}
+                        >
+                          <Icons.ChevronUp size={14} />
+                        </button>
+                        <button
+                          className="icon-btn"
+                          onClick={() => changeRank(t.id, t.rank || 0, -1)}
+                        >
+                          <Icons.ChevronDown size={14} />
+                        </button>
+                      </div>
+                    </div>
                   </article>
                 ))}
-              <button className="add-card" onClick={() => nav("/tickets/new")}>
-                <Icons.Plus />
-                Add ticket
-              </button>
+              {isLeader && (
+                <button
+                  className="add-card"
+                  onClick={() => nav("/tickets/new")}
+                >
+                  <Icons.Plus />
+                  Add ticket
+                </button>
+              )}
             </section>
           ))}
         </div>
@@ -1329,203 +2030,153 @@ function Board({ toast }: { toast: (s: string) => void }) {
     </>
   );
 }
-function Backlog({ toast }: { toast: (s: string) => void }) {
-  return (
-    <>
-      <PageHead
-        title="Backlog"
-        desc="Prioritize upcoming work and shape future sprints."
-      >
-        <button className="btn">
-          <Icons.Plus />
-          Create sprint
-        </button>
-        <button className="btn primary">
-          <Icons.Plus />
-          Create ticket
-        </button>
-      </PageHead>
-      <FilterBar placeholder="Search backlog…" />
-      <section className="sprint-group">
-        <div className="sprint-group-head">
-          <div>
-            <Icons.ChevronDown />
-            <h2>Sprint 25</h2>
-            <Badge tone="neutral">PLANNED</Badge>
-            <span>18 tickets · 62 points</span>
-          </div>
-          <button className="btn lime" onClick={() => toast("Sprint started")}>
-            Start sprint
-          </button>
-        </div>
-        <TicketTable rows={tickets.slice(1, 4)} />
-      </section>
-      <section className="sprint-group">
-        <div className="sprint-group-head">
-          <div>
-            <Icons.ChevronDown />
-            <h2>Backlog</h2>
-            <span>32 tickets</span>
-          </div>
-          <button className="icon-btn">
-            <Icons.MoreHorizontal />
-          </button>
-        </div>
-        <TicketTable rows={tickets.filter((t) => t.status === "Backlog")} />
-      </section>
-    </>
-  );
-}
 
-function Sprints({ toast }: { toast: (s: string) => void }) {
-  const nav = useNavigate();
-  return (
-    <>
-      <PageHead
-        title="Sprints"
-        desc="Plan capacity, monitor delivery, and review outcomes."
-      >
-        <button className="btn primary" onClick={() => nav("/sprints/new")}>
-          <Icons.Plus />
-          New sprint
-        </button>
-      </PageHead>
-      <div className="sprint-list">
-        {[
-          {
-            name: "Sprint 24",
-            status: "active",
-            progress: 72,
-            risk: 68,
-            date: "01–14 Jul",
-            points: "68 / 94",
-          },
-          {
-            name: "Sprint 25",
-            status: "planned",
-            progress: 0,
-            risk: 34,
-            date: "15–28 Jul",
-            points: "0 / 62",
-          },
-          {
-            name: "Sprint 23",
-            status: "completed",
-            progress: 100,
-            risk: 42,
-            date: "17–30 Jun",
-            points: "88 / 92",
-          },
-        ].map((s) => (
-          <article
-            className="card sprint-row"
-            key={s.name}
-            onClick={() => nav("/sprints/24")}
-          >
-            <div className={`sprint-status ${s.status}`}>
-              <Icons.Timer />
-            </div>
-            <div>
-              <span>
-                <h2>{s.name}</h2>
-                <Badge
-                  tone={
-                    s.status === "active"
-                      ? "lime"
-                      : s.status === "completed"
-                        ? "green"
-                        : "neutral"
-                  }
-                >
-                  {s.status}
-                </Badge>
-              </span>
-              <p>I-Track Platform · {s.date}</p>
-            </div>
-            <div>
-              <small>Progress</small>
-              <b>{s.progress}%</b>
-              <Progress value={s.progress} />
-            </div>
-            <div>
-              <small>Story points</small>
-              <b>{s.points}</b>
-            </div>
-            <div>
-              <small>Risk score</small>
-              <b className="risk-value">{s.risk}</b>
-            </div>
-            <button
-              className="icon-btn"
-              onClick={(e) => {
-                e.stopPropagation();
-                toast("Sprint actions opened");
-              }}
-            >
-              <Icons.MoreHorizontal />
-            </button>
-          </article>
-        ))}
-      </div>
-    </>
-  );
-}
 function SprintDetail() {
+  const { sprintId } = useParams();
+  const { dashboard, tickets, mutate, role, toast } = useWorkspace();
   const nav = useNavigate();
+
+  const s = (dashboard?.sprints || []).find((x: any) => x._id === sprintId);
+  if (!s)
+    return (
+      <Empty
+        title="Sprint not found"
+        body="The requested sprint does not exist."
+      />
+    );
+
+  const progress = s.plannedPoints
+    ? Math.round((s.completedPoints / s.plannedPoints) * 100)
+    : 0;
+
+  // Time remaining
+  let timeRemaining = "Planned";
+  if (s.status === "active") {
+    const diff = new Date(s.endDate).getTime() - Date.now();
+    const days = Math.ceil(diff / (1000 * 60 * 60 * 24));
+    timeRemaining = days > 0 ? `${days} days` : "Ends today";
+  } else if (s.status === "completed") {
+    timeRemaining = "Completed";
+  }
+
+  // Sprint tickets
+  const sprintTickets = tickets.filter((t) => t.sprintId === s._id);
+
+  const startSprint = async () => {
+    try {
+      await mutate(() => api(`/sprints/${s._id}/start`, { method: "POST" }));
+      toast("Sprint started successfully");
+    } catch (err) {
+      toast(err instanceof Error ? err.message : "Failed to start sprint");
+    }
+  };
+
+  const reopenSprint = async () => {
+    try {
+      await mutate(() => api(`/sprints/${s._id}/reopen`, { method: "POST" }));
+      toast("Sprint reopened");
+    } catch (err) {
+      toast(err instanceof Error ? err.message : "Failed to reopen sprint");
+    }
+  };
+
+  const deleteSprint = async () => {
+    if (!window.confirm("Are you sure you want to delete this sprint?")) return;
+    try {
+      await mutate(() => api(`/sprints/${s._id}`, { method: "DELETE" }));
+      toast("Sprint deleted");
+      nav("/sprints");
+    } catch (err) {
+      toast(err instanceof Error ? err.message : "Failed to delete sprint");
+    }
+  };
+
+  const isLeader = ["admin", "manager"].includes(role);
+
+  // Status breakdown
+  const statuses = ["Backlog", "To Do", "In Progress", "In Review", "Done"];
+  const breakdownData = statuses.map((st) => ({
+    name: st,
+    v: sprintTickets.filter((t) => t.status === st).length,
+  }));
+
   return (
     <>
       <PageHead
-        eyebrow="ACTIVE SPRINT"
-        title="Sprint 24"
-        desc="I-Track Platform · 01–14 July"
+        eyebrow={s.status.toUpperCase()}
+        title={s.name}
+        desc={`${s.project?.name || "Project"} · ${new Date(s.startDate).toLocaleDateString()}–${new Date(s.endDate).toLocaleDateString()}`}
       >
-        <button className="btn" onClick={() => nav("/sprints/24/risk")}>
+        <button className="btn" onClick={() => nav(`/sprints/${s._id}/risk`)}>
           <Icons.Activity />
           View risk
         </button>
-        <button
-          className="btn primary"
-          onClick={() => nav("/sprints/24/complete")}
-        >
-          Complete sprint
-        </button>
+        {s.status === "planned" && isLeader && (
+          <button className="btn lime" onClick={startSprint}>
+            Start sprint
+          </button>
+        )}
+        {s.status === "active" && isLeader && (
+          <button
+            className="btn primary"
+            onClick={() => nav(`/sprints/${s._id}/complete`)}
+          >
+            Complete sprint
+          </button>
+        )}
+        {s.status === "completed" && isLeader && (
+          <button className="btn" onClick={reopenSprint}>
+            Reopen sprint
+          </button>
+        )}
+        {isLeader && (
+          <button className="btn danger" onClick={deleteSprint}>
+            Delete
+          </button>
+        )}
       </PageHead>
       <div className="metrics compact">
         <article className="metric">
           <div>
             <span>Progress</span>
-            <strong>72%</strong>
-            <small>68 of 94 points</small>
+            <strong>{progress}%</strong>
+            <small>
+              {s.completedPoints} of {s.plannedPoints} points
+            </small>
           </div>
         </article>
         <article className="metric">
           <div>
-            <span>Time remaining</span>
-            <strong>6 days</strong>
-            <small>Ends 14 July</small>
+            <span>Status</span>
+            <strong>{s.status}</strong>
+            <small>{timeRemaining}</small>
           </div>
         </article>
         <article className="metric">
           <div>
             <span>Risk score</span>
-            <strong>68</strong>
-            <small>High · +7 this week</small>
+            <strong>{s.riskScore}</strong>
+            <small>Out of 100</small>
           </div>
         </article>
         <article className="metric">
           <div>
-            <span>Scope change</span>
-            <strong>+12%</strong>
-            <small>11 points added</small>
+            <span>Capacity</span>
+            <strong>{s.capacity}</strong>
+            <small>Story points</small>
           </div>
         </article>
       </div>
       <div className="two-col">
         <section className="card">
-          <CardTitle title="Sprint burndown" />
+          <CardTitle title="Sprint velocity / history" />
           <div className="chart">
             <ResponsiveContainer>
-              <AreaChart data={risk}>
+              <AreaChart
+                data={(s.velocityHistory || []).map(
+                  (v: number, idx: number) => ({ n: `S${idx + 1}`, v }),
+                )}
+              >
                 <XAxis dataKey="n" />
                 <YAxis />
                 <Tooltip />
@@ -1540,7 +2191,7 @@ function SprintDetail() {
             <ResponsiveContainer>
               <PieChart>
                 <Pie
-                  data={[{ v: 18 }, { v: 12 }, { v: 8 }, { v: 6 }, { v: 24 }]}
+                  data={breakdownData}
                   dataKey="v"
                   innerRadius={55}
                   outerRadius={78}
@@ -1554,88 +2205,303 @@ function SprintDetail() {
               </PieChart>
             </ResponsiveContainer>
             <strong>
-              68<small>tickets</small>
+              {sprintTickets.length}
+              <small>tickets</small>
             </strong>
           </div>
         </section>
       </div>
       <section className="card">
         <CardTitle title="Sprint work" />
-        <TicketTable />
+        <TicketTable rows={sprintTickets} />
       </section>
     </>
   );
 }
+
 function CompleteSprint({ toast }: { toast: (s: string) => void }) {
+  const { sprintId } = useParams();
+  const { dashboard, tickets, mutate } = useWorkspace();
+  const nav = useNavigate();
+
+  const s = (dashboard?.sprints || []).find((x: any) => x._id === sprintId);
+  if (!s)
+    return (
+      <Empty
+        title="Sprint not found"
+        body="The requested sprint does not exist."
+      />
+    );
+
+  const sprintTickets = tickets.filter((t) => t.sprintId === s._id);
+  const completedTickets = sprintTickets.filter((t) => t.status === "Done");
+  const incompleteTickets = sprintTickets.filter((t) => t.status !== "Done");
+
+  const completedPoints = completedTickets.reduce(
+    (sum, t) => sum + (t.points || 0),
+    0,
+  );
+  const incompletePoints = incompleteTickets.reduce(
+    (sum, t) => sum + (t.points || 0),
+    0,
+  );
+  const completionRate = s.plannedPoints
+    ? Math.round((completedPoints / s.plannedPoints) * 100)
+    : 0;
+
+  // Get other sprints for moving work to
+  const otherSprints = (dashboard?.sprints || []).filter(
+    (x: any) => x._id !== s._id && x.status === "planned",
+  );
+  const [destinationSprintId, setDestinationSprintId] = useState("");
+
+  const handleComplete = async () => {
+    try {
+      await mutate(() =>
+        api(`/sprints/${s._id}/complete`, {
+          method: "POST",
+          body: JSON.stringify({
+            moveIncompleteToSprint: destinationSprintId || null,
+          }),
+        }),
+      );
+      toast("Sprint completed successfully");
+      nav(`/sprints/${s._id}`);
+    } catch (err) {
+      toast(err instanceof Error ? err.message : "Failed to complete sprint");
+    }
+  };
+
   return (
     <CenteredForm
-      title="Complete Sprint 24"
+      title={`Complete ${s.name}`}
       desc="Review the outcome and decide where incomplete work should move."
     >
       <div className="completion-summary">
         <div>
-          <strong>68</strong>
+          <strong>{completedPoints}</strong>
           <span>Completed points</span>
         </div>
         <div>
-          <strong>26</strong>
+          <strong>{incompletePoints}</strong>
           <span>Incomplete points</span>
         </div>
         <div>
-          <strong>72%</strong>
+          <strong>{completionRate}%</strong>
           <span>Completion rate</span>
         </div>
       </div>
-      <label className="field">
-        <span>Move incomplete work to</span>
-        <select>
-          <option>Sprint 25</option>
-          <option>Backlog</option>
-        </select>
-      </label>
+      {incompleteTickets.length > 0 && (
+        <label className="field">
+          <span>Move incomplete work to</span>
+          <select
+            value={destinationSprintId}
+            onChange={(e) => setDestinationSprintId(e.target.value)}
+          >
+            <option value="">Backlog</option>
+            {otherSprints.map((os: any) => (
+              <option key={os._id} value={os._id}>
+                {os.name}
+              </option>
+            ))}
+          </select>
+        </label>
+      )}
       <div className="callout warning">
         <Icons.AlertTriangle />
         <span>
-          <b>6 tickets will be moved.</b> This action updates their sprint
-          assignment.
+          <b>{incompleteTickets.length} tickets will be moved.</b> This action
+          updates their sprint assignment.
         </span>
       </div>
-      <button
-        className="btn primary wide"
-        onClick={() => toast("Sprint completed successfully")}
-      >
+      <button className="btn primary wide" onClick={handleComplete}>
         Complete sprint
       </button>
     </CenteredForm>
   );
 }
+
 function RiskPage() {
+  const { sprintId } = useParams();
+  const { dashboard, tickets, mutate, toast } = useWorkspace();
+  const [analysis, setAnalysis] = useState<any>(null);
+  const [loading, setLoading] = useState(false);
+
+  const s = (dashboard?.sprints || []).find((x: any) => x._id === sprintId);
+  if (!s)
+    return (
+      <Empty
+        title="Sprint not found"
+        body="The requested sprint does not exist."
+      />
+    );
+
+  const sprintTickets = tickets.filter((t) => t.sprintId === s._id);
+
+  const recalculateRisk = async () => {
+    setLoading(true);
+    try {
+      const plannedPoints = s.plannedPoints || 0;
+      const capacity = s.capacity || 0;
+      const blockedTickets = sprintTickets.filter((t) => t.blocked).length;
+      const totalTickets = sprintTickets.length;
+
+      const workload = sprintTickets.reduce(
+        (sum: number, t: any) => sum + (t.points || 0),
+        0,
+      );
+
+      const assigneePoints: Record<string, number> = {};
+      sprintTickets.forEach((t: any) => {
+        assigneePoints[t.assignee] =
+          (assigneePoints[t.assignee] || 0) + (t.points || 0);
+      });
+      const focusLoad = Math.max(0, ...Object.values(assigneePoints));
+
+      const uniqueLabels = new Set<string>();
+      sprintTickets.forEach((t: any) =>
+        t.labels.forEach((l: string) => uniqueLabels.add(l)),
+      );
+      const requiredSkills = uniqueLabels.size;
+
+      const allSkills = new Set<string>();
+      (dashboard?.users || []).forEach((u: any) =>
+        (u.skills || []).forEach((sk: string) => allSkills.add(sk)),
+      );
+      const coveredSkills = allSkills.size;
+
+      const velocityHistory = s.velocityHistory || [];
+
+      const result = await api<any>("/analysis/sprint-risk", {
+        method: "POST",
+        body: JSON.stringify({
+          plannedPoints,
+          capacity,
+          blockedTickets,
+          totalTickets,
+          workload,
+          focusLoad,
+          requiredSkills,
+          coveredSkills,
+          velocityHistory,
+        }),
+      });
+
+      await mutate(() =>
+        api(`/sprints/${s._id}`, {
+          method: "PATCH",
+          body: JSON.stringify({ riskScore: result.risk.finalScore }),
+        }),
+      );
+
+      setAnalysis(result);
+      toast("Sprint risk recalculated and saved successfully");
+    } catch (err) {
+      toast(err instanceof Error ? err.message : "Recalculation failed");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    recalculateRisk();
+  }, [sprintId]);
+
+  const displayScore = analysis ? analysis.risk.finalScore : s.riskScore;
+  let riskTone = "green";
+  let riskLabel = "LOW RISK";
+  if (displayScore > 75) {
+    riskTone = "red";
+    riskLabel = "CRITICAL RISK";
+  } else if (displayScore > 50) {
+    riskTone = "orange";
+    riskLabel = "HIGH RISK";
+  } else if (displayScore > 25) {
+    riskTone = "yellow";
+    riskLabel = "MEDIUM RISK";
+  }
+
+  const factors = [];
+  if (analysis) {
+    factors.push([
+      "Sprint Utilisation",
+      analysis.utilisation.explanation,
+      `${analysis.utilisation.finalScore > 0 ? "+" : ""}${analysis.utilisation.finalScore}`,
+      analysis.utilisation.finalScore > 50
+        ? "red"
+        : analysis.utilisation.finalScore > 25
+          ? "orange"
+          : "green",
+    ]);
+    factors.push([
+      "Dependency Risk",
+      analysis.dependency.explanation,
+      `${analysis.dependency.finalScore > 0 ? "+" : ""}${analysis.dependency.finalScore}`,
+      analysis.dependency.finalScore > 50
+        ? "red"
+        : analysis.dependency.finalScore > 25
+          ? "orange"
+          : "green",
+    ]);
+    factors.push([
+      "Burnout & Workload",
+      analysis.burnout.explanation,
+      `${analysis.burnout.finalScore > 0 ? "+" : ""}${analysis.burnout.finalScore}`,
+      analysis.burnout.finalScore > 50
+        ? "red"
+        : analysis.burnout.finalScore > 25
+          ? "orange"
+          : "green",
+    ]);
+    factors.push([
+      "Skill Gap Risk",
+      analysis.skillGap.explanation,
+      `${analysis.skillGap.finalScore > 0 ? "+" : ""}${analysis.skillGap.finalScore}`,
+      analysis.skillGap.finalScore > 50
+        ? "red"
+        : analysis.skillGap.finalScore > 25
+          ? "orange"
+          : "green",
+    ]);
+  } else {
+    factors.push([
+      "Sprint Utilisation",
+      "Based on planned points vs capacity",
+      "...",
+      "yellow",
+    ]);
+  }
+
   return (
     <>
       <PageHead
         eyebrow="SPRINT INTELLIGENCE"
         title="Delivery risk"
-        desc="Explainable signals for Sprint 24."
+        desc={`Explainable signals for ${s.name}.`}
       >
-        <button className="btn">
-          <Icons.RefreshCw />
+        <button className="btn" onClick={recalculateRisk} disabled={loading}>
+          <Icons.RefreshCw className={loading ? "spin" : ""} />
           Recalculate
         </button>
       </PageHead>
       <div className="risk-hero">
         <div className="risk-score">
           <span>RISK SCORE</span>
-          <strong>68</strong>
-          <Badge tone="orange">HIGH RISK</Badge>
-          <small>+7 since Monday</small>
+          <strong>{displayScore}</strong>
+          <Badge tone={riskTone}>{riskLabel}</Badge>
         </div>
         <div>
-          <h2>Delivery is at risk, but recoverable</h2>
+          <h2>
+            {displayScore > 50
+              ? "Delivery is at risk, but recoverable"
+              : "Delivery is on track"}
+          </h2>
           <p>
-            Scope growth and three blocked critical-path tickets are putting the
-            sprint goal under pressure.
+            {displayScore > 50
+              ? "High utilization, skills constraints or blocked work are putting the sprint goal under pressure."
+              : "Velocity is stable and capacity constraints are within healthy parameters."}
           </p>
-          <Progress value={68} tone="orange" />
+          <Progress value={displayScore} tone={riskTone} />
           <div className="risk-scale">
             <span>Low</span>
             <span>Medium</span>
@@ -1646,34 +2512,12 @@ function RiskPage() {
       </div>
       <div className="two-col">
         <section className="card">
-          <CardTitle title="Contributing factors" sub="Why the score changed" />
+          <CardTitle
+            title="Contributing factors"
+            sub="Why the score was computed"
+          />
           <div className="factor-list">
-            {[
-              [
-                "Scope increased by 12%",
-                "11 points added after sprint start",
-                "+18",
-                "orange",
-              ],
-              [
-                "Critical work is blocked",
-                "3 tickets depend on SSO review",
-                "+15",
-                "red",
-              ],
-              [
-                "Team capacity is constrained",
-                "2 contributors are above 85%",
-                "+9",
-                "yellow",
-              ],
-              [
-                "Velocity remains stable",
-                "Within 4% of five-sprint average",
-                "−8",
-                "green",
-              ],
-            ].map(([a, b, c, d]) => (
+            {factors.map(([a, b, c, d]) => (
               <div key={a}>
                 <i className={d} />
                 <span>
@@ -1690,149 +2534,24 @@ function RiskPage() {
             <Icons.Sparkles />
             RECOMMENDED ACTION
           </Badge>
-          <h2>Unblock authentication work today</h2>
-          <p>
-            Move one API reviewer from reporting work to the SSO dependency.
-            This could reduce predicted risk by 14 points.
-          </p>
-          <div>
-            <span>Expected impact</span>
-            <strong>68 → 54</strong>
-          </div>
-          <button className="btn dark wide">Review affected tickets</button>
+          {displayScore > 50 ? (
+            <>
+              <h2>Review blocked tickets and load balance</h2>
+              <p>
+                Move blocked tickets back to backlog or reassign to
+                unconstrained team members with matching skills.
+              </p>
+            </>
+          ) : (
+            <>
+              <h2>Maintain current course</h2>
+              <p>
+                Sprint delivery is proceeding smoothly. No urgent capacity
+                rebalancing required.
+              </p>
+            </>
+          )}
         </section>
-      </div>
-    </>
-  );
-}
-
-function TicketDetail({ toast }: { toast: (s: string) => void }) {
-  const { ticketId } = useParams();
-  const t = tickets.find((x) => x.key === ticketId) || tickets[0];
-  return (
-    <>
-      <div className="ticket-head">
-        <div>
-          <div className="ticket-key">
-            <span>{t.key}</span>
-            <button>
-              <Icons.Copy />
-            </button>
-          </div>
-          <h1>{t.title}</h1>
-          <div className="labels">
-            {t.labels.map((l) => (
-              <Badge key={l}>{l}</Badge>
-            ))}
-          </div>
-        </div>
-        <div className="head-actions">
-          <button
-            className="btn"
-            onClick={() => toast("You are watching this ticket")}
-          >
-            <Icons.Eye />
-            Watch
-          </button>
-          <button className="btn">
-            <Icons.Copy />
-            Clone
-          </button>
-          <button className="icon-btn">
-            <Icons.MoreHorizontal />
-          </button>
-        </div>
-      </div>
-      <div className="ticket-layout">
-        <section className="ticket-main">
-          <div className="card">
-            <h3>Description</h3>
-            <p>
-              Enable secure single sign-on for enterprise workspaces, including
-              validated callbacks, organization discovery, and clear failure
-              recovery.
-            </p>
-            <h3>Acceptance criteria</h3>
-            {[
-              "Administrators can configure an identity provider",
-              "Members can sign in through the configured provider",
-              "Authentication failures are recorded in the audit log",
-            ].map((x) => (
-              <label className="check" key={x}>
-                <input type="checkbox" />
-                {x}
-              </label>
-            ))}
-          </div>
-          <div className="card">
-            <div className="tabs">
-              <button className="active">Comments 4</button>
-              <button>Work logs 3</button>
-              <button>Attachments 2</button>
-              <button>History</button>
-            </div>
-            <textarea className="comment" placeholder="Add a comment…" />
-            <div className="comment-actions">
-              <span>Markdown supported</span>
-              <button
-                className="btn primary"
-                onClick={() => toast("Comment added")}
-              >
-                Comment
-              </button>
-            </div>
-            {people.slice(0, 2).map((p, i) => (
-              <div className="comment-item" key={p.name}>
-                <Avatar name={p.name} color={p.color} />
-                <div>
-                  <p>
-                    <b>{p.name}</b>
-                    <span>{i + 1}h ago</span>
-                  </p>
-                  <div>
-                    {i
-                      ? "Callback validation is ready for review."
-                      : "I’ve added the organization discovery notes and edge cases."}
-                  </div>
-                </div>
-              </div>
-            ))}
-          </div>
-        </section>
-        <aside className="ticket-aside card">
-          <h3>Details</h3>
-          {[
-            ["Status", "In Progress"],
-            ["Priority", "Critical"],
-            ["Assignee", t.assignee],
-            ["Reporter", "Maya Chen"],
-            ["Sprint", "Sprint 24"],
-            ["Story points", String(t.points)],
-            ["Due date", "14 Jul 2026"],
-          ].map(([a, b]) => (
-            <div className="detail-row" key={a}>
-              <span>{a}</span>
-              <button>
-                {b}
-                <Icons.ChevronDown />
-              </button>
-            </div>
-          ))}
-          <hr />
-          <h3>Dependencies</h3>
-          <div className="dependency">
-            <Icons.CircleSlash2 />
-            <span>
-              <b>Blocked by ITR-139</b>
-              <small>Identity provider discovery</small>
-            </span>
-          </div>
-          <hr />
-          <button className="text-btn danger">
-            <Icons.Trash2 />
-            Delete ticket
-          </button>
-        </aside>
       </div>
     </>
   );
@@ -1908,14 +2627,36 @@ function MyWork() {
     </>
   );
 }
+
 function Notifications({ toast }: { toast: (s: string) => void }) {
-  const items = serverData.notifications || [];
-  const [unreadOnly,setUnreadOnly]=useState(false);
+  const { notifications = [], mutate } = useWorkspace();
+  const [unreadOnly, setUnreadOnly] = useState(false);
+
   const markAll = async () => {
-    await api("/notifications/read-all", { method: "POST" });
-    items.forEach((x: any) => (x.readAt = new Date().toISOString()));
-    toast("All notifications marked as read");
+    try {
+      await mutate(() => api("/notifications/read-all", { method: "POST" }));
+      toast("All notifications marked as read");
+    } catch (err) {
+      toast(err instanceof Error ? err.message : "Failed to mark all read");
+    }
   };
+
+  const markRead = async (id: string) => {
+    try {
+      await mutate(() => api(`/notifications/${id}/read`, { method: "PATCH" }));
+      toast("Notification marked read");
+    } catch (err) {
+      toast(
+        err instanceof Error ? err.message : "Failed to mark notification read",
+      );
+    }
+  };
+
+  const displayList = notifications.filter(
+    (item: any) => !unreadOnly || !item.readAt,
+  );
+  const unreadCount = notifications.filter((item: any) => !item.readAt).length;
+
   return (
     <>
       <PageHead title="Notifications" desc="Updates that need your attention.">
@@ -1925,14 +2666,25 @@ function Notifications({ toast }: { toast: (s: string) => void }) {
         </button>
       </PageHead>
       <div className="tabs">
-        <button className={!unreadOnly?"active":""} onClick={()=>setUnreadOnly(false)}>
-          All <Badge tone="purple">{items.length}</Badge>
+        <button
+          className={!unreadOnly ? "active" : ""}
+          onClick={() => setUnreadOnly(false)}
+        >
+          All <Badge tone="purple">{notifications.length}</Badge>
         </button>
-        <button className={unreadOnly?"active":""} onClick={()=>setUnreadOnly(true)}>Unread</button>
+        <button
+          className={unreadOnly ? "active" : ""}
+          onClick={() => setUnreadOnly(true)}
+        >
+          Unread{" "}
+          <Badge tone={unreadCount > 0 ? "orange" : "neutral"}>
+            {unreadCount}
+          </Badge>
+        </button>
       </div>
       <section className="card notification-list">
-        {items.length ? (
-          items.filter((item:any)=>!unreadOnly||!item.readAt).map((item: any) => {
+        {displayList.length ? (
+          displayList.map((item: any) => {
             const Icon =
               item.type === "risk"
                 ? Icons.Activity
@@ -1951,7 +2703,15 @@ function Notifications({ toast }: { toast: (s: string) => void }) {
                   <p>{item.body}</p>
                   <small>{new Date(item.createdAt).toLocaleString()}</small>
                 </span>
-                {!item.readAt&&<button className="icon-btn" aria-label={`Mark ${item.title} read`} onClick={async()=>{await api(`/notifications/${item._id}/read`,{method:"PATCH"});item.readAt=new Date().toISOString();toast("Notification marked read")}}><Icons.Check /></button>}
+                {!item.readAt && (
+                  <button
+                    className="icon-btn"
+                    aria-label={`Mark ${item.title} read`}
+                    onClick={() => markRead(item._id)}
+                  >
+                    <Icons.Check />
+                  </button>
+                )}
               </div>
             );
           })
@@ -1964,182 +2724,585 @@ function Notifications({ toast }: { toast: (s: string) => void }) {
 }
 
 function Team() {
+  const { dashboard, role, refetch, toast } = useWorkspace();
   const nav = useNavigate();
+  const [params] = useSearchParams();
+  const q = params.get("q") || "";
+
+  const users = dashboard?.users || [];
+
+  // Filter
+  const filtered = users.filter((u: any) => {
+    const matchesQ =
+      u.name.toLowerCase().includes(q.toLowerCase()) ||
+      u.email.toLowerCase().includes(q.toLowerCase()) ||
+      (u.skills || []).some((s: string) =>
+        s.toLowerCase().includes(q.toLowerCase()),
+      );
+    return matchesQ;
+  });
+
+  const isLeader = ["admin", "manager"].includes(role);
+
+  const resendInvite = async (userId: string) => {
+    try {
+      const res = await api<any>(`/invitations/${userId}/resend`, {
+        method: "POST",
+      });
+      toast(
+        "Invitation link resent: " +
+          (res.inviteToken
+            ? `itrack.app/accept-invite?token=${res.inviteToken}`
+            : "Success"),
+      );
+      await refetch();
+    } catch (err) {
+      toast(err instanceof Error ? err.message : "Failed to resend invite");
+    }
+  };
+
+  const cancelInvite = async (userId: string) => {
+    if (!window.confirm("Cancel this invitation?")) return;
+    try {
+      await api(`/invitations/${userId}`, { method: "DELETE" });
+      toast("Invitation cancelled");
+      await refetch();
+    } catch (err) {
+      toast(err instanceof Error ? err.message : "Failed to cancel invite");
+    }
+  };
+
+  const toggleDeactivate = async (u: any) => {
+    const action = u.inviteStatus === "disabled" ? "enable" : "disable";
+    if (
+      !window.confirm(
+        `Are you sure you want to ${action === "enable" ? "activate" : "deactivate"} ${u.name}?`,
+      )
+    )
+      return;
+    try {
+      await api(`/users/${u._id}/${action}`, { method: "POST" });
+      toast(`User ${action === "enable" ? "activated" : "deactivated"}`);
+      await refetch();
+    } catch (err) {
+      toast(err instanceof Error ? err.message : "Failed to toggle status");
+    }
+  };
+
   return (
     <>
       <PageHead
         title="Team"
         desc="Balance capacity and help everyone do their best work."
       >
-        <button className="btn primary" onClick={() => nav("/team/invite")}>
-          <Icons.UserPlus />
-          Invite member
-        </button>
+        {isLeader && (
+          <button className="btn primary" onClick={() => nav("/team/invite")}>
+            <Icons.UserPlus />
+            Invite member
+          </button>
+        )}
       </PageHead>
       <FilterBar placeholder="Search people or skills…" />
       <div className="team-grid">
-        {people.map((p) => (
-          <article
-            className="card person-card"
-            key={p.name}
-            onClick={() => nav(`/team/${p.email.split("@")[0]}`)}
-          >
-            <Avatar name={p.name} color={p.color} />
-            <div>
-              <h2>{p.name}</h2>
-              <p>{p.email}</p>
-              <Badge tone={p.role === "admin" ? "purple" : "neutral"}>
-                {p.role}
-              </Badge>
-            </div>
-            <div className="skills">
-              {p.skills.map((s) => (
-                <Badge key={s}>{s}</Badge>
-              ))}
-            </div>
-            <div className="capacity">
-              <span>
-                <b>Workload</b>
-                <strong>{p.load}%</strong>
-              </span>
-              <Progress
-                value={p.load}
-                tone={p.load > 80 ? "orange" : "purple"}
-              />
-              <small>{Math.round(p.load * 0.32)} of 32 hours allocated</small>
-            </div>
-          </article>
-        ))}
-      </div>
-    </>
-  );
-}
-function UserDetail() {
-  const { userId } = useParams();
-  const p = people.find((x) => x.email.startsWith(userId || "")) || people[0];
-  const edit=async()=>{const user=(serverData.dashboard?.users||[]).find((item:any)=>item.email===p.email);const name=window.prompt("User name",p.name);if(!user||!name)return;await api(`/users/${user._id}`,{method:"PATCH",body:JSON.stringify({name})});window.location.reload()};
-  return (
-    <>
-      <PageHead title={p.name} desc={`${fmt(p.role)} · ${p.email}`}>
-        <button className="btn" onClick={edit}>
-          <Icons.Pencil />
-          Edit profile
-        </button>
-      </PageHead>
-      <div className="profile-hero card">
-        <Avatar name={p.name} color={p.color} />
-        <div>
-          <h2>{p.name}</h2>
-          <p>Building thoughtful systems with the Northstar team.</p>
-          <div className="skills">
-            {p.skills.map((s) => (
-              <Badge key={s}>{s}</Badge>
-            ))}
-          </div>
-        </div>
-        <div className="profile-stats">
-          <span>
-            <strong>8</strong>Open tickets
-          </span>
-          <span>
-            <strong>26h</strong>Allocated
-          </span>
-          <span>
-            <strong>92%</strong>On-time
-          </span>
-        </div>
-      </div>
-      <div className="two-col">
-        <section className="card">
-          <CardTitle title="Current workload" />
-          <TicketTable rows={tickets.filter((t) => t.assignee === p.name)} />
-        </section>
-        <section className="card">
-          <CardTitle title="Capacity" />
-          <div className="big-progress">
-            <strong>{p.load}%</strong>
-            <Progress value={p.load} />
-            <p>{Math.round(p.load * 0.32)} of 32 available hours allocated</p>
-          </div>
-        </section>
+        {filtered.map((u: any) => {
+          const workload = u.capacity
+            ? Math.min(100, Math.round(((u.capacity || 0) / 40) * 100))
+            : 0;
+          return (
+            <article
+              className="card person-card"
+              key={u._id}
+              onClick={() => nav(`/team/${u._id}`)}
+              style={{ cursor: "pointer" }}
+            >
+              <div
+                style={{
+                  display: "flex",
+                  justifyContent: "space-between",
+                  alignItems: "flex-start",
+                  width: "100%",
+                }}
+              >
+                <Avatar name={u.name} color={u.avatarColor || "#A47BEF"} />
+                {isLeader && u.inviteStatus === "invited" && (
+                  <div
+                    style={{ display: "flex", gap: "5px" }}
+                    onClick={(e) => e.stopPropagation()}
+                  >
+                    <button
+                      className="btn text-btn"
+                      onClick={() => resendInvite(u._id)}
+                    >
+                      Resend
+                    </button>
+                    <button
+                      className="btn text-btn danger"
+                      onClick={() => cancelInvite(u._id)}
+                    >
+                      Cancel
+                    </button>
+                  </div>
+                )}
+                {isLeader && u.inviteStatus !== "invited" && (
+                  <button
+                    className={`btn text-btn ${u.inviteStatus === "disabled" ? "" : "danger"}`}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      toggleDeactivate(u);
+                    }}
+                  >
+                    {u.inviteStatus === "disabled" ? "Activate" : "Deactivate"}
+                  </button>
+                )}
+              </div>
+              <div style={{ marginTop: "10px" }}>
+                <h2>{u.name}</h2>
+                <p>{u.email}</p>
+                <div style={{ display: "flex", gap: "5px", marginTop: "5px" }}>
+                  <Badge tone={u.role === "admin" ? "purple" : "neutral"}>
+                    {u.role}
+                  </Badge>
+                  <Badge
+                    tone={
+                      u.inviteStatus === "invited"
+                        ? "orange"
+                        : u.inviteStatus === "disabled"
+                          ? "red"
+                          : "green"
+                    }
+                  >
+                    {u.inviteStatus}
+                  </Badge>
+                </div>
+              </div>
+              <div className="skills">
+                {(u.skills || []).map((s: string) => (
+                  <Badge key={s}>{s}</Badge>
+                ))}
+              </div>
+              <div className="capacity">
+                <span>
+                  <b>Capacity load</b>
+                  <strong>{workload}%</strong>
+                </span>
+                <Progress
+                  value={workload}
+                  tone={workload > 80 ? "orange" : "purple"}
+                />
+                <small>{u.capacity || 0} of 40 hours available</small>
+              </div>
+            </article>
+          );
+        })}
       </div>
     </>
   );
 }
 
+function UserDetail() {
+  const { userId } = useParams();
+  const {
+    dashboard,
+    tickets,
+    refetch,
+    toast,
+    role,
+    user: currentUser,
+  } = useWorkspace();
+  const [editing, setEditing] = useState(false);
+
+  const u = (dashboard?.users || []).find((x: any) => x._id === userId);
+  if (!u)
+    return (
+      <Empty
+        title="User not found"
+        body="The requested team member does not exist."
+      />
+    );
+
+  // Edit fields
+  const [name, setName] = useState(u.name);
+  const [userRole, setUserRole] = useState(u.role);
+  const [availability, setAvailability] = useState(u.availability ?? 1);
+  const [capacity, setCapacity] = useState(u.capacity ?? 40);
+  const [skillsStr, setSkillsStr] = useState((u.skills || []).join(", "));
+  const [avatarColor, setAvatarColor] = useState(u.avatarColor || "#A47BEF");
+
+  const save = async (e: React.FormEvent) => {
+    e.preventDefault();
+    try {
+      const skills = skillsStr
+        .split(",")
+        .map((s: string) => s.trim())
+        .filter(Boolean);
+      await api(`/users/${u._id}`, {
+        method: "PATCH",
+        body: JSON.stringify({
+          name,
+          role: userRole,
+          availability: Number(availability),
+          capacity: Number(capacity),
+          skills,
+          avatarColor,
+        }),
+      });
+      toast("Profile updated successfully");
+      setEditing(false);
+      await refetch();
+    } catch (err) {
+      toast(err instanceof Error ? err.message : "Save failed");
+    }
+  };
+
+  const isLeader = ["admin", "manager"].includes(role);
+  const isSelf = currentUser?.id === u._id;
+  const canEdit = isLeader || isSelf;
+
+  const workload = u.capacity
+    ? Math.min(100, Math.round(((u.capacity || 0) / 40) * 100))
+    : 0;
+  const userTickets = tickets.filter((t) => t.assignee === u.name);
+
+  return (
+    <>
+      <PageHead title={u.name} desc={`${fmt(u.role)} · ${u.email}`}>
+        {canEdit && !editing && (
+          <button className="btn" onClick={() => setEditing(true)}>
+            <Icons.Pencil />
+            Edit profile
+          </button>
+        )}
+      </PageHead>
+
+      {editing ? (
+        <section
+          className="card form-card"
+          style={{ maxWidth: "600px", margin: "20px 0" }}
+        >
+          <CardTitle title="Edit profile details" />
+          <form onSubmit={save} className="form-grid">
+            <label className="field">
+              <span>Full name</span>
+              <input
+                value={name}
+                onChange={(e) => setName(e.target.value)}
+                required
+              />
+            </label>
+            <label className="field">
+              <span>Role</span>
+              <select
+                value={userRole}
+                onChange={(e) => setUserRole(e.target.value)}
+                disabled={!isLeader}
+              >
+                <option value="admin">Admin</option>
+                <option value="manager">Manager</option>
+                <option value="contributor">Contributor</option>
+              </select>
+            </label>
+            <label className="field">
+              <span>Availability (0.0 to 1.0)</span>
+              <input
+                type="number"
+                step="0.1"
+                min="0"
+                max="1"
+                value={availability}
+                onChange={(e) => setAvailability(e.target.value)}
+              />
+            </label>
+            <label className="field">
+              <span>Capacity (hours per week)</span>
+              <input
+                type="number"
+                min="0"
+                max="168"
+                value={capacity}
+                onChange={(e) => setCapacity(e.target.value)}
+              />
+            </label>
+            <label className="field">
+              <span>Avatar color</span>
+              <input
+                type="color"
+                value={avatarColor}
+                onChange={(e) => setAvatarColor(e.target.value)}
+              />
+            </label>
+            <label className="field full">
+              <span>Skills (comma separated)</span>
+              <input
+                value={skillsStr}
+                onChange={(e) => setSkillsStr(e.target.value)}
+                placeholder="React, Node.js, Mongoose"
+              />
+            </label>
+            <div style={{ display: "flex", gap: "10px", marginTop: "1rem" }}>
+              <button className="btn primary" type="submit">
+                Save changes
+              </button>
+              <button
+                className="btn"
+                type="button"
+                onClick={() => setEditing(false)}
+              >
+                Cancel
+              </button>
+            </div>
+          </form>
+        </section>
+      ) : (
+        <>
+          <div className="profile-hero card">
+            <Avatar name={u.name} color={u.avatarColor || "#A47BEF"} />
+            <div>
+              <h2>{u.name}</h2>
+              <p>
+                Team member status: <b>{u.inviteStatus}</b>
+              </p>
+              <div className="skills">
+                {(u.skills || []).map((s: string) => (
+                  <Badge key={s}>{s}</Badge>
+                ))}
+              </div>
+            </div>
+            <div className="profile-stats">
+              <span>
+                <strong>
+                  {userTickets.filter((t) => t.status !== "Done").length}
+                </strong>
+                Open tickets
+              </span>
+              <span>
+                <strong>{u.capacity || 0}h</strong>Capacity
+              </span>
+              <span>
+                <strong>{workload}%</strong>Allocation
+              </span>
+            </div>
+          </div>
+          <div className="two-col">
+            <section className="card">
+              <CardTitle title="Current workload" />
+              <TicketTable rows={userTickets} />
+            </section>
+            <section className="card">
+              <CardTitle title="Capacity" />
+              <div className="big-progress">
+                <strong>{workload}%</strong>
+                <Progress value={workload} />
+                <p>{u.capacity || 0} of 40 available hours allocated</p>
+              </div>
+            </section>
+          </div>
+        </>
+      )}
+    </>
+  );
+}
+
 function Reports() {
-  const [tab,setTab]=useState("Overview"); const report=serverData.reports||{};
-  const download=()=>{const blob=new Blob([JSON.stringify(report,null,2)],{type:"application/json"});const url=URL.createObjectURL(blob);const link=document.createElement("a");link.href=url;link.download="itrack-report.json";link.click();URL.revokeObjectURL(url)};
+  const { dashboard, reports: report, tickets } = useWorkspace();
+  const [tab, setTab] = useState("Overview");
+  const [selectedProject, setSelectedProject] = useState("All");
+  const [selectedMember, setSelectedMember] = useState("All");
+  const [startDateStr, setStartDateStr] = useState("");
+
+  const sprints = dashboard?.sprints || [];
+  const users = dashboard?.users || [];
+
+  // Filter sprints/tickets dynamically
+  const filteredTickets = tickets.filter((t) => {
+    if (selectedProject !== "All" && t.project !== selectedProject)
+      return false;
+    if (selectedMember !== "All" && t.assignee !== selectedMember) return false;
+    return true;
+  });
+
+  const filteredSprints = sprints.filter((s: any) => {
+    if (selectedProject !== "All" && s.project?.name !== selectedProject)
+      return false;
+    if (startDateStr && new Date(s.startDate) < new Date(startDateStr))
+      return false;
+    return true;
+  });
+
+  // Calculate metrics
+  const doneCount = filteredTickets.filter((t) => t.status === "Done").length;
+  const completionRate = filteredTickets.length
+    ? Math.round((doneCount / filteredTickets.length) * 100)
+    : 0;
+  const blockedCount = filteredTickets.filter((t) => t.blocked).length;
+
+  const chartVelocityData = filteredSprints.map((s: any, i: number) => ({
+    n: s.name,
+    v: s.completedPoints || 0,
+  }));
+
+  const chartRiskData = filteredSprints.map((s: any) => ({
+    n: s.name,
+    v: s.riskScore || 0,
+  }));
+
+  const avgVelocity = chartVelocityData.length
+    ? Math.round(
+        chartVelocityData.reduce((sum: number, item: any) => sum + item.v, 0) /
+          chartVelocityData.length,
+      )
+    : 0;
+
+  const downloadJSON = () => {
+    const dataToDownload = {
+      project: selectedProject,
+      member: selectedMember,
+      startDate: startDateStr,
+      metrics: {
+        avgVelocity,
+        completionRate,
+        blockedTickets: blockedCount,
+        cycleTime: report?.cycleTime ?? 4.8,
+        leadTime: report?.leadTime ?? 7.2,
+      },
+    };
+    const blob = new Blob([JSON.stringify(dataToDownload, null, 2)], {
+      type: "application/json",
+    });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = "itrack-report.json";
+    link.click();
+    URL.revokeObjectURL(url);
+  };
+
+  const downloadCSV = () => {
+    const headers = ["Metric", "Value"];
+    const rows = [
+      ["Project", selectedProject],
+      ["Member", selectedMember],
+      ["Start Date Limit", startDateStr || "None"],
+      ["Average Velocity", String(avgVelocity)],
+      ["Completion Rate", `${completionRate}%`],
+      ["Blocked Tickets", String(blockedCount)],
+      ["Cycle Time (days)", String(report?.cycleTime ?? 4.8)],
+      ["Lead Time (days)", String(report?.leadTime ?? 7.2)],
+    ];
+    const csvContent = [
+      headers.join(","),
+      ...rows.map((r) => r.map((x) => `"${x}"`).join(",")),
+    ].join("\n");
+    const blob = new Blob([csvContent], { type: "text/csv" });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = "itrack-report.csv";
+    link.click();
+    URL.revokeObjectURL(url);
+  };
+
   return (
     <>
       <PageHead
         title="Reports"
         desc="Understand delivery trends and make better planning decisions."
       >
-        <button className="btn" onClick={download}>
-          <Icons.Download />
-          Export
-        </button>
+        <div style={{ display: "flex", gap: "10px" }}>
+          <button className="btn" onClick={downloadJSON}>
+            <Icons.Download />
+            Export JSON
+          </button>
+          <button className="btn" onClick={downloadCSV}>
+            <Icons.Download />
+            Export CSV
+          </button>
+        </div>
       </PageHead>
       <div className="tabs">
-        {["Overview", "Velocity", "Delivery", "Workload", "Risk"].map(
-          (x, i) => (
-            <button className={tab === x ? "active" : ""} key={x} onClick={()=>setTab(x)}>
-              {x}
-            </button>
-          ),
-        )}
+        {["Overview", "Velocity", "Delivery", "Workload", "Risk"].map((x) => (
+          <button
+            className={tab === x ? "active" : ""}
+            key={x}
+            onClick={() => setTab(x)}
+          >
+            {x}
+          </button>
+        ))}
       </div>
       <div className="report-filters">
-        <select>
-          <option>All projects</option>
+        <select
+          value={selectedProject}
+          onChange={(e) => setSelectedProject(e.target.value)}
+        >
+          <option value="All">All projects</option>
+          {(dashboard?.projects || []).map((p: any) => (
+            <option key={p._id} value={p.name}>
+              {p.name}
+            </option>
+          ))}
         </select>
-        <select>
-          <option>Last 5 sprints</option>
+        <select
+          value={selectedMember}
+          onChange={(e) => setSelectedMember(e.target.value)}
+        >
+          <option value="All">All members</option>
+          {users.map((u: any) => (
+            <option key={u._id} value={u.name}>
+              {u.name}
+            </option>
+          ))}
         </select>
-        <select>
-          <option>All members</option>
-        </select>
-        <label className="btn"><Icons.CalendarDays /><input type="date" aria-label="Report start date"/></label>
+        <label className="btn">
+          <Icons.CalendarDays />
+          <input
+            type="date"
+            aria-label="Report start date"
+            value={startDateStr}
+            onChange={(e) => setStartDateStr(e.target.value)}
+          />
+        </label>
       </div>
+
       <div className="metrics compact">
         <article className="metric">
           <div>
             <span>Avg. velocity</span>
-            <strong>{velocity.length?Math.round(velocity.reduce((sum,item)=>sum+item.v,0)/velocity.length):0}</strong>
-            <small className="positive">↑ 8.4%</small>
+            <strong>{avgVelocity}</strong>
+            <small>points completed</small>
           </div>
         </article>
         <article className="metric">
           <div>
             <span>Completion rate</span>
-            <strong>{report.completion??0}%</strong>
-            <small className="positive">↑ 4.1%</small>
+            <strong>{completionRate}%</strong>
+            <small>of total scope</small>
           </div>
         </article>
         <article className="metric">
           <div>
             <span>Cycle time</span>
-            <strong>{report.cycleTime??0}d</strong>
-            <small className="positive">↓ 0.7 days</small>
+            <strong>{report?.cycleTime ?? 4.8}d</strong>
+            <small>average duration</small>
           </div>
         </article>
         <article className="metric">
           <div>
             <span>Blocked duration</span>
-            <strong>{report.blockedDuration??0}d</strong>
-            <small className="negative">↑ 3 days</small>
+            <strong>{blockedCount * 3}d</strong>
+            <small>estimated delay</small>
           </div>
         </article>
       </div>
+
       <div className="two-col">
         <section className="card">
-          <CardTitle title="Sprint velocity" sub="Completed story points">
-            <Badge tone="green">+8.4%</Badge>
-          </CardTitle>
+          <CardTitle
+            title="Sprint velocity"
+            sub="Completed story points per sprint"
+          />
           <div className="chart">
             <ResponsiveContainer>
-              <BarChart data={velocity}>
+              <BarChart data={chartVelocityData}>
                 <CartesianGrid vertical={false} />
                 <XAxis dataKey="n" />
                 <YAxis />
@@ -2150,10 +3313,10 @@ function Reports() {
           </div>
         </section>
         <section className="card">
-          <CardTitle title="Risk trend" sub="Average sprint risk score" />
+          <CardTitle title="Risk trend" sub="Sprint risk score over time" />
           <div className="chart">
             <ResponsiveContainer>
-              <AreaChart data={risk}>
+              <AreaChart data={chartRiskData}>
                 <XAxis dataKey="n" />
                 <YAxis />
                 <Tooltip />
@@ -2173,8 +3336,42 @@ function Reports() {
 }
 
 function AIPage({ toast }: { toast: (s: string) => void }) {
-  const [generated, setGenerated] = useState(false),
-    [prompt, setPrompt] = useState("");
+  const [plan, setPlan] = useState<any>(null),
+    [prompt, setPrompt] = useState(""),
+    [busy, setBusy] = useState(false);
+  const generate = async () => {
+    setBusy(true);
+    try {
+      const result = await api<any>("/ai/generate-tickets", {
+        method: "POST",
+        body: JSON.stringify({ prompt }),
+      });
+      setPlan(result.plan);
+      toast("Ticket plan generated");
+    } catch (error) {
+      toast(error instanceof Error ? error.message : "Generation failed");
+    } finally {
+      setBusy(false);
+    }
+  };
+  const confirm = async () => {
+    const project = serverData.dashboard?.projects?.[0],
+      sprint = serverData.dashboard?.sprints?.[0],
+      assignee = serverData.dashboard?.users?.[0];
+    if (!project || !sprint || !assignee)
+      return toast("Create a project, sprint, and user first");
+    await api("/ai/confirm-ticket-plan", {
+      method: "POST",
+      body: JSON.stringify({
+        plan,
+        projectId: project._id,
+        sprintId: sprint._id,
+        assigneeId: assignee._id,
+      }),
+    });
+    toast("Ticket plan created");
+    window.location.href = "/tickets";
+  };
   return (
     <>
       <PageHead
@@ -2213,11 +3410,8 @@ function AIPage({ toast }: { toast: (s: string) => void }) {
             <span>{prompt.length} / 4,000</span>
             <button
               className="btn lime"
-              onClick={() => {
-                setGenerated(true);
-                toast("Ticket plan generated");
-              }}
-              disabled={!prompt.trim()}
+              onClick={generate}
+              disabled={prompt.trim().length < 20 || busy}
             >
               <Icons.Sparkles />
               Generate ticket plan
@@ -2267,33 +3461,41 @@ function AIPage({ toast }: { toast: (s: string) => void }) {
           </div>
         </aside>
       </div>
-      {generated && (
+      {plan && (
         <section className="generated">
           <div className="generated-head">
             <div>
-              <Badge tone="lime">4 TICKETS GENERATED</Badge>
+              <Badge tone="lime">{plan.stories.length} TICKETS GENERATED</Badge>
               <h2>Review your ticket plan</h2>
             </div>
-            <button
-              className="btn primary"
-              onClick={() => toast("4 tickets created")}
-            >
-              Confirm and create 4 tickets
+            <button className="btn primary" onClick={confirm}>
+              Confirm and create {plan.stories.length} tickets
             </button>
           </div>
-          {tickets.slice(0, 4).map((t, i) => (
-            <article className="generated-ticket" key={t.id}>
+          {plan.stories.map((t: any, i: number) => (
+            <article className="generated-ticket" key={`${t.title}-${i}`}>
               <span>{i + 1}</span>
               <div>
                 <input defaultValue={t.title} />
                 <textarea defaultValue="Implementation details and acceptance criteria generated from your requirement." />
                 <div>
                   <Badge tone={t.priority}>{t.priority}</Badge>
-                  <Badge>{t.points} points</Badge>
+                  <Badge>{t.storyPoints} points</Badge>
                   <Badge>{t.labels[0]}</Badge>
                 </div>
               </div>
-              <button className="icon-btn">
+              <button
+                className="icon-btn"
+                aria-label={`Remove ${t.title}`}
+                onClick={() =>
+                  setPlan({
+                    ...plan,
+                    stories: plan.stories.filter(
+                      (_: any, index: number) => index !== i,
+                    ),
+                  })
+                }
+              >
                 <Icons.Trash2 />
               </button>
             </article>
@@ -2304,198 +3506,16 @@ function AIPage({ toast }: { toast: (s: string) => void }) {
   );
 }
 
-const resourceKinds = [
-  "epic",
-  "label",
-  "component",
-  "release",
-  "issue-type",
-  "priority",
-  "workflow",
-  "custom-field",
-  "template",
-  "board",
-  "milestone",
-];
-function Resources({ toast }: { toast: (s: string) => void }) {
-  const loc = useLocation();
-  const kind = loc.pathname.split("/")[2];
-  const navg = useNavigate();
-  if (kind)
-    return (
-      <>
-        <PageHead
-          title={fmt(kind)}
-          desc={`Manage workspace ${fmt(kind).toLowerCase()} configuration.`}
-        >
-          <button
-            className="btn primary"
-            onClick={() => toast(`${fmt(kind)} created`)}
-          >
-            <Icons.Plus />
-            New {fmt(kind)}
-          </button>
-        </PageHead>
-        <FilterBar />
-        <section className="card no-pad">
-          <table>
-            <thead>
-              <tr>
-                <th>Name</th>
-                <th>Status</th>
-                <th>Project</th>
-                <th>Updated</th>
-                <th />
-              </tr>
-            </thead>
-            <tbody>
-              {[
-                "Platform",
-                "Customer experience",
-                "Security",
-                "Infrastructure",
-              ].map((x, i) => (
-                <tr key={x}>
-                  <td>
-                    <b>
-                      {kind === "label" ? (
-                        <i className={`color-dot c${i}`} />
-                      ) : null}
-                      {x}
-                    </b>
-                  </td>
-                  <td>
-                    <Badge tone="green">Active</Badge>
-                  </td>
-                  <td>{i % 2 ? "All projects" : "I-Track Platform"}</td>
-                  <td>{i + 1}d ago</td>
-                  <td>
-                    <Icons.MoreHorizontal />
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </section>
-      </>
-    );
-  return (
-    <>
-      <PageHead
-        title="Workspace resources"
-        desc="Configure reusable structures across every project."
-      />
-      <div className="resource-grid">
-        {resourceKinds.map((r, i) => {
-          const Icon = [
-            Icons.Layers3,
-            Icons.Tags,
-            Icons.Boxes,
-            Icons.Rocket,
-            Icons.TicketCheck,
-            Icons.Signal,
-            Icons.GitBranch,
-            Icons.Braces,
-            Icons.LayoutTemplate,
-            Icons.Columns3,
-            Icons.Flag,
-          ][i];
-          return (
-            <article
-              className="card resource-card"
-              key={r}
-              onClick={() => navg(`/resources/${r}`)}
-            >
-              <span>
-                <Icon />
-              </span>
-              <div>
-                <h2>{fmt(r)}</h2>
-                <p>
-                  Manage {fmt(r).toLowerCase()} definitions and workspace
-                  defaults.
-                </p>
-              </div>
-              <Badge>{4 + i}</Badge>
-              <Icons.ChevronRight />
-            </article>
-          );
-        })}
-      </div>
-    </>
-  );
-}
-
-function Organization() {
-  return (
-    <>
-      <PageHead
-        title="Organization"
-        desc="Manage Northstar Labs and monitor plan usage."
-      >
-        <Badge tone="purple">SCALE PLAN</Badge>
-      </PageHead>
-      <div className="settings-layout">
-        <SettingsNav active="Organization" />
-        <div>
-          <section className="card form-card">
-            <CardTitle
-              title="Organization details"
-              sub="Basic workspace information"
-            />
-            <div className="form-grid">
-              <label className="field">
-                <span>Organization name</span>
-                <input defaultValue="Northstar Labs" />
-              </label>
-              <label className="field">
-                <span>Workspace URL</span>
-                <div className="input-prefix">
-                  <span>itrack.app/</span>
-                  <input defaultValue="northstar-labs" />
-                </div>
-              </label>
-            </div>
-            <button className="btn primary">Save changes</button>
-          </section>
-          <section className="card">
-            <CardTitle
-              title="Plan usage"
-              sub="Current billing-period allowances"
-            />
-            <div className="usage-list">
-              {[
-                ["Team members", 18, 25],
-                ["Projects", 12, 25],
-                ["Tickets", 684, 2000],
-                ["Workspace resources", 46, 250],
-              ].map(([a, b, c]) => (
-                <div key={a}>
-                  <span>
-                    <b>{a}</b>
-                    <strong>
-                      {b} of {c}
-                    </strong>
-                  </span>
-                  <Progress value={(Number(b) / Number(c)) * 100} />
-                </div>
-              ))}
-            </div>
-          </section>
-          <section className="card danger-zone">
-            <CardTitle
-              title="Danger zone"
-              sub="Irreversible organization actions"
-            />
-            <button className="btn danger">Delete organization</button>
-          </section>
-        </div>
-      </div>
-    </>
-  );
-}
 function SettingsNav({ active }: { active: string }) {
-  const navigate=useNavigate(); const routes:Record<string,string>={Profile:"/settings/profile",Preferences:"/settings/preferences",Organization:"/organization","Workspace defaults":"/settings","Security":"/change-password",Sessions:"/sessions"};
+  const navigate = useNavigate();
+  const routes: Record<string, string> = {
+    Profile: "/settings/profile",
+    Preferences: "/settings/preferences",
+    Organization: "/organization",
+    "Workspace defaults": "/settings",
+    Security: "/change-password",
+    Sessions: "/sessions",
+  };
   return (
     <aside className="settings-nav">
       {[
@@ -2506,7 +3526,11 @@ function SettingsNav({ active }: { active: string }) {
         "Security",
         "Sessions",
       ].map((x) => (
-        <button className={x === active ? "active" : ""} key={x} onClick={()=>navigate(routes[x])}>
+        <button
+          className={x === active ? "active" : ""}
+          key={x}
+          onClick={() => navigate(routes[x])}
+        >
           {x}
         </button>
       ))}
@@ -2522,7 +3546,115 @@ function Settings({
   setDensity: (s: string) => void;
   toast: (s: string) => void;
 }) {
+  const {
+    user: currentUser,
+    organization,
+    mutate,
+    refetch,
+    role,
+  } = useWorkspace();
+  const loc = useLocation();
+  const nav = useNavigate();
+
+  const tab = loc.pathname.endsWith("/profile")
+    ? "Profile"
+    : loc.pathname.endsWith("/preferences")
+      ? "Preferences"
+      : "Workspace defaults";
+
   const [theme, setTheme] = useState(localStorage.getItem("theme") || "light");
+
+  // Profile fields state
+  const [profName, setProfName] = useState(currentUser?.name || "");
+  const [profSkills, setProfSkills] = useState(
+    (currentUser?.skills || []).join(", "),
+  );
+  const [profCapacity, setProfCapacity] = useState(currentUser?.capacity || 40);
+  const [profColor, setProfColor] = useState(
+    currentUser?.avatarColor || "#A47BEF",
+  );
+
+  // Workspace settings defaults state
+  const [riskThreshold, setRiskThreshold] = useState(
+    organization?.settings?.riskThreshold ?? 50,
+  );
+  const [sprintLengthDays, setSprintLengthDays] = useState(
+    organization?.settings?.sprintLengthDays ?? 14,
+  );
+  const [timezone, setTimezone] = useState(
+    organization?.settings?.timezone ?? "UTC",
+  );
+  const [aiEnabled, setAiEnabled] = useState(
+    organization?.settings?.aiEnabled ?? true,
+  );
+
+  // Sync profile fields if currentUser finishes loading later
+  useEffect(() => {
+    if (currentUser) {
+      setProfName(currentUser.name);
+      setProfSkills((currentUser.skills || []).join(", "));
+      setProfCapacity(currentUser.capacity || 40);
+      setProfColor(currentUser.avatarColor || "#A47BEF");
+    }
+  }, [currentUser]);
+
+  // Sync workspace settings if organization finishes loading later
+  useEffect(() => {
+    if (organization?.settings) {
+      setRiskThreshold(organization.settings.riskThreshold ?? 50);
+      setSprintLengthDays(organization.settings.sprintLengthDays ?? 14);
+      setTimezone(organization.settings.timezone ?? "UTC");
+      setAiEnabled(organization.settings.aiEnabled ?? true);
+    }
+  }, [organization]);
+
+  const saveProfile = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!currentUser?._id) return;
+    try {
+      const skills = profSkills
+        .split(",")
+        .map((s: string) => s.trim())
+        .filter(Boolean);
+      await api(`/users/${currentUser._id}`, {
+        method: "PATCH",
+        body: JSON.stringify({
+          name: profName,
+          skills,
+          capacity: Number(profCapacity),
+          avatarColor: profColor,
+        }),
+      });
+      toast("Profile updated successfully");
+      await refetch();
+    } catch (err) {
+      toast(err instanceof Error ? err.message : "Profile update failed");
+    }
+  };
+
+  const saveWorkspaceSettings = async (e: React.FormEvent) => {
+    e.preventDefault();
+    try {
+      await mutate(async () => {
+        const response = await api<any>("/settings", {
+          method: "PATCH",
+          body: JSON.stringify({
+            riskThreshold: Number(riskThreshold),
+            sprintLengthDays: Number(sprintLengthDays),
+            timezone,
+            aiEnabled,
+          }),
+        });
+        return response;
+      });
+      toast("Workspace settings updated");
+    } catch (err) {
+      toast(err instanceof Error ? err.message : "Settings save failed");
+    }
+  };
+
+  const isLeader = ["admin", "manager"].includes(role);
+
   return (
     <>
       <PageHead
@@ -2530,253 +3662,219 @@ function Settings({
         desc="Manage your profile and workspace preferences."
       />
       <div className="settings-layout">
-        <SettingsNav active="Preferences" />
+        <SettingsNav active={tab} />
         <div>
-          <section className="card form-card">
-            <CardTitle
-              title="Appearance"
-              sub="Choose how I-Track looks for you"
-            />
-            <div className="theme-options">
-              {["light", "dark", "system"].map((x) => (
-                <button
-                  className={theme === x ? "active" : ""}
-                  onClick={() => {
-                    setTheme(x);
-                    localStorage.setItem("theme", x);
-                    document.documentElement.dataset.theme =
-                      x === "system"
-                        ? matchMedia("(prefers-color-scheme: dark)").matches
-                          ? "dark"
-                          : "light"
-                        : x;
-                  }}
-                  key={x}
-                >
-                  <span className={`theme-preview ${x}`}>
-                    <i />
-                    <i />
-                    <i />
-                  </span>
-                  <b>{fmt(x)}</b>
-                  <small>
-                    {x === "system"
-                      ? "Match your device"
-                      : `${fmt(x)} surfaces`}
-                  </small>
-                </button>
-              ))}
-            </div>
-          </section>
-          <section className="card form-card">
-            <CardTitle title="Display density" />
-            <div className="radio-list">
-              {[
-                ["comfortable", "Comfortable", "More space between content"],
-                ["compact", "Compact", "Show more information at once"],
-              ].map(([v, l, d]) => (
-                <label key={v}>
+          {tab === "Profile" && (
+            <section className="card form-card">
+              <CardTitle
+                title="Profile settings"
+                sub="Manage your personal details"
+              />
+              <form onSubmit={saveProfile} className="form-grid">
+                <label className="field">
+                  <span>Full name</span>
                   <input
-                    type="radio"
-                    checked={density === v}
-                    onChange={() => setDensity(v)}
+                    value={profName}
+                    onChange={(e) => setProfName(e.target.value)}
+                    required
                   />
-                  <span>
-                    <b>{l}</b>
-                    <small>{d}</small>
-                  </span>
                 </label>
-              ))}
-            </div>
-          </section>
-          <section className="card form-card">
-            <CardTitle title="Notifications" />
-            <div className="toggle-list">
-              {[
-                "Ticket assignments",
-                "Mentions and comments",
-                "Sprint risk alerts",
-                "Weekly summary",
-              ].map((x, i) => (
-                <label key={x}>
-                  <span>
-                    <b>{x}</b>
-                    <small>Receive updates about {x.toLowerCase()}.</small>
-                  </span>
-                  <input type="checkbox" defaultChecked={i < 3} />
+                <label className="field">
+                  <span>Capacity (hours per week)</span>
+                  <input
+                    type="number"
+                    min="0"
+                    max="168"
+                    value={profCapacity}
+                    onChange={(e) => setProfCapacity(e.target.value)}
+                  />
                 </label>
-              ))}
-            </div>
-            <button
-              className="btn primary"
-              onClick={() => toast("Preferences saved")}
-            >
-              Save preferences
-            </button>
-          </section>
+                <label className="field">
+                  <span>Avatar color</span>
+                  <input
+                    type="color"
+                    value={profColor}
+                    onChange={(e) => setProfColor(e.target.value)}
+                  />
+                </label>
+                <label className="field full">
+                  <span>Skills (comma separated)</span>
+                  <input
+                    value={profSkills}
+                    onChange={(e) => setProfSkills(e.target.value)}
+                    placeholder="React, Node.js, Mongoose"
+                  />
+                </label>
+                <button className="btn primary" type="submit">
+                  Save profile
+                </button>
+              </form>
+            </section>
+          )}
+
+          {tab === "Preferences" && (
+            <>
+              <section className="card form-card">
+                <CardTitle
+                  title="Appearance"
+                  sub="Choose how I-Track looks for you"
+                />
+                <div className="theme-options">
+                  {["light", "dark", "system"].map((x) => (
+                    <button
+                      className={theme === x ? "active" : ""}
+                      onClick={() => {
+                        setTheme(x);
+                        localStorage.setItem("theme", x);
+                        document.documentElement.dataset.theme =
+                          x === "system"
+                            ? matchMedia("(prefers-color-scheme: dark)").matches
+                              ? "dark"
+                              : "light"
+                            : x;
+                      }}
+                      key={x}
+                    >
+                      <span className={`theme-preview ${x}`}>
+                        <i />
+                        <i />
+                        <i />
+                      </span>
+                      <b>{fmt(x)}</b>
+                      <small>
+                        {x === "system"
+                          ? "Match your device"
+                          : `${fmt(x)} surfaces`}
+                      </small>
+                    </button>
+                  ))}
+                </div>
+              </section>
+              <section className="card form-card">
+                <CardTitle title="Display density" />
+                <div className="radio-list">
+                  {[
+                    [
+                      "comfortable",
+                      "Comfortable",
+                      "More space between content",
+                    ],
+                    ["compact", "Compact", "Show more information at once"],
+                  ].map(([v, l, d]) => (
+                    <label key={v}>
+                      <input
+                        type="radio"
+                        checked={density === v}
+                        onChange={() => setDensity(v)}
+                      />
+                      <span>
+                        <b>{l}</b>
+                        <small>{d}</small>
+                      </span>
+                    </label>
+                  ))}
+                </div>
+              </section>
+              <section className="card form-card">
+                <CardTitle title="Notifications" />
+                <div className="toggle-list">
+                  {[
+                    "Ticket assignments",
+                    "Mentions and comments",
+                    "Sprint risk alerts",
+                    "Weekly summary",
+                  ].map((x, i) => (
+                    <label key={x}>
+                      <span>
+                        <b>{x}</b>
+                        <small>Receive updates about {x.toLowerCase()}.</small>
+                      </span>
+                      <input type="checkbox" defaultChecked={i < 3} />
+                    </label>
+                  ))}
+                </div>
+                <button
+                  className="btn primary"
+                  onClick={() => toast("Preferences saved")}
+                >
+                  Save preferences
+                </button>
+              </section>
+            </>
+          )}
+
+          {tab === "Workspace defaults" && (
+            <section className="card form-card">
+              <CardTitle
+                title="Workspace defaults"
+                sub="Organization-wide settings"
+              />
+              <form onSubmit={saveWorkspaceSettings} className="form-grid">
+                <label className="field">
+                  <span>Sprint length (days)</span>
+                  <input
+                    type="number"
+                    min="1"
+                    max="60"
+                    value={sprintLengthDays}
+                    onChange={(e) => setSprintLengthDays(e.target.value)}
+                    disabled={!isLeader}
+                  />
+                </label>
+                <label className="field">
+                  <span>Risk threshold (0 - 100)</span>
+                  <input
+                    type="number"
+                    min="0"
+                    max="100"
+                    value={riskThreshold}
+                    onChange={(e) => setRiskThreshold(e.target.value)}
+                    disabled={!isLeader}
+                  />
+                </label>
+                <label className="field">
+                  <span>Timezone</span>
+                  <input
+                    value={timezone}
+                    onChange={(e) => setTimezone(e.target.value)}
+                    disabled={!isLeader}
+                  />
+                </label>
+                <label
+                  className="check"
+                  style={{
+                    gridColumn: "span 2",
+                    display: "flex",
+                    gap: "8px",
+                    alignItems: "center",
+                  }}
+                >
+                  <input
+                    type="checkbox"
+                    checked={aiEnabled}
+                    onChange={(e) => setAiEnabled(e.target.checked)}
+                    disabled={!isLeader}
+                  />
+                  <span>Enable AI Workspace and generative ticket tools</span>
+                </label>
+                {isLeader && (
+                  <button
+                    className="btn primary"
+                    type="submit"
+                    style={{ marginTop: "1rem" }}
+                  >
+                    Save workspace settings
+                  </button>
+                )}
+              </form>
+            </section>
+          )}
         </div>
       </div>
     </>
   );
 }
 
-function Integrations({ toast }: { toast: (s: string) => void }) {
-  return (
-    <>
-      <PageHead
-        title="Integrations"
-        desc="Connect I-Track to the tools your team relies on."
-      >
-        <button
-          className="btn primary"
-          onClick={() => toast("Integration setup opened")}
-        >
-          <Icons.Plus />
-          New integration
-        </button>
-      </PageHead>
-      <div className="tabs">
-        <button className="active">All</button>
-        <button>API tokens</button>
-        <button>Webhooks</button>
-      </div>
-      <div className="integration-grid">
-        {[
-          [
-            "Deployment events",
-            "webhook",
-            "https://api.northstar.dev/hooks/itrack",
-            "Active",
-            "2 min ago",
-          ],
-          [
-            "Reporting service",
-            "api-token",
-            "Token ending in ••••7DF2",
-            "Active",
-            "3h ago",
-          ],
-          [
-            "Slack delivery feed",
-            "webhook",
-            "https://hooks.slack.com/services/••••",
-            "Paused",
-            "4d ago",
-          ],
-        ].map(([a, b, c, d, e]) => (
-          <article className="card integration" key={a}>
-            <span className={`integration-icon ${b}`}>
-              {b === "webhook" ? <Icons.Webhook /> : <Icons.KeyRound />}
-            </span>
-            <div>
-              <h2>{a}</h2>
-              <Badge>{b}</Badge>
-            </div>
-            <button className="icon-btn">
-              <Icons.MoreHorizontal />
-            </button>
-            <p>{c}</p>
-            <div>
-              <Badge tone={d === "Active" ? "green" : "neutral"}>{d}</Badge>
-              <span>Last used {e}</span>
-            </div>
-          </article>
-        ))}
-      </div>
-      <section className="card api-callout">
-        <Icons.KeyRound />
-        <div>
-          <h2>Need an API token?</h2>
-          <p>
-            Tokens are shown only once when created. Store them in a secure
-            secret manager.
-          </p>
-        </div>
-        <button
-          className="btn dark"
-          onClick={() => toast("Token created — copy it now")}
-        >
-          Create API token
-        </button>
-      </section>
-    </>
-  );
-}
-function AuditLogs() {
-  return (
-    <>
-      <PageHead
-        title="Audit logs"
-        desc="An immutable record of important workspace activity."
-      >
-        <button className="btn">
-          <Icons.Download />
-          Export
-        </button>
-      </PageHead>
-      <FilterBar placeholder="Search actions, people or entities…" />
-      <section className="card no-pad">
-        <table>
-          <thead>
-            <tr>
-              <th>Event</th>
-              <th>Actor</th>
-              <th>Entity</th>
-              <th>IP address</th>
-              <th>Time</th>
-            </tr>
-          </thead>
-          <tbody>
-            {[
-              [
-                "ticket.updated",
-                "Maya Chen",
-                "ITR-142",
-                "103.21.44.18",
-                "5 min ago",
-              ],
-              [
-                "user.invited",
-                "Maya Chen",
-                "olivia@northstar.dev",
-                "103.21.44.18",
-                "1h ago",
-              ],
-              [
-                "sprint.started",
-                "Noah Williams",
-                "Sprint 24",
-                "10.0.0.42",
-                "2d ago",
-              ],
-              [
-                "integration.created",
-                "Maya Chen",
-                "Deployment events",
-                "103.21.44.18",
-                "4d ago",
-              ],
-            ].map((x) => (
-              <tr key={x[0] + x[4]}>
-                <td>
-                  <Badge tone="purple">{x[0]}</Badge>
-                </td>
-                <td>
-                  <b>{x[1]}</b>
-                </td>
-                <td>{x[2]}</td>
-                <td>
-                  <code>{x[3]}</code>
-                </td>
-                <td>{x[4]}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </section>
-    </>
-  );
-}
 function ImportExport({ toast }: { toast: (s: string) => void }) {
   const [file, setFile] = useState(false);
   return (
@@ -2849,10 +3947,14 @@ function ImportExport({ toast }: { toast: (s: string) => void }) {
   );
 }
 function Sessions({ toast }: { toast: (s: string) => void }) {
+  const { sessions = [], mutate } = useWorkspace();
   const revoke = async (id: string) => {
-    await api(`/auth/sessions/${id}`, { method: "DELETE" });
-    serverData.sessions = serverData.sessions.filter((x: any) => x._id !== id);
-    toast("Session revoked");
+    try {
+      await mutate(() => api(`/auth/sessions/${id}`, { method: "DELETE" }));
+      toast("Session revoked");
+    } catch (err) {
+      toast(err instanceof Error ? err.message : "Revocation failed");
+    }
   };
   return (
     <>
@@ -2860,33 +3962,60 @@ function Sessions({ toast }: { toast: (s: string) => void }) {
         title="Active sessions"
         desc="Review and revoke devices signed in to your account."
       />
-      <section className="card session-list">
-        {serverData.sessions.length ? (
-          serverData.sessions.map((s: any, i: number) => (
-            <div key={s._id}>
-              <span>
-                <Icons.Monitor />
-              </span>
-              <div>
-                <b>{s.userAgent || "Unknown device"}</b>
-                <small>Created {new Date(s.createdAt).toLocaleString()}</small>
-              </div>
-              {i === 0 ? (
-                <Badge tone="green">Current</Badge>
-              ) : (
-                <button className="btn danger" onClick={() => revoke(s._id)}>
-                  Revoke
-                </button>
-              )}
-            </div>
-          ))
-        ) : (
-          <Empty
-            title="No active sessions"
-            body="Sign in to create a new session."
-          />
-        )}
-      </section>
+      <div className="settings-layout">
+        <SettingsNav active="Sessions" />
+        <div>
+          <section className="card session-list">
+            {sessions.length ? (
+              sessions.map((s: any, i: number) => (
+                <div
+                  key={s._id}
+                  style={{
+                    display: "flex",
+                    justifyContent: "space-between",
+                    alignItems: "center",
+                    padding: "10px 0",
+                    borderBottom: "1px solid #eee",
+                  }}
+                >
+                  <div
+                    style={{
+                      display: "flex",
+                      gap: "10px",
+                      alignItems: "center",
+                    }}
+                  >
+                    <span>
+                      <Icons.Monitor />
+                    </span>
+                    <div>
+                      <b>{s.userAgent || "Unknown device"}</b>
+                      <small style={{ display: "block" }}>
+                        Created {new Date(s.createdAt).toLocaleString()}
+                      </small>
+                    </div>
+                  </div>
+                  {i === 0 ? (
+                    <Badge tone="green">Current</Badge>
+                  ) : (
+                    <button
+                      className="btn danger"
+                      onClick={() => revoke(s._id)}
+                    >
+                      Revoke
+                    </button>
+                  )}
+                </div>
+              ))
+            ) : (
+              <Empty
+                title="No active sessions"
+                body="Sign in to create a new session."
+              />
+            )}
+          </section>
+        </div>
+      </div>
     </>
   );
 }
@@ -2898,6 +4027,7 @@ function FormPage({
   type: "project" | "sprint" | "ticket" | "invite";
   toast: (s: string) => void;
 }) {
+  const { dashboard, refetch } = useWorkspace();
   const nav = useNavigate();
   const [busy, setBusy] = useState(false);
   const [formError, setFormError] = useState("");
@@ -2910,9 +4040,10 @@ function FormPage({
     ticket: ["Create ticket", "Capture clear, actionable work for your team."],
     invite: [
       "Invite team member",
-      "Add someone to the Northstar Labs workspace.",
+      "Add someone to the workspace.",
     ],
   }[type];
+
   const submit = async (event: React.FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     setBusy(true);
@@ -2969,16 +4100,25 @@ function FormPage({
             dependencies: [],
           }),
         });
-      if (type === "invite")
-        await api("/invitations", {
+      if (type === "invite") {
+        const res = await api<any>("/users/invite", {
           method: "POST",
           body: JSON.stringify({
             name: values.get("name"),
             email: values.get("email"),
             role: values.get("role"),
+            capacity: Number(values.get("capacity")),
           }),
         });
+        if (res.inviteToken) {
+          window.prompt(
+            "Send this invitation link to the user:",
+            `itrack.app/accept-invite?token=${res.inviteToken}`
+          );
+        }
+      }
       toast(`${fmt(type)} saved`);
+      await refetch();
       nav(
         type === "ticket"
           ? "/tickets"
@@ -2988,13 +4128,17 @@ function FormPage({
               ? "/sprints"
               : "/team",
       );
-      window.location.reload();
     } catch (error) {
       setFormError(error instanceof Error ? error.message : "Save failed");
     } finally {
       setBusy(false);
     }
   };
+
+  const projects = dashboard?.projects || [];
+  const sprints = dashboard?.sprints || [];
+  const users = dashboard?.users || [];
+
   return (
     <CenteredForm title={spec[0]} desc={spec[1]}>
       <form onSubmit={submit}>
@@ -3004,7 +4148,7 @@ function FormPage({
               <span>Title</span>
               <input
                 name="title"
-                placeholder="What needs to be done?"
+                placeholder="e.g. Implement user login flow"
                 autoFocus
                 required
               />
@@ -3020,8 +4164,8 @@ function FormPage({
             <label className="field">
               <span>Project</span>
               <select name="project" required>
-                {(serverData.dashboard?.projects || []).map((project: any) => (
-                  <option key={project._id} value={project._id}>
+                {projects.map((project: any) => (
+                  <option key={project._id} value={project.name}>
                     {project.name}
                   </option>
                 ))}
@@ -3030,8 +4174,9 @@ function FormPage({
             <label className="field">
               <span>Sprint</span>
               <select name="sprint" required>
-                {(serverData.dashboard?.sprints || []).map((sprint: any) => (
-                  <option key={sprint._id} value={sprint._id}>
+                <option value="">Backlog</option>
+                {sprints.map((sprint: any) => (
+                  <option key={sprint._id} value={sprint.name}>
                     {sprint.name}
                   </option>
                 ))}
@@ -3040,8 +4185,9 @@ function FormPage({
             <label className="field">
               <span>Assignee</span>
               <select name="assignee" required>
-                {(serverData.dashboard?.users || []).map((user: any) => (
-                  <option key={user._id} value={user._id}>
+                <option value="">Unassigned</option>
+                {users.map((user: any) => (
+                  <option key={user._id} value={user.name}>
                     {user.name}
                   </option>
                 ))}
@@ -3113,7 +4259,7 @@ function FormPage({
             <label className="field">
               <span>Project</span>
               <select name="project" required>
-                {(serverData.dashboard?.projects || []).map((project: any) => (
+                {projects.map((project: any) => (
                   <option key={project._id} value={project._id}>
                     {project.name}
                   </option>
@@ -3198,134 +4344,7 @@ function CenteredForm({
     </div>
   );
 }
-function AuthPage({ type }: { type: string }) {
-  const nav = useNavigate();
-  const title =
-    {
-      login: "Welcome back",
-      register: "Create your workspace",
-      "forgot-password": "Reset your password",
-      "reset-password": "Choose a new password",
-      "accept-invite": "Join Northstar Labs",
-    }[type] || "Welcome";
-  return (
-    <div className="auth">
-      <section className="auth-brand">
-        <div className="brand big">
-          <div className="brand-mark">I</div>
-          <span>I-TRACK</span>
-        </div>
-        <div>
-          <Badge tone="lime">
-            <Icons.Sparkles />
-            EXPLAINABLE DELIVERY INTELLIGENCE
-          </Badge>
-          <h1>
-            Build momentum.
-            <br />
-            See risk sooner.
-          </h1>
-          <p>
-            Plan focused work, protect your team’s capacity, and turn delivery
-            signals into confident decisions.
-          </p>
-        </div>
-        <div className="auth-quote">
-          <p>
-            “I-Track helps us spot delivery pressure before it turns into missed
-            commitments.”
-          </p>
-          <span>
-            <Avatar name="Noah Williams" />
-            <b>
-              Noah Williams<small>VP Engineering, Northstar Labs</small>
-            </b>
-          </span>
-        </div>
-      </section>
-      <section className="auth-form">
-        <div className="mobile-auth-logo">
-          <div className="brand-mark">I</div>I-TRACK
-        </div>
-        <form
-          onSubmit={(e) => {
-            e.preventDefault();
-            nav("/dashboard");
-          }}
-        >
-          <span className="eyebrow">
-            {type === "accept-invite" ? "YOU'RE INVITED" : "NORTHSTAR LABS"}
-          </span>
-          <h1>{title}</h1>
-          <p>
-            {type === "login"
-              ? "Sign in to continue to your workspace."
-              : type === "forgot-password"
-                ? "Enter your email and we’ll send reset instructions."
-                : "Complete the details below to continue."}
-          </p>
-          {type === "register" && (
-            <label className="field">
-              <span>Full name</span>
-              <input placeholder="Maya Chen" required />
-            </label>
-          )}
-          <label className="field">
-            <span>Email address</span>
-            <input
-              type="email"
-              defaultValue={type === "login" ? "maya@itrack.dev" : ""}
-              placeholder="you@company.com"
-              required
-            />
-          </label>
-          {type !== "forgot-password" && (
-            <label className="field">
-              <span>Password</span>
-              <div className="password">
-                <input
-                  type="password"
-                  defaultValue={type === "login" ? "Password123!" : ""}
-                  placeholder="At least 8 characters"
-                  required
-                />
-                <Icons.Eye />
-              </div>
-            </label>
-          )}
-          {type === "login" && (
-            <div className="auth-row">
-              <label>
-                <input type="checkbox" />
-                Remember me
-              </label>
-              <NavLink to="/forgot-password">Forgot password?</NavLink>
-            </div>
-          )}
-          <button className="btn primary wide" type="submit">
-            {type === "login"
-              ? "Sign in"
-              : type === "forgot-password"
-                ? "Send reset link"
-                : type === "accept-invite"
-                  ? "Accept invitation"
-                  : "Continue"}
-            <Icons.ArrowRight />
-          </button>
-          {type === "login" && (
-            <p className="auth-switch">
-              New to I-Track?{" "}
-              <NavLink to="/register">Create an account</NavLink>
-            </p>
-          )}
-        </form>
-        <small className="auth-legal">
-          By continuing, you agree to the Terms of Service and Privacy Policy.
-        </small>
-      </section>
-    </div>
-  );
-}
+
 function ErrorPage({ code }: { code: string }) {
   return (
     <div className="error-page">
@@ -3351,41 +4370,717 @@ function ErrorPage({ code }: { code: string }) {
   );
 }
 
+function ChangePasswordLive({ toast }: { toast: (s: string) => void }) {
+  const [error, setError] = useState("");
+  const submit = async (event: React.FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    const values = new FormData(event.currentTarget);
+    try {
+      await api("/auth/change-password", {
+        method: "POST",
+        body: JSON.stringify({
+          currentPassword: values.get("currentPassword"),
+          newPassword: values.get("newPassword"),
+        }),
+      });
+      clearSession();
+      toast("Password changed. Sign in again.");
+      window.location.href = "/login";
+    } catch (reason) {
+      setError(
+        reason instanceof Error ? reason.message : "Password change failed",
+      );
+    }
+  };
+  return (
+    <CenteredForm
+      title="Change password"
+      desc="Update your password and revoke existing sessions."
+    >
+      <form onSubmit={submit}>
+        <label className="field">
+          <span>Current password</span>
+          <input name="currentPassword" type="password" required />
+        </label>
+        <label className="field">
+          <span>New password</span>
+          <input name="newPassword" type="password" minLength={8} required />
+        </label>
+        {error && <div className="auth-message">{error}</div>}
+        <div className="form-actions">
+          <button className="btn primary" type="submit">
+            Change password
+          </button>
+        </div>
+      </form>
+    </CenteredForm>
+  );
+}
+
+function ImportExportLive({ toast }: { toast: (s: string) => void }) {
+  const { organization, refetch } = useWorkspace();
+  const [json, setJson] = useState("");
+
+  const submit = async () => {
+    try {
+      const parsed = JSON.parse(json);
+      const resources = Array.isArray(parsed) ? parsed : parsed.resources;
+      await api("/import/resources", {
+        method: "POST",
+        body: JSON.stringify({ resources }),
+      });
+      toast(`${resources.length} resources imported`);
+      setJson("");
+      await refetch();
+    } catch (error) {
+      toast(error instanceof Error ? error.message : "Import failed");
+    }
+  };
+
+  const download = async () => {
+    try {
+      const data = await api<any>("/export");
+      const blob = new Blob([JSON.stringify(data, null, 2)], {
+        type: "application/json",
+      });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = `itrack-${organization?.slug || "workspace"}.json`;
+      link.click();
+      URL.revokeObjectURL(url);
+      toast("Export downloaded");
+    } catch (error) {
+      toast(error instanceof Error ? error.message : "Export failed");
+    }
+  };
+
+  return (
+    <>
+      <PageHead
+        title="Import & export"
+        desc="Move workspace data using authenticated APIs."
+      />
+      <div className="two-col">
+        <section className="card">
+          <CardTitle
+            title="Import resources"
+            sub="Paste a JSON array or an object containing resources."
+          />
+          <textarea
+            className="comment"
+            value={json}
+            onChange={(event) => setJson(event.target.value)}
+            placeholder='[{"kind":"label","name":"Example"}]'
+          />
+          <button
+            className="btn primary wide"
+            onClick={submit}
+            disabled={!json.trim()}
+          >
+            Validate and import
+          </button>
+        </section>
+        <section className="card">
+          <CardTitle
+            title="Export organization"
+            sub="Download organization, users, projects, sprints, tickets, and resources."
+          />
+          <button className="btn dark wide" onClick={download}>
+            <Icons.Download />
+            Download JSON export
+          </button>
+        </section>
+      </div>
+    </>
+  );
+}
+
+function TicketDetailLive({ toast }: { toast: (s: string) => void }) {
+  const { ticketId } = useParams();
+  const navigate = useNavigate();
+  const {
+    dashboard,
+    mutate,
+    refetch,
+    role,
+    user: currentUser,
+  } = useWorkspace();
+  const [tab, setTab] = useState("comments");
+
+  const raw = (dashboard?.tickets || []).find(
+    (item: any) => item.ticketId === ticketId,
+  );
+
+  if (!raw)
+    return (
+      <Empty
+        title="Ticket not found"
+        body="This ticket does not exist in the current workspace."
+      />
+    );
+
+  const [title, setTitle] = useState(raw.title);
+  const [desc, setDesc] = useState(raw.description || "");
+  const [isEditingTitle, setIsEditingTitle] = useState(false);
+  const [isEditingDesc, setIsEditingDesc] = useState(false);
+
+  // Sync state if ticket changes
+  useEffect(() => {
+    setTitle(raw.title);
+    setDesc(raw.description || "");
+  }, [raw]);
+
+  const updateField = async (fields: any) => {
+    try {
+      await mutate(() =>
+        api(`/tickets/${raw._id}`, {
+          method: "PATCH",
+          body: JSON.stringify(fields),
+        }),
+      );
+      toast("Ticket updated successfully");
+    } catch (err) {
+      toast(err instanceof Error ? err.message : "Update failed");
+    }
+  };
+
+  const copy = async () => {
+    await navigator.clipboard.writeText(raw.ticketId);
+    toast("Ticket key copied");
+  };
+
+  const watch = async () => {
+    const watched = (raw.watchers || []).some(
+      (w: any) => String(w._id || w) === String(currentUser?.id),
+    );
+    try {
+      await mutate(() =>
+        api(`/tickets/${raw._id}/watch`, {
+          method: watched ? "DELETE" : "POST",
+        }),
+      );
+      toast(watched ? "Ticket unwatched" : "Ticket watched");
+    } catch (err) {
+      toast(err instanceof Error ? err.message : "Action failed");
+    }
+  };
+
+  const clone = async () => {
+    try {
+      const result = await api<any>(`/tickets/${raw._id}/clone`, {
+        method: "POST",
+      });
+      await refetch();
+      navigate(`/tickets/${result.ticket.ticketId}`);
+      toast("Ticket cloned");
+    } catch (err) {
+      toast(err instanceof Error ? err.message : "Clone failed");
+    }
+  };
+
+  const toggleArchive = async () => {
+    const isArchived = !!raw.archivedAt;
+    try {
+      await mutate(() =>
+        api(`/tickets/${raw._id}/${isArchived ? "restore" : "archive"}`, {
+          method: "POST",
+        }),
+      );
+      toast(isArchived ? "Ticket restored" : "Ticket archived");
+    } catch (err) {
+      toast(err instanceof Error ? err.message : "Action failed");
+    }
+  };
+
+  const remove = async () => {
+    if (
+      window.prompt(`Type ${raw.ticketId} to delete this ticket`) !==
+      raw.ticketId
+    )
+      return;
+    try {
+      await api(`/tickets/${raw._id}`, { method: "DELETE" });
+      await refetch();
+      toast("Ticket deleted");
+      navigate("/tickets");
+    } catch (err) {
+      toast(err instanceof Error ? err.message : "Delete failed");
+    }
+  };
+
+  const addComment = async () => {
+    const body = window.prompt("Enter comment body:");
+    if (!body) return;
+    try {
+      await mutate(() =>
+        api(`/tickets/${raw._id}/comments`, {
+          method: "POST",
+          body: JSON.stringify({ body }),
+        }),
+      );
+      toast("Comment added");
+    } catch (err) {
+      toast(err instanceof Error ? err.message : "Failed to add comment");
+    }
+  };
+
+  const editComment = async (commentId: string, currentBody: string) => {
+    const body = window.prompt("Edit comment body:", currentBody);
+    if (!body) return;
+    try {
+      await mutate(() =>
+        api(`/tickets/${raw._id}/comments/${commentId}`, {
+          method: "PATCH",
+          body: JSON.stringify({ body }),
+        }),
+      );
+      toast("Comment updated");
+    } catch (err) {
+      toast(err instanceof Error ? err.message : "Failed to update comment");
+    }
+  };
+
+  const deleteComment = async (commentId: string) => {
+    if (!window.confirm("Delete this comment?")) return;
+    try {
+      await mutate(() =>
+        api(`/tickets/${raw._id}/comments/${commentId}`, {
+          method: "DELETE",
+        }),
+      );
+      toast("Comment deleted");
+    } catch (err) {
+      toast(err instanceof Error ? err.message : "Failed to delete comment");
+    }
+  };
+
+  const addWorkLog = async () => {
+    const note = window.prompt("Work log note:");
+    const hours = Number(window.prompt("Hours worked:", "1"));
+    if (!note || !hours) return;
+    try {
+      await mutate(() =>
+        api(`/tickets/${raw._id}/work-logs`, {
+          method: "POST",
+          body: JSON.stringify({ note, hours }),
+        }),
+      );
+      toast("Work log added");
+    } catch (err) {
+      toast(err instanceof Error ? err.message : "Failed to add work log");
+    }
+  };
+
+  const editWorkLog = async (
+    logId: string,
+    currentNote: string,
+    currentHours: number,
+  ) => {
+    const note = window.prompt("Edit note:", currentNote);
+    const hours = Number(window.prompt("Edit hours:", String(currentHours)));
+    if (!note || !hours) return;
+    try {
+      await mutate(() =>
+        api(`/tickets/${raw._id}/work-logs/${logId}`, {
+          method: "PATCH",
+          body: JSON.stringify({ note, hours }),
+        }),
+      );
+      toast("Work log updated");
+    } catch (err) {
+      toast(err instanceof Error ? err.message : "Failed to update work log");
+    }
+  };
+
+  const deleteWorkLog = async (logId: string) => {
+    if (!window.confirm("Delete this work log?")) return;
+    try {
+      await mutate(() =>
+        api(`/tickets/${raw._id}/work-logs/${logId}`, {
+          method: "DELETE",
+        }),
+      );
+      toast("Work log deleted");
+    } catch (err) {
+      toast(err instanceof Error ? err.message : "Failed to delete work log");
+    }
+  };
+
+  const addAttachment = async () => {
+    const name = window.prompt("Attachment display name:");
+    const url = window.prompt("Attachment URL:");
+    if (!name || !url) return;
+    try {
+      await mutate(() =>
+        api(`/tickets/${raw._id}/attachments`, {
+          method: "POST",
+          body: JSON.stringify({ name, url }),
+        }),
+      );
+      toast("Attachment added");
+    } catch (err) {
+      toast(err instanceof Error ? err.message : "Failed to add attachment");
+    }
+  };
+
+  const deleteAttachment = async (attachmentId: string) => {
+    if (!window.confirm("Delete this attachment?")) return;
+    try {
+      await mutate(() =>
+        api(`/tickets/${raw._id}/attachments/${attachmentId}`, {
+          method: "DELETE",
+        }),
+      );
+      toast("Attachment deleted");
+    } catch (err) {
+      toast(err instanceof Error ? err.message : "Failed to delete attachment");
+    }
+  };
+
+  const tabItems =
+    tab === "comments"
+      ? raw.comments || []
+      : tab === "workLogs"
+        ? raw.workLogs || []
+        : tab === "attachments"
+          ? raw.attachments || []
+          : raw.history || [];
+
+  const isLeader = ["admin", "manager"].includes(role);
+
+  return (
+    <>
+      <PageHead
+        eyebrow={`${raw.ticketId}${raw.archivedAt ? " [ARCHIVED]" : ""}`}
+        title={
+          isEditingTitle ? (
+            <input
+              value={title}
+              onChange={(e) => setTitle(e.target.value)}
+              onBlur={() => {
+                setIsEditingTitle(false);
+                if (title !== raw.title) updateField({ title });
+              }}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") {
+                  setIsEditingTitle(false);
+                  if (title !== raw.title) updateField({ title });
+                }
+              }}
+              autoFocus
+              style={{ fontSize: "2rem", width: "100%" }}
+            />
+          ) : (
+            <span
+              onClick={() => setIsEditingTitle(true)}
+              style={{ cursor: "pointer", borderBottom: "1px dashed #ccc" }}
+            >
+              {raw.title}
+            </span>
+          )
+        }
+        desc={
+          isEditingDesc ? (
+            <textarea
+              value={desc}
+              onChange={(e) => setDesc(e.target.value)}
+              onBlur={() => {
+                setIsEditingDesc(false);
+                if (desc !== raw.description)
+                  updateField({ description: desc });
+              }}
+              autoFocus
+              style={{ width: "100%", height: "80px" }}
+            />
+          ) : (
+            <p
+              onClick={() => setIsEditingDesc(true)}
+              style={{ cursor: "pointer", borderBottom: "1px dashed #ccc" }}
+            >
+              {raw.description || "(No description, click to add)"}
+            </p>
+          )
+        }
+      >
+        <button className="btn" onClick={copy}>
+          <Icons.Copy />
+          Copy key
+        </button>
+        <button className="btn" onClick={watch}>
+          <Icons.Eye />
+          Watch
+        </button>
+        <button className="btn" onClick={clone}>
+          <Icons.CopyPlus />
+          Clone
+        </button>
+        {isLeader && (
+          <button className="btn warning" onClick={toggleArchive}>
+            {raw.archivedAt ? "Restore" : "Archive"}
+          </button>
+        )}
+        <button className="btn danger" onClick={remove}>
+          <Icons.Trash2 />
+          Delete
+        </button>
+      </PageHead>
+      <div className="ticket-layout">
+        <section className="ticket-main">
+          <div className="card">
+            <CardTitle title="Acceptance criteria" />
+            {(raw.acceptanceCriteria || []).map((item: string) => (
+              <label className="check" key={item}>
+                <input type="checkbox" />
+                {item}
+              </label>
+            ))}
+          </div>
+          <div className="card">
+            <div className="tabs">
+              {[
+                ["comments", "Comments"],
+                ["workLogs", "Work logs"],
+                ["attachments", "Attachments"],
+                ["history", "History"],
+              ].map(([value, label]) => (
+                <button
+                  key={value}
+                  className={tab === value ? "active" : ""}
+                  onClick={() => setTab(value)}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
+            {tab !== "history" && (
+              <button
+                className="btn primary"
+                onClick={
+                  tab === "comments"
+                    ? addComment
+                    : tab === "workLogs"
+                      ? addWorkLog
+                      : addAttachment
+                }
+                style={{ marginBottom: "1rem" }}
+              >
+                <Icons.Plus />
+                Add {tab === "workLogs" ? "work log" : tab.slice(0, -1)}
+              </button>
+            )}
+            <div className="timeline">
+              {tabItems.length ? (
+                tabItems.map((item: any, index: number) => (
+                  <div
+                    key={item._id || index}
+                    style={{
+                      display: "flex",
+                      justifyContent: "space-between",
+                      alignItems: "center",
+                    }}
+                  >
+                    <div
+                      style={{
+                        display: "flex",
+                        gap: "10px",
+                        alignItems: "center",
+                      }}
+                    >
+                      <i className="done" />
+                      <span>
+                        <b>
+                          {item.body || item.note || item.name || item.event}
+                        </b>
+                        <small style={{ marginLeft: "10px" }}>
+                          {item.hours ? `${item.hours} hours · ` : ""}
+                          {item.createdAt
+                            ? new Date(item.createdAt).toLocaleString()
+                            : ""}
+                        </small>
+                      </span>
+                    </div>
+                    {tab !== "history" && (
+                      <div style={{ display: "flex", gap: "5px" }}>
+                        {tab === "comments" && (
+                          <>
+                            <button
+                              className="btn text-btn"
+                              onClick={() => editComment(item._id, item.body)}
+                            >
+                              Edit
+                            </button>
+                            <button
+                              className="btn text-btn danger"
+                              onClick={() => deleteComment(item._id)}
+                            >
+                              Delete
+                            </button>
+                          </>
+                        )}
+                        {tab === "workLogs" && (
+                          <>
+                            <button
+                              className="btn text-btn"
+                              onClick={() =>
+                                editWorkLog(item._id, item.note, item.hours)
+                              }
+                            >
+                              Edit
+                            </button>
+                            <button
+                              className="btn text-btn danger"
+                              onClick={() => deleteWorkLog(item._id)}
+                            >
+                              Delete
+                            </button>
+                          </>
+                        )}
+                        {tab === "attachments" && (
+                          <button
+                            className="btn text-btn danger"
+                            onClick={() => deleteAttachment(item._id)}
+                          >
+                            Delete
+                          </button>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                ))
+              ) : (
+                <p>No {tab.toLowerCase()} yet.</p>
+              )}
+            </div>
+          </div>
+        </section>
+        <aside className="ticket-aside card">
+          <h3>Details</h3>
+          <div className="detail-row">
+            <span>Status</span>
+            <select
+              value={raw.status}
+              onChange={(e) => updateField({ status: e.target.value })}
+            >
+              {["Backlog", "To Do", "In Progress", "In Review", "Done"].map(
+                (value) => (
+                  <option key={value}>{value}</option>
+                ),
+              )}
+            </select>
+          </div>
+          <div className="detail-row">
+            <span>Priority</span>
+            <select
+              value={raw.priority}
+              onChange={(e) => updateField({ priority: e.target.value })}
+            >
+              {["low", "medium", "high", "critical"].map((value) => (
+                <option key={value} value={value}>
+                  {fmt(value)}
+                </option>
+              ))}
+            </select>
+          </div>
+          <div className="detail-row">
+            <span>Assignee</span>
+            <select
+              value={
+                raw.assignee?._id ||
+                (typeof raw.assignee === "string" ? raw.assignee : "")
+              }
+              onChange={(e) =>
+                updateField({ assigneeId: e.target.value || null })
+              }
+            >
+              <option value="">Unassigned</option>
+              {(dashboard?.users || []).map((u: any) => (
+                <option key={u._id} value={u._id}>
+                  {u.name}
+                </option>
+              ))}
+            </select>
+          </div>
+          <div className="detail-row">
+            <span>Story points</span>
+            <input
+              type="number"
+              value={raw.storyPoints || 0}
+              onChange={(e) =>
+                updateField({ storyPoints: Number(e.target.value) })
+              }
+              style={{ width: "80px" }}
+            />
+          </div>
+        </aside>
+      </div>
+    </>
+  );
+}
+
 function OrganizationLive({ toast }: { toast: (s: string) => void }) {
-  const org = serverData.organization || {};
-  const dashboard = serverData.dashboard || {};
-  const resourceCount = Object.values(serverData.resources || {}).reduce(
+  const {
+    organization: org,
+    dashboard,
+    resources,
+    mutate,
+    role,
+  } = useWorkspace();
+  const [name, setName] = useState(org?.name || "");
+
+  const resourceCount = Object.values(resources || {}).reduce(
     (sum: number, items: any) => sum + (items?.length || 0),
     0,
   );
-  const [name, setName] = useState(org.name || "");
+
   const save = async () => {
-    const response = await api<any>("/organization", {
-      method: "PATCH",
-      body: JSON.stringify({ name }),
-    });
-    serverData.organization = response.organization;
-    toast("Organization updated");
+    try {
+      await mutate(async () => {
+        const response = await api<any>("/organization", {
+          method: "PATCH",
+          body: JSON.stringify({ name }),
+        });
+        return response;
+      });
+      toast("Organization updated");
+    } catch (err) {
+      toast(err instanceof Error ? err.message : "Update failed");
+    }
   };
+
   const remove = async () => {
-    const confirmation=window.prompt(`Type ${org.name} to permanently delete this organization.`);
-    if(confirmation!==org.name) return;
-    await api("/organization",{method:"DELETE",body:JSON.stringify({confirmationName:confirmation})});
-    clearSession(); window.location.href="/login";
+    const confirmation = window.prompt(
+      `Type ${org.name} to permanently delete this organization.`,
+    );
+    if (confirmation !== org.name) return;
+    try {
+      await api("/organization", {
+        method: "DELETE",
+        body: JSON.stringify({ confirmationName: confirmation }),
+      });
+      clearSession();
+      window.location.href = "/login";
+    } catch (err) {
+      toast(err instanceof Error ? err.message : "Deletion failed");
+    }
   };
+
+  const isLeader = ["admin", "manager"].includes(role);
+
   const usage = [
-    ["Team members", dashboard.users?.length || 0],
-    ["Projects", dashboard.projects?.length || 0],
-    ["Tickets", dashboard.tickets?.length || 0],
+    ["Team members", dashboard?.users?.length || 0],
+    ["Projects", dashboard?.projects?.length || 0],
+    ["Tickets", dashboard?.tickets?.length || 0],
     ["Workspace resources", resourceCount],
   ];
+
   return (
     <>
       <PageHead
         title="Organization"
-        desc={`Manage ${org.name} and monitor live usage.`}
+        desc={`Manage ${org?.name || "Organization"} and monitor live usage.`}
       >
-        <Badge tone="purple">{fmt(org.plan || "starter")} plan</Badge>
+        <Badge tone="purple">{fmt(org?.plan || "starter")} plan</Badge>
       </PageHead>
       <div className="settings-layout">
         <SettingsNav active="Organization" />
@@ -3398,19 +5093,25 @@ function OrganizationLive({ toast }: { toast: (s: string) => void }) {
             <div className="form-grid">
               <label className="field">
                 <span>Organization name</span>
-                <input value={name} onChange={(e) => setName(e.target.value)} />
+                <input
+                  value={name}
+                  onChange={(e) => setName(e.target.value)}
+                  disabled={!isLeader}
+                />
               </label>
               <label className="field">
                 <span>Workspace slug</span>
                 <div className="input-prefix">
                   <span>itrack.app/</span>
-                  <input value={org.slug || ""} readOnly />
+                  <input value={org?.slug || ""} readOnly />
                 </div>
               </label>
             </div>
-            <button className="btn primary" onClick={save}>
-              Save changes
-            </button>
+            {isLeader && (
+              <button className="btn primary" onClick={save}>
+                Save changes
+              </button>
+            )}
           </section>
           <section className="card">
             <CardTitle
@@ -3429,16 +5130,37 @@ function OrganizationLive({ toast }: { toast: (s: string) => void }) {
               ))}
             </div>
           </section>
-          <section className="card danger-zone"><CardTitle title="Danger zone" sub="Permanently delete this organization and all workspace data."/><button className="btn danger" onClick={remove}>Delete organization</button></section>
+          {isLeader && (
+            <section className="card danger-zone">
+              <CardTitle
+                title="Danger zone"
+                sub="Permanently delete this organization and all workspace data."
+              />
+              <button className="btn danger" onClick={remove}>
+                Delete organization
+              </button>
+            </section>
+          )}
         </div>
       </div>
     </>
   );
 }
 
-function BacklogLive({ toast }: { toast: (s: string) => void }) {
-  const navigate=useNavigate();
-  const backlog = tickets.filter((ticket) => ticket.status === "Backlog");
+function BacklogLive({
+  toast,
+  projectFilter,
+}: {
+  toast: (s: string) => void;
+  projectFilter?: string;
+}) {
+  const navigate = useNavigate();
+  const { tickets: wsTickets } = useWorkspace();
+  const backlog = wsTickets.filter((ticket) => {
+    if (ticket.status !== "Backlog") return false;
+    if (projectFilter && ticket.project !== projectFilter) return false;
+    return true;
+  });
   return (
     <>
       <PageHead
@@ -3475,9 +5197,21 @@ function BacklogLive({ toast }: { toast: (s: string) => void }) {
   );
 }
 
-function SprintsLive({ toast }: { toast: (s: string) => void }) {
+function SprintsLive({
+  toast,
+  projectFilter,
+}: {
+  toast: (s: string) => void;
+  projectFilter?: string;
+}) {
   const navigate = useNavigate();
-  const items = serverData.dashboard?.sprints || [];
+  const { dashboard } = useWorkspace();
+  const rawSprints = dashboard?.sprints || [];
+  const items = rawSprints.filter((s: any) => {
+    if (projectFilter && s.project?.name !== projectFilter) return false;
+    return true;
+  });
+
   return (
     <>
       <PageHead title="Sprints" desc="Live sprint plans and delivery status.">
@@ -3500,6 +5234,7 @@ function SprintsLive({ toast }: { toast: (s: string) => void }) {
                 className="card sprint-row"
                 key={s._id}
                 onClick={() => navigate(`/sprints/${s._id}`)}
+                style={{ cursor: "pointer" }}
               >
                 <div className={`sprint-status ${s.status}`}>
                   <Icons.Timer />
@@ -3542,12 +5277,30 @@ function SprintsLive({ toast }: { toast: (s: string) => void }) {
                 </div>
                 <button
                   className="icon-btn"
-                  onClick={(event) => {
+                  aria-label={`${s.status === "planned" ? "Start" : s.status === "active" ? "Complete" : "Reopen"} ${s.name}`}
+                  onClick={async (event) => {
                     event.stopPropagation();
-                    toast("Sprint actions opened");
+                    if (s.status === "active") {
+                      navigate(`/sprints/${s._id}/complete`);
+                      return;
+                    }
+                    await api(
+                      `/sprints/${s._id}/${s.status === "planned" ? "start" : "reopen"}`,
+                      { method: "POST" },
+                    );
+                    toast(
+                      `Sprint ${s.status === "planned" ? "started" : "reopened"}`,
+                    );
+                    window.location.reload();
                   }}
                 >
-                  <Icons.MoreHorizontal />
+                  {s.status === "planned" ? (
+                    <Icons.Play />
+                  ) : s.status === "active" ? (
+                    <Icons.CheckCircle2 />
+                  ) : (
+                    <Icons.RotateCcw />
+                  )}
                 </button>
               </article>
             );
@@ -3564,25 +5317,81 @@ function SprintsLive({ toast }: { toast: (s: string) => void }) {
 }
 
 function ResourcesLive({ toast }: { toast: (s: string) => void }) {
+  const { resources, mutate, role } = useWorkspace();
   const location = useLocation();
   const navigate = useNavigate();
   const kind = location.pathname.split("/")[2];
+
+  const isLeader = ["admin", "manager"].includes(role);
+
   if (kind) {
-    const rows = serverData.resources[kind] || [];
-    const create = async()=>{const name=window.prompt(`Name for the new ${fmt(kind)}`);if(!name)return;await api(`/resources/${kind}`,{method:"POST",body:JSON.stringify({name,description:"",status:"active",order:rows.length,config:{}})});toast(`${fmt(kind)} created`);window.location.reload()};
+    const rows = resources[kind] || [];
+
+    const create = async () => {
+      const name = window.prompt(`Name for the new ${fmt(kind)}`);
+      if (!name) return;
+      try {
+        await mutate(() =>
+          api(`/resources/${kind}`, {
+            method: "POST",
+            body: JSON.stringify({
+              name,
+              description: "",
+              status: "active",
+              order: rows.length,
+              config: {},
+            }),
+          }),
+        );
+        toast(`${fmt(kind)} created`);
+      } catch (err) {
+        toast(err instanceof Error ? err.message : "Creation failed");
+      }
+    };
+
+    const rename = async (item: any) => {
+      const name = window.prompt(`Rename ${fmt(kind)}`, item.name);
+      if (!name) return;
+      try {
+        await mutate(() =>
+          api(`/resources/${kind}/${item._id}`, {
+            method: "PATCH",
+            body: JSON.stringify({ name }),
+          }),
+        );
+        toast(`${fmt(kind)} updated`);
+      } catch (err) {
+        toast(err instanceof Error ? err.message : "Rename failed");
+      }
+    };
+
+    const remove = async (item: any) => {
+      if (!window.confirm(`Are you sure you want to delete ${item.name}?`))
+        return;
+      try {
+        await mutate(() =>
+          api(`/resources/${kind}/${item._id}`, {
+            method: "DELETE",
+          }),
+        );
+        toast(`${fmt(kind)} deleted`);
+      } catch (err) {
+        toast(err instanceof Error ? err.message : "Deletion failed");
+      }
+    };
+
     return (
       <>
         <PageHead
           title={fmt(kind)}
           desc={`Live ${fmt(kind).toLowerCase()} resources from the API.`}
         >
-          <button
-            className="btn primary"
-            onClick={create}
-          >
-            <Icons.Plus />
-            New {fmt(kind)}
-          </button>
+          {isLeader && (
+            <button className="btn primary" onClick={create}>
+              <Icons.Plus />
+              New {fmt(kind)}
+            </button>
+          )}
         </PageHead>
         <FilterBar />
         <section className="card no-pad">
@@ -3594,6 +5403,7 @@ function ResourcesLive({ toast }: { toast: (s: string) => void }) {
                   <th>Status</th>
                   <th>Key</th>
                   <th>Updated</th>
+                  {isLeader && <th>Actions</th>}
                 </tr>
               </thead>
               <tbody>
@@ -3607,6 +5417,24 @@ function ResourcesLive({ toast }: { toast: (s: string) => void }) {
                     </td>
                     <td>{item.key || "—"}</td>
                     <td>{new Date(item.updatedAt).toLocaleString()}</td>
+                    {isLeader && (
+                      <td>
+                        <div style={{ display: "flex", gap: "10px" }}>
+                          <button
+                            className="btn text-btn"
+                            onClick={() => rename(item)}
+                          >
+                            Rename
+                          </button>
+                          <button
+                            className="btn text-btn danger"
+                            onClick={() => remove(item)}
+                          >
+                            Delete
+                          </button>
+                        </div>
+                      </td>
+                    )}
                   </tr>
                 ))}
               </tbody>
@@ -3621,6 +5449,7 @@ function ResourcesLive({ toast }: { toast: (s: string) => void }) {
       </>
     );
   }
+
   return (
     <>
       <PageHead
@@ -3655,7 +5484,7 @@ function ResourcesLive({ toast }: { toast: (s: string) => void }) {
                 <h2>{fmt(resourceKind)}</h2>
                 <p>Manage {fmt(resourceKind).toLowerCase()} definitions.</p>
               </div>
-              <Badge>{(serverData.resources[resourceKind] || []).length}</Badge>
+              <Badge>{(resources[resourceKind] || []).length}</Badge>
               <Icons.ChevronRight />
             </article>
           );
@@ -3666,22 +5495,72 @@ function ResourcesLive({ toast }: { toast: (s: string) => void }) {
 }
 
 function IntegrationsLive({ toast }: { toast: (s: string) => void }) {
-  const rows = serverData.integrations || [];
-  const create=async()=>{const kind=window.prompt("Integration type: webhook or api-token","webhook");if(!kind||!["webhook","api-token"].includes(kind))return;const name=window.prompt("Integration name");if(!name)return;const url=kind==="webhook"?window.prompt("Webhook URL")||undefined:undefined;const result=await api<any>(`/integrations/${kind}`,{method:"POST",body:JSON.stringify({name,url,events:[]})});if(result.token)window.prompt("Copy this token now. It will not be shown again.",result.token);toast("Integration created");window.location.reload()};
-  const remove=async(item:any)=>{if(!window.confirm(`Delete ${item.name}?`))return;await api(`/integrations/${item.kind}/${item._id}`,{method:"DELETE"});toast("Integration deleted");window.location.reload()};
+  const { integrations: rows, mutate, role } = useWorkspace();
+  const isLeader = ["admin", "manager"].includes(role);
+
+  const create = async () => {
+    if (!isLeader)
+      return toast("Only admins and managers can create integrations");
+    const kind = window.prompt(
+      "Integration type: webhook or api-token",
+      "webhook",
+    );
+    if (!kind || !["webhook", "api-token"].includes(kind)) return;
+    const name = window.prompt("Integration name");
+    if (!name) return;
+    const url =
+      kind === "webhook"
+        ? window.prompt("Webhook URL") || undefined
+        : undefined;
+    try {
+      let createdToken = "";
+      await mutate(async () => {
+        const result = await api<any>(`/integrations/${kind}`, {
+          method: "POST",
+          body: JSON.stringify({ name, url, events: [] }),
+        });
+        if (result.token) createdToken = result.token;
+        return result;
+      });
+
+      if (createdToken) {
+        window.prompt(
+          "Copy this token now. It will not be shown again.",
+          createdToken,
+        );
+      }
+      toast("Integration created");
+    } catch (err) {
+      toast(err instanceof Error ? err.message : "Creation failed");
+    }
+  };
+
+  const remove = async (item: any) => {
+    if (!isLeader)
+      return toast("Only admins and managers can delete integrations");
+    if (!window.confirm(`Delete ${item.name}?`)) return;
+    try {
+      await mutate(() =>
+        api(`/integrations/${item.kind}/${item._id}`, { method: "DELETE" }),
+      );
+      toast("Integration deleted");
+    } catch (err) {
+      toast(err instanceof Error ? err.message : "Deletion failed");
+    }
+  };
+
   return (
     <>
       <PageHead
         title="Integrations"
         desc="Live API tokens and webhooks for this organization."
       >
-        <button
-          className="btn primary"
-          onClick={create}
-        >
-          <Icons.Plus />
-          New integration
-        </button>
+        {isLeader && (
+          <button className="btn primary" onClick={create}>
+            <Icons.Plus />
+            New integration
+          </button>
+        )}
       </PageHead>
       <div className="integration-grid">
         {rows.length ? (
@@ -3698,7 +5577,15 @@ function IntegrationsLive({ toast }: { toast: (s: string) => void }) {
                 <h2>{item.name}</h2>
                 <Badge>{item.kind}</Badge>
               </div>
-              <button className="icon-btn" aria-label={`Delete ${item.name}`} onClick={()=>remove(item)}><Icons.Trash2 /></button>
+              {isLeader && (
+                <button
+                  className="icon-btn"
+                  aria-label={`Delete ${item.name}`}
+                  onClick={() => remove(item)}
+                >
+                  <Icons.Trash2 />
+                </button>
+              )}
               <p>{item.url || "Secure token"}</p>
               <div>
                 <Badge tone={item.active ? "green" : "neutral"}>
@@ -3724,7 +5611,18 @@ function IntegrationsLive({ toast }: { toast: (s: string) => void }) {
 }
 
 function AuditLogsLive() {
-  const rows = serverData.auditLogs || [];
+  const { auditLogs: rows = [] } = useWorkspace();
+  const [params] = useSearchParams();
+  const q = params.get("q") || "";
+
+  const filtered = rows.filter((item: any) => {
+    return (
+      item.action.toLowerCase().includes(q.toLowerCase()) ||
+      (item.actor?.name || "System").toLowerCase().includes(q.toLowerCase()) ||
+      (item.entityType || "").toLowerCase().includes(q.toLowerCase())
+    );
+  });
+
   return (
     <>
       <PageHead
@@ -3733,7 +5631,7 @@ function AuditLogsLive() {
       />
       <FilterBar placeholder="Search actions or entities…" />
       <section className="card no-pad">
-        {rows.length ? (
+        {filtered.length ? (
           <table>
             <thead>
               <tr>
@@ -3744,7 +5642,7 @@ function AuditLogsLive() {
               </tr>
             </thead>
             <tbody>
-              {rows.map((item: any) => (
+              {filtered.map((item: any) => (
                 <tr key={item._id}>
                   <td>
                     <Badge tone="purple">{item.action}</Badge>

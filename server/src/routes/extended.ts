@@ -108,14 +108,15 @@ router.delete("/organization", requireRole(["admin"]), async (req: AuthRequest, 
   if (!organization) return res.status(404).json({ message: "Organization not found" });
   if (body.confirmationName !== organization.name) return res.status(409).json({ message: "Organization name does not match" });
   const session = await mongoose.startSession();
+  const filter = { organization: organization._id };
   try {
     await session.withTransaction(async () => {
-      const filter = { organization: organization._id };
-      await Promise.all([
-        Session.deleteMany(filter, { session }), ActionToken.deleteMany(filter, { session }), Notification.deleteMany(filter, { session }), AuditEvent.deleteMany(filter, { session }),
-        Integration.deleteMany(filter, { session }), Counter.deleteMany(filter, { session }), WorkspaceResource.deleteMany(filter, { session }), Ticket.deleteMany(filter, { session }), Sprint.deleteMany(filter, { session }), Project.deleteMany(filter, { session }), User.deleteMany(filter, { session }),
-      ]);
-      const result = await Organization.deleteOne({ _id: organization._id }, { session });
+      const options = { session };
+      await Session.deleteMany(filter, options); await ActionToken.deleteMany(filter, options); await Notification.deleteMany(filter, options);
+      await AuditEvent.deleteMany(filter, options); await Integration.deleteMany(filter, options); await Counter.deleteMany(filter, options);
+      await WorkspaceResource.deleteMany(filter, options); await Ticket.deleteMany(filter, options); await Sprint.deleteMany(filter, options);
+      await Project.deleteMany(filter, options); await User.deleteMany(filter, options);
+      const result = await Organization.deleteOne({ _id: organization._id }, options);
       if (result.deletedCount !== 1) throw new Error("Organization deletion failed");
     });
     return res.status(204).send();
