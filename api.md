@@ -76,6 +76,7 @@ Without confirmation, destructive actions return `409`:
 | `POST` | `/auth/forgot-password` | Public | No |
 | `POST` | `/auth/reset-password` | Public | No |
 | `POST` | `/auth/change-password` | all | No |
+| `PATCH` | `/auth/preferences` | all | No |
 | `POST` | `/auth/accept-invite` | Public | No |
 | `GET` | `/auth/sessions` | all | No |
 | `DELETE` | `/auth/sessions/:id` | all | Requires confirmation |

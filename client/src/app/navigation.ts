@@ -2,7 +2,7 @@ export type NavItem = [string, string, string];
 export type NavGroup = { group: string; admin?: boolean; items: NavItem[] };
 export const nav: NavGroup[] = [
   {
-    group: "Overview",
+    group: "My workspace",
     items: [
       ["/dashboard", "LayoutDashboard", "Dashboard"],
       ["/my-work", "CircleUserRound", "My work"],
@@ -10,7 +10,7 @@ export const nav: NavGroup[] = [
     ],
   },
   {
-    group: "Planning",
+    group: "Plan and deliver",
     items: [
       ["/projects", "FolderKanban", "Projects"],
       ["/backlog", "ListTodo", "Backlog"],
@@ -21,7 +21,7 @@ export const nav: NavGroup[] = [
     ],
   },
   {
-    group: "Intelligence",
+    group: "Insights",
     items: [
       ["/sprint-risk", "Activity", "Sprint risk"],
       ["/reports", "ChartNoAxesCombined", "Reports"],
@@ -29,7 +29,7 @@ export const nav: NavGroup[] = [
     ],
   },
   {
-    group: "Workspace",
+    group: "People and assets",
     items: [
       ["/team", "Users", "Team"],
       ["/resources", "Shapes", "Resources"],

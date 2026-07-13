@@ -2,6 +2,12 @@ import mongoose, { Schema } from "mongoose";
 
 export type UserRole = "admin" | "manager" | "engineer" | "designer";
 export type InviteStatus = "active" | "invited" | "disabled";
+export type NotificationPreferences = {
+  ticketAssignments: boolean;
+  mentionsAndComments: boolean;
+  sprintRiskAlerts: boolean;
+  weeklySummary: boolean;
+};
 
 export interface IUser {
   name: string;
@@ -14,6 +20,7 @@ export interface IUser {
   availability: number;
   capacity: number;
   avatarColor: string;
+  notificationPreferences: NotificationPreferences;
 }
 
 const userSchema = new Schema<IUser>(
@@ -28,6 +35,12 @@ const userSchema = new Schema<IUser>(
     availability: { type: Number, default: 1 },
     capacity: { type: Number, default: 32 },
     avatarColor: { type: String, default: "#00AEEF" },
+    notificationPreferences: {
+      ticketAssignments: { type: Boolean, default: true },
+      mentionsAndComments: { type: Boolean, default: true },
+      sprintRiskAlerts: { type: Boolean, default: true },
+      weeklySummary: { type: Boolean, default: false },
+    },
   },
   { timestamps: true },
 );

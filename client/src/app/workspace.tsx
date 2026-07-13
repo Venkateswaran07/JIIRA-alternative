@@ -404,7 +404,7 @@ export function ApiGate({
 
   if (loading) {
     return (
-      <div className="app-loading">
+      <div className="app-loading" role="status" aria-live="polite">
         <span className="brand-mark">I</span>
         <b>Loading workspace…</b>
       </div>
@@ -413,13 +413,17 @@ export function ApiGate({
 
   if (error) {
     return (
-      <div className="app-loading error">
+      <div className="app-loading error" role="alert">
         <Icons.CloudOff />
         <b>Couldn’t load workspace</b>
         <p>{error}</p>
         <button
           className="btn primary"
-          onClick={() => window.location.reload()}
+          onClick={() => {
+            setError("");
+            setLoading(true);
+            void loadData();
+          }}
         >
           Try again
         </button>

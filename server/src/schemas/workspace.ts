@@ -45,6 +45,7 @@ export const ticketSchema = z.object({
   title: z.string().min(3),
   description: z.string().min(5),
   acceptanceCriteria: z.array(z.string()).default([]),
+  acceptanceCriteriaDone: z.array(z.boolean()).default([]),
   status: z.enum(ticketStatuses).default("Backlog"),
   priority: z.enum(priorityLevels).default("medium"),
   storyPoints: z.number().int().min(1).max(21),

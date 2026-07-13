@@ -27,7 +27,7 @@ import {
 } from "recharts";
 import { api, clearSession, login } from "../api";
 import { resourceKinds } from "../constants/resources";
-import type { Role, Ticket, TicketStatus, Toast } from "../types/domain";
+import type { NotificationPreferences, Role, Ticket, TicketStatus, Toast } from "../types/domain";
 import { ApiGate, useWorkspace } from "./workspace";
 import { nav } from "./navigation";
 import {
@@ -40,6 +40,20 @@ import {
   Progress,
 } from "./components/ui";
 import { cx, fmt } from "../utils/ui";
+
+const defaultNotificationPreferences: NotificationPreferences = {
+  ticketAssignments: true,
+  mentionsAndComments: true,
+  sprintRiskAlerts: true,
+  weeklySummary: false,
+};
+
+const notificationPreferenceOptions: { key: keyof NotificationPreferences; label: string }[] = [
+  { key: "ticketAssignments", label: "Ticket assignments" },
+  { key: "mentionsAndComments", label: "Mentions and comments" },
+  { key: "sprintRiskAlerts", label: "Sprint risk alerts" },
+  { key: "weeklySummary", label: "Weekly summary" },
+];
 
 export function App() {
   const [theme, setTheme] = useState(localStorage.getItem("theme") || "light");
@@ -96,9 +110,9 @@ export function App() {
             }
           />
         </Routes>
-        <div className="toast-stack">
+        <div className="toast-stack" aria-live="polite" aria-atomic="true">
           {toasts.map((t) => (
-            <div className="toast" key={t.id}>
+            <div className="toast" key={t.id} role="status">
               <Icons.CheckCircle2 size={18} />
               {t.message}
             </div>
@@ -133,6 +147,8 @@ function Shell({
     [search, setSearch] = useState(false),
     [workspaceMenu, setWorkspaceMenu] = useState(false);
   const [aiPanel, setAiPanel] = useState(false);
+  const mobileMenuButton = React.useRef<HTMLButtonElement>(null);
+  const searchButton = React.useRef<HTMLButtonElement>(null);
   const loc = useLocation();
   const navigate = useNavigate();
   const label =
@@ -144,17 +160,70 @@ function Shell({
 
   const unreadCount = notifications.filter((n: any) => !n.readAt).length;
 
+  const closeOverlays = React.useCallback(() => {
+    setMobile(false);
+    setSearch(false);
+    setWorkspaceMenu(false);
+    setAiPanel(false);
+  }, []);
+
+  useEffect(() => {
+    closeOverlays();
+  }, [loc.pathname, closeOverlays]);
+
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "k") {
+        event.preventDefault();
+        closeOverlays();
+        setSearch(true);
+      }
+      if (event.key === "Escape") {
+        const wasMobile = mobile;
+        const wasSearch = search;
+        closeOverlays();
+        if (wasMobile) mobileMenuButton.current?.focus();
+        if (wasSearch) searchButton.current?.focus();
+      }
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [mobile, search, closeOverlays]);
+
+  useEffect(() => {
+    document.body.classList.toggle("overlay-open", mobile || search || aiPanel);
+    return () => document.body.classList.remove("overlay-open");
+  }, [mobile, search, aiPanel]);
+
   return (
     <div className={cx("app", collapsed && "collapsed")}>
-      <aside className={cx("sidebar", mobile && "open")}>
+      <a className="skip-link" href="#main-content">
+        Skip to main content
+      </a>
+      <aside
+        className={cx("sidebar", mobile && "open")}
+        aria-label="Workspace navigation"
+      >
         <div className="brand">
           <div className="brand-mark">I</div>
           <span>I-TRACK</span>
           <button
             className="icon-btn collapse"
             onClick={() => setCollapsed(!collapsed)}
+            aria-label={collapsed ? "Expand sidebar" : "Collapse sidebar"}
+            title={collapsed ? "Expand sidebar" : "Collapse sidebar"}
           >
             <Icons.PanelLeftClose size={19} />
+          </button>
+          <button
+            className="icon-btn mobile-sidebar-close"
+            onClick={() => {
+              setMobile(false);
+              mobileMenuButton.current?.focus();
+            }}
+            aria-label="Close navigation"
+          >
+            <Icons.X size={19} />
           </button>
         </div>
         <div className="workspace-switcher">
@@ -180,14 +249,7 @@ function Shell({
           {workspaceMenu && (
             <div className="workspace-menu" role="menu">
               <p>WORKSPACE</p>
-              <button
-                className="selected"
-                role="menuitem"
-                onClick={() => {
-                  setWorkspaceMenu(false);
-                  toast(`${organization?.name} selected`);
-                }}
-              >
+              <div className="workspace-menu-item selected" role="menuitem" aria-current="true">
                 <span className="avatar square">
                   {(organization?.name || "W").slice(0, 2).toUpperCase()}
                 </span>
@@ -196,7 +258,7 @@ function Shell({
                   <small>Current workspace</small>
                 </span>
                 <Icons.Check size={16} />
-              </button>
+              </div>
               <hr />
               <button
                 role="menuitem"
@@ -228,6 +290,7 @@ function Shell({
                       to={path}
                       onClick={() => setMobile(false)}
                       className={({ isActive }) => (isActive ? "active" : "")}
+                      title={collapsed ? label : undefined}
                     >
                       <Icon size={19} />
                       <span>{label}</span>
@@ -240,7 +303,11 @@ function Shell({
               </div>
             ))}
         </nav>
-        <div className="sidebar-user">
+        <button
+          className="sidebar-user"
+          onClick={() => navigate("/settings/profile")}
+          aria-label="Open profile settings"
+        >
           <Avatar
             name={currentUser?.name || "User"}
             color={currentUser?.avatarColor}
@@ -249,13 +316,19 @@ function Shell({
             <b>{currentUser?.name || "User"}</b>
             <small>{fmt(currentUser?.role || role)}</small>
           </span>
-          <Icons.MoreHorizontal size={18} />
-        </div>
+          <Icons.Settings size={17} />
+        </button>
       </aside>
       <header className="topbar">
         <button
+          ref={mobileMenuButton}
           className="icon-btn mobile-menu"
-          onClick={() => setMobile(true)}
+          onClick={() => {
+            closeOverlays();
+            setMobile(true);
+          }}
+          aria-label="Open navigation"
+          aria-expanded={mobile}
         >
           <Icons.Menu />
         </button>
@@ -265,7 +338,15 @@ function Shell({
           <b>{label}</b>
         </div>
         <div className="top-actions">
-          <button className="search-trigger" onClick={() => setSearch(true)}>
+          <button
+            ref={searchButton}
+            className="search-trigger"
+            onClick={() => {
+              closeOverlays();
+              setSearch(true);
+            }}
+            aria-label="Search workspace"
+          >
             <Icons.Search size={17} />
             <span>Search anything</span>
             <kbd>⌘ K</kbd>
@@ -275,9 +356,18 @@ function Shell({
             onClick={() => navigate("/tickets/new")}
           >
             <Icons.Plus size={17} />
-            Create
+            New ticket
           </button>
-          <button className="ai-agent-toggle" onClick={() => setAiPanel(!aiPanel)}>
+          <button
+            className="ai-agent-toggle"
+            onClick={() => {
+              const next = !aiPanel;
+              closeOverlays();
+              setAiPanel(next);
+            }}
+            aria-expanded={aiPanel}
+            aria-controls="ai-agent-panel"
+          >
               <span className="pulse-dot" />
               <Icons.Bot size={16} />
               <span>AI Agent</span>
@@ -285,20 +375,24 @@ function Shell({
           <button
             className="icon-btn"
             onClick={() => setTheme(theme === "dark" ? "light" : "dark")}
+            aria-label={`Switch to ${theme === "dark" ? "light" : "dark"} theme`}
+            title={`Switch to ${theme === "dark" ? "light" : "dark"} theme`}
           >
             {theme === "dark" ? <Icons.Sun /> : <Icons.Moon />}
           </button>
           <button
             className="icon-btn"
             onClick={() => navigate("/notifications")}
+            aria-label={`Notifications${unreadCount ? `, ${unreadCount} unread` : ""}`}
+            title="Notifications"
           >
             <Icons.Bell />
             {unreadCount > 0 && <i />}
           </button>
         </div>
       </header>
-      <main>{children}</main>
-      <nav className="bottom-nav">
+      <main id="main-content" tabIndex={-1}>{children}</main>
+      <nav className="bottom-nav" aria-label="Mobile navigation">
         {[
           ["/dashboard", "House", "Home"],
           ["/projects", "FolderKanban", "Projects"],
@@ -315,9 +409,31 @@ function Shell({
           );
         })}
       </nav>
-      {mobile && <div className="scrim" onClick={() => setMobile(false)} />}{" "}
-      {search && <Command close={() => setSearch(false)} navigate={navigate} />}
-      <button className="fab" onClick={() => navigate("/tickets/new")}>
+      {mobile && (
+        <button
+          className="scrim"
+          onClick={() => {
+            setMobile(false);
+            mobileMenuButton.current?.focus();
+          }}
+          aria-label="Close navigation"
+        />
+      )}{" "}
+      {search && (
+        <Command
+          close={() => {
+            setSearch(false);
+            requestAnimationFrame(() => searchButton.current?.focus());
+          }}
+          navigate={navigate}
+        />
+      )}
+      <button
+        className="fab"
+        onClick={() => navigate("/tickets/new")}
+        aria-label="Create ticket"
+        title="Create ticket"
+      >
         <Icons.Plus />
       </button>
       <AiAgentPanel open={aiPanel} onClose={() => setAiPanel(false)} toast={toast} />
@@ -332,25 +448,66 @@ function Command({
   navigate: (s: string) => void;
 }) {
   const [q, setQ] = useState("");
+  const dialogRef = React.useRef<HTMLDivElement>(null);
   const all = nav.flatMap((g) => g.items);
+  const results = all
+    .filter((x) => x[2].toLowerCase().includes(q.toLowerCase()))
+    .slice(0, 8);
+  useEffect(() => {
+    const dialog = dialogRef.current;
+    if (!dialog) return;
+    const trapFocus = (event: KeyboardEvent) => {
+      if (event.key !== "Tab") return;
+      const focusable = Array.from(
+        dialog.querySelectorAll<HTMLElement>(
+          'button:not([disabled]), input:not([disabled]), [href], [tabindex]:not([tabindex="-1"])',
+        ),
+      );
+      if (!focusable.length) return;
+      const first = focusable[0];
+      const last = focusable[focusable.length - 1];
+      if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault();
+        first.focus();
+      }
+    };
+    dialog.addEventListener("keydown", trapFocus);
+    return () => dialog.removeEventListener("keydown", trapFocus);
+  }, [results.length]);
   return (
     <div className="modal-wrap" onMouseDown={close}>
-      <div className="command" onMouseDown={(e) => e.stopPropagation()}>
+      <div
+        ref={dialogRef}
+        className="command"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="command-title"
+        onMouseDown={(e) => e.stopPropagation()}
+      >
         <div>
           <Icons.Search />
+          <span className="sr-only" id="command-title">Search workspace</span>
           <input
             autoFocus
             value={q}
             onChange={(e) => setQ(e.target.value)}
             placeholder="Search pages, tickets and projects…"
+            aria-label="Search pages"
           />
           <kbd>ESC</kbd>
+          <button
+            className="icon-btn command-close"
+            onClick={close}
+            aria-label="Close search"
+          >
+            <Icons.X />
+          </button>
         </div>
         <p>QUICK NAVIGATION</p>
-        {all
-          .filter((x) => x[2].toLowerCase().includes(q.toLowerCase()))
-          .slice(0, 8)
-          .map(([p, i, l]) => {
+        {results.map(([p, i, l]) => {
             const Icon = (Icons as any)[i];
             return (
               <button
@@ -366,6 +523,13 @@ function Command({
               </button>
             );
           })}
+        {results.length === 0 && (
+          <div className="command-empty">
+            <Icons.SearchX />
+            <b>No pages found</b>
+            <span>Try a different page name.</span>
+          </div>
+        )}
       </div>
     </div>
   );
@@ -529,7 +693,13 @@ function AiAgentPanel({ open, onClose, toast }: { open: boolean; onClose: () => 
   return (
     <>
       <div className="ai-panel-backdrop" onClick={onClose} />
-      <aside className="ai-panel">
+      <aside
+        className="ai-panel"
+        id="ai-agent-panel"
+        role="dialog"
+        aria-modal="true"
+        aria-label="AI Agent"
+      >
         <div className="ai-panel-head">
           <div className="ai-panel-icon"><Icons.Bot size={20} /></div>
           <div>
@@ -1508,6 +1678,10 @@ function Board({
     if (bulkPriority) update.priority = bulkPriority;
     if (bulkAssignee) update.assignee = bulkAssignee;
     if (bulkSprint) update.sprint = bulkSprint;
+    if (!Object.keys(update).length) {
+      toast("Choose at least one bulk change first");
+      return;
+    }
 
     try {
       await mutate(() =>
@@ -1630,7 +1804,11 @@ function Board({
               </option>
             ))}
           </select>
-          <button className="btn primary" onClick={handleBulkUpdate}>
+          <button
+            className="btn primary"
+            onClick={handleBulkUpdate}
+            disabled={!bulkStatus && !bulkPriority && !bulkAssignee && !bulkSprint}
+          >
             Apply
           </button>
           <button className="btn" onClick={() => setSelectedTickets([])}>
@@ -2605,7 +2783,7 @@ function Team() {
       toast(
         "Invitation link resent: " +
           (res.inviteToken
-            ? `itrack.app/accept-invite?token=${res.inviteToken}`
+            ? `${window.location.origin}/accept-invite?token=${res.inviteToken}`
             : "Success"),
       );
       await refetch();
@@ -2970,6 +3148,11 @@ function Reports() {
           chartVelocityData.length,
       )
     : 0;
+  const statusSummary = (["Backlog", "To Do", "In Progress", "In Review", "Done"] as const).map((status) => ({
+    status,
+    count: filteredTickets.filter((ticket) => ticket.status === status).length,
+  }));
+  const blockedTickets = filteredTickets.filter((ticket) => ticket.blocked);
 
   const downloadJSON = () => {
     const dataToDownload = {
@@ -3082,86 +3265,95 @@ function Reports() {
         </label>
       </div>
 
-      <div className="metrics compact">
-        <article className="metric">
-          <div>
-            <span>Avg. velocity</span>
-            <strong>{avgVelocity}</strong>
-            <small>points completed</small>
+      {tab === "Overview" && (
+        <>
+          <div className="metrics compact">
+            <article className="metric"><div><span>Avg. velocity</span><strong>{avgVelocity}</strong><small>points completed</small></div></article>
+            <article className="metric"><div><span>Completion rate</span><strong>{completionRate}%</strong><small>of total scope</small></div></article>
+            <article className="metric"><div><span>Cycle time</span><strong>{report?.cycleTime ?? 0}d</strong><small>average duration</small></div></article>
+            <article className="metric"><div><span>Blocked duration</span><strong>{blockedCount * 3}d</strong><small>estimated delay</small></div></article>
           </div>
-        </article>
-        <article className="metric">
-          <div>
-            <span>Completion rate</span>
-            <strong>{completionRate}%</strong>
-            <small>of total scope</small>
+          <section className="card">
+            <CardTitle title="Missing Jira-like features" sub="Prioritized product gaps still outside this prototype" />
+            <div className="missing-feature-grid">
+              {(report?.missingFeatures || []).map((feature: any) => (
+                <article key={feature.name} className="missing-feature">
+                  <span><Badge tone={feature.priority}>{fmt(feature.priority)}</Badge><small>{feature.area}</small></span>
+                  <b>{feature.name}</b>
+                  <p>{fmt(feature.status)}</p>
+                </article>
+              ))}
+            </div>
+          </section>
+          <div className="two-col">
+            <section className="card">
+              <CardTitle title="Sprint velocity" sub="Completed story points per sprint" />
+              <div className="chart"><ResponsiveContainer><BarChart data={chartVelocityData}><CartesianGrid vertical={false} /><XAxis dataKey="n" /><YAxis /><Tooltip /><Bar dataKey="v" fill="#A47BEF" radius={[6, 6, 0, 0]} /></BarChart></ResponsiveContainer></div>
+            </section>
+            <section className="card">
+              <CardTitle title="Risk trend" sub="Sprint risk score over time" />
+              <div className="chart"><ResponsiveContainer><AreaChart data={chartRiskData}><XAxis dataKey="n" /><YAxis /><Tooltip /><Area dataKey="v" stroke="#F28C28" fill="#F28C2833" strokeWidth={3} /></AreaChart></ResponsiveContainer></div>
+            </section>
           </div>
-        </article>
-        <article className="metric">
-          <div>
-            <span>Cycle time</span>
-            <strong>{report?.cycleTime ?? 0}d</strong>
-            <small>average duration</small>
-          </div>
-        </article>
-        <article className="metric">
-          <div>
-            <span>Blocked duration</span>
-            <strong>{blockedCount * 3}d</strong>
-            <small>estimated delay</small>
-          </div>
-        </article>
-      </div>
-      <section className="card">
-        <CardTitle title="Missing Jira-like features" sub="Prioritized product gaps still outside this prototype" />
-        <div className="missing-feature-grid">
-          {(report?.missingFeatures || []).map((feature: any) => (
-            <article key={feature.name} className="missing-feature">
-              <span><Badge tone={feature.priority}>{fmt(feature.priority)}</Badge><small>{feature.area}</small></span>
-              <b>{feature.name}</b>
-              <p>{fmt(feature.status)}</p>
-            </article>
-          ))}
-        </div>
-      </section>
+        </>
+      )}
 
-      <div className="two-col">
+      {tab === "Velocity" && (
+        <div className="two-col">
+          <section className="card">
+            <CardTitle title="Velocity by sprint" sub="Completed story points" />
+            <div className="chart"><ResponsiveContainer><BarChart data={chartVelocityData}><CartesianGrid vertical={false} /><XAxis dataKey="n" /><YAxis /><Tooltip /><Bar dataKey="v" fill="#A47BEF" radius={[6, 6, 0, 0]} /></BarChart></ResponsiveContainer></div>
+          </section>
+          <section className="card">
+            <CardTitle title="Velocity detail" sub={`${filteredSprints.length} sprints in the selected range`} />
+            <div className="timeline">
+              {filteredSprints.length ? filteredSprints.map((s: any) => (
+                <div key={s._id}><i className="done" /><span><b>{s.name}</b><small>{s.completedPoints || 0} completed of {s.plannedPoints || 0} points</small></span></div>
+              )) : <p>No sprints match the selected filters.</p>}
+            </div>
+          </section>
+        </div>
+      )}
+
+      {tab === "Delivery" && (
+        <>
+          <div className="metrics compact">
+            <article className="metric"><div><span>Total tickets</span><strong>{filteredTickets.length}</strong><small>in selected scope</small></div></article>
+            <article className="metric"><div><span>Completed</span><strong>{doneCount}</strong><small>marked done</small></div></article>
+            <article className="metric"><div><span>Completion rate</span><strong>{completionRate}%</strong><small>of selected tickets</small></div></article>
+            <article className="metric"><div><span>Cycle time</span><strong>{report?.cycleTime ?? 0}d</strong><small>average duration</small></div></article>
+          </div>
+          <div className="two-col">
+            <section className="card">
+              <CardTitle title="Delivery status" sub="Current ticket distribution" />
+              <div className="timeline">{statusSummary.map(({ status, count }) => <div key={status}><i className={status === "Done" ? "done" : ""} /><span><b>{status}</b><small>{count} tickets</small></span></div>)}</div>
+            </section>
+            <section className="card no-pad"><CardTitle title="Delivery queue" sub="Filtered tickets in the selected scope" /><TicketTable rows={filteredTickets} /></section>
+          </div>
+        </>
+      )}
+
+      {tab === "Workload" && (
         <section className="card">
-          <CardTitle
-            title="Sprint velocity"
-            sub="Completed story points per sprint"
-          />
-          <div className="chart">
-            <ResponsiveContainer>
-              <BarChart data={chartVelocityData}>
-                <CartesianGrid vertical={false} />
-                <XAxis dataKey="n" />
-                <YAxis />
-                <Tooltip />
-                <Bar dataKey="v" fill="#A47BEF" radius={[6, 6, 0, 0]} />
-              </BarChart>
-            </ResponsiveContainer>
+          <CardTitle title="Team workload" sub="Capacity signals for workspace members" />
+          <div className="workloads">
+            {users.length ? users.map((user: any) => {
+              const load = user.capacity ? Math.min(100, Math.round((user.capacity / 40) * 100)) : 0;
+              return <div key={user._id}><Avatar name={user.name} color={user.avatarColor} /><span><b>{user.name}</b><small>{user.role}</small></span><Progress value={load} tone={load > 80 ? "orange" : "purple"} /><strong>{load}%</strong></div>;
+            }) : <p>No team members match the selected filters.</p>}
           </div>
         </section>
-        <section className="card">
-          <CardTitle title="Risk trend" sub="Sprint risk score over time" />
-          <div className="chart">
-            <ResponsiveContainer>
-              <AreaChart data={chartRiskData}>
-                <XAxis dataKey="n" />
-                <YAxis />
-                <Tooltip />
-                <Area
-                  dataKey="v"
-                  stroke="#F28C28"
-                  fill="#F28C2833"
-                  strokeWidth={3}
-                />
-              </AreaChart>
-            </ResponsiveContainer>
-          </div>
-        </section>
-      </div>
+      )}
+
+      {tab === "Risk" && (
+        <div className="two-col">
+          <section className="card">
+            <CardTitle title="Risk trend" sub="Sprint risk score over time" />
+            <div className="chart"><ResponsiveContainer><AreaChart data={chartRiskData}><XAxis dataKey="n" /><YAxis /><Tooltip /><Area dataKey="v" stroke="#F28C28" fill="#F28C2833" strokeWidth={3} /></AreaChart></ResponsiveContainer></div>
+          </section>
+          <section className="card no-pad"><CardTitle title="Blocked work" sub={`${blockedTickets.length} blocked ticket${blockedTickets.length === 1 ? "" : "s"}`} /><TicketTable rows={blockedTickets} /></section>
+        </div>
+      )}
     </>
   );
 }
@@ -3213,7 +3405,19 @@ function AIPage({ toast }: { toast: (s: string) => void }) {
       setBusy(false);
     }
   };
+  const updateStory = (index: number, fields: Record<string, unknown>) => {
+    setPlan((current: any) => {
+      if (!current) return current;
+      return {
+        ...current,
+        stories: current.stories.map((story: any, storyIndex: number) =>
+          storyIndex === index ? { ...story, ...fields } : story,
+        ),
+      };
+    });
+  };
   const confirm = async () => {
+    if (!plan?.stories?.length) return toast("Add at least one ticket to the plan");
     const project = dashboard?.projects?.[0],
       sprint = dashboard?.sprints?.[0],
       assignee = dashboard?.users?.[0];
@@ -3341,7 +3545,7 @@ function AIPage({ toast }: { toast: (s: string) => void }) {
               <Badge tone="lime">{plan.stories.length} TICKETS GENERATED</Badge>
               <h2>Review your ticket plan</h2>
             </div>
-            <button className="btn primary" onClick={confirm}>
+            <button className="btn primary" onClick={confirm} disabled={!plan.stories.length}>
               Confirm and create {plan.stories.length} tickets
             </button>
           </div>
@@ -3349,11 +3553,34 @@ function AIPage({ toast }: { toast: (s: string) => void }) {
             <article className="generated-ticket" key={`${t.title}-${i}`}>
               <span>{i + 1}</span>
               <div>
-                <input defaultValue={t.title} />
-                <textarea defaultValue="Implementation details and acceptance criteria generated from your requirement." />
+                <input
+                  value={t.title || ""}
+                  onChange={(event) => updateStory(i, { title: event.target.value })}
+                  aria-label={`Ticket ${i + 1} title`}
+                />
+                <textarea
+                  value={t.description || ""}
+                  onChange={(event) => updateStory(i, { description: event.target.value })}
+                  aria-label={`Ticket ${i + 1} description`}
+                />
                 <div>
-                  <Badge tone={t.priority}>{t.priority}</Badge>
-                  <Badge>{t.storyPoints} points</Badge>
+                  <select
+                    value={t.priority || "medium"}
+                    onChange={(event) => updateStory(i, { priority: event.target.value })}
+                    aria-label={`Ticket ${i + 1} priority`}
+                  >
+                    {(["low", "medium", "high", "critical"] as const).map((priority) => (
+                      <option key={priority} value={priority}>{priority}</option>
+                    ))}
+                  </select>
+                  <input
+                    type="number"
+                    min="1"
+                    max="21"
+                    value={t.storyPoints || 1}
+                    onChange={(event) => updateStory(i, { storyPoints: Number(event.target.value) })}
+                    aria-label={`Ticket ${i + 1} story points`}
+                  />
                   <Badge>{t.labels[0]}</Badge>
                 </div>
               </div>
@@ -3446,6 +3673,10 @@ function Settings({
   const [profColor, setProfColor] = useState(
     currentUser?.avatarColor || "#A47BEF",
   );
+  const [notificationPreferences, setNotificationPreferences] = useState<NotificationPreferences>({
+    ...defaultNotificationPreferences,
+    ...(currentUser?.notificationPreferences || {}),
+  });
 
   // Workspace settings defaults state
   const [riskThreshold, setRiskThreshold] = useState(
@@ -3468,6 +3699,10 @@ function Settings({
       setProfSkills((currentUser.skills || []).join(", "));
       setProfCapacity(currentUser.capacity || 40);
       setProfColor(currentUser.avatarColor || "#A47BEF");
+      setNotificationPreferences({
+        ...defaultNotificationPreferences,
+        ...(currentUser.notificationPreferences || {}),
+      });
     }
   }, [currentUser]);
 
@@ -3523,6 +3758,19 @@ function Settings({
       toast("Workspace settings updated");
     } catch (err) {
       toast(err instanceof Error ? err.message : "Settings save failed");
+    }
+  };
+
+  const savePreferences = async () => {
+    try {
+      await api("/auth/preferences", {
+        method: "PATCH",
+        body: JSON.stringify({ notificationPreferences }),
+      });
+      toast("Preferences saved");
+      await refetch();
+    } catch (err) {
+      toast(err instanceof Error ? err.message : "Preferences save failed");
     }
   };
 
@@ -3651,24 +3899,28 @@ function Settings({
               <section className="card form-card">
                 <CardTitle title="Notifications" />
                 <div className="toggle-list">
-                  {[
-                    "Ticket assignments",
-                    "Mentions and comments",
-                    "Sprint risk alerts",
-                    "Weekly summary",
-                  ].map((x, i) => (
-                    <label key={x}>
+                  {notificationPreferenceOptions.map(({ key, label }) => (
+                    <label key={key}>
                       <span>
-                        <b>{x}</b>
-                        <small>Receive updates about {x.toLowerCase()}.</small>
+                        <b>{label}</b>
+                        <small>Receive updates about {label.toLowerCase()}.</small>
                       </span>
-                      <input type="checkbox" defaultChecked={i < 3} />
+                      <input
+                        type="checkbox"
+                        checked={notificationPreferences[key]}
+                        onChange={(event) =>
+                          setNotificationPreferences((current) => ({
+                            ...current,
+                            [key]: event.target.checked,
+                          }))
+                        }
+                      />
                     </label>
                   ))}
                 </div>
                 <button
                   className="btn primary"
-                  onClick={() => toast("Preferences saved")}
+                  onClick={savePreferences}
                 >
                   Save preferences
                 </button>
@@ -3986,7 +4238,7 @@ function FormPage({
         if (res.inviteToken) {
           window.prompt(
             "Send this invitation link to the user:",
-            `itrack.app/accept-invite?token=${res.inviteToken}`
+            `${window.location.origin}/accept-invite?token=${res.inviteToken}`
           );
         }
       }
@@ -4397,11 +4649,18 @@ function TicketDetailLive({ toast }: { toast: (s: string) => void }) {
   const [desc, setDesc] = useState(raw.description || "");
   const [isEditingTitle, setIsEditingTitle] = useState(false);
   const [isEditingDesc, setIsEditingDesc] = useState(false);
+  const acceptanceCriteria = raw.acceptanceCriteria || [];
+  const [acceptanceCriteriaDone, setAcceptanceCriteriaDone] = useState<boolean[]>(
+    acceptanceCriteria.map((_: string, index: number) => Boolean(raw.acceptanceCriteriaDone?.[index])),
+  );
 
   // Sync state if ticket changes
   useEffect(() => {
     setTitle(raw.title);
     setDesc(raw.description || "");
+    setAcceptanceCriteriaDone(
+      (raw.acceptanceCriteria || []).map((_: string, index: number) => Boolean(raw.acceptanceCriteriaDone?.[index])),
+    );
   }, [raw]);
 
   const updateField = async (fields: any) => {
@@ -4413,8 +4672,21 @@ function TicketDetailLive({ toast }: { toast: (s: string) => void }) {
         }),
       );
       toast("Ticket updated successfully");
+      return true;
     } catch (err) {
       toast(err instanceof Error ? err.message : "Update failed");
+      return false;
+    }
+  };
+
+  const toggleAcceptanceCriterion = async (index: number) => {
+    const previous = acceptanceCriteriaDone;
+    const next = acceptanceCriteria.map((_: string, criterionIndex: number) =>
+      criterionIndex === index ? !Boolean(previous[criterionIndex]) : Boolean(previous[criterionIndex]),
+    );
+    setAcceptanceCriteriaDone(next);
+    if (!(await updateField({ acceptanceCriteriaDone: next }))) {
+      setAcceptanceCriteriaDone(previous);
     }
   };
 
@@ -4702,9 +4974,13 @@ function TicketDetailLive({ toast }: { toast: (s: string) => void }) {
         <section className="ticket-main">
           <div className="card">
             <CardTitle title="Acceptance criteria" />
-            {(raw.acceptanceCriteria || []).map((item: string) => (
+            {acceptanceCriteria.map((item: string, index: number) => (
               <label className="check" key={item}>
-                <input type="checkbox" />
+                <input
+                  type="checkbox"
+                  checked={Boolean(acceptanceCriteriaDone[index])}
+                  onChange={() => void toggleAcceptanceCriterion(index)}
+                />
                 {item}
               </label>
             ))}
@@ -5786,6 +6062,27 @@ function DashboardLive() {
   const recommendation = d.recommendation || {};
   const metrics = [
     [
+      "Blocked tasks",
+      summary.blockedTasks ?? 0,
+      `${tickets.filter((t: any) => t.blocked && t.priority === "critical").length} critical`,
+      "CircleSlash2",
+      "red",
+    ],
+    [
+      "At-risk sprints",
+      summary.atRiskSprints ?? 0,
+      "Risk threshold exceeded",
+      "Activity",
+      "orange",
+    ],
+    [
+      "Sprint health",
+      `${summary.sprintHealth ?? 0}%`,
+      active?.name || "No active sprint",
+      "HeartPulse",
+      "green",
+    ],
+    [
       "Active projects",
       summary.activeProjects ?? 0,
       `${projects.length} total`,
@@ -5799,27 +6096,6 @@ function DashboardLive() {
       "Timer",
       "purple",
     ],
-    [
-      "At-risk sprints",
-      summary.atRiskSprints ?? 0,
-      "Risk threshold exceeded",
-      "Activity",
-      "orange",
-    ],
-    [
-      "Blocked tasks",
-      summary.blockedTasks ?? 0,
-      `${tickets.filter((t: any) => t.blocked && t.priority === "critical").length} critical`,
-      "CircleSlash2",
-      "red",
-    ],
-    [
-      "Sprint health",
-      `${summary.sprintHealth ?? 0}%`,
-      active?.name || "No active sprint",
-      "HeartPulse",
-      "green",
-    ],
   ];
   return (
     <>
@@ -5832,8 +6108,17 @@ function DashboardLive() {
           })
           .toUpperCase()}
         title={`Good morning, ${currentUser?.name?.split(" ")[0] || "there"}`}
-        desc={`Live delivery data from ${organization?.name || "Workspace"}.`}
-      />
+        desc={`Live delivery data from ${organization?.name || "Workspace"}. Start with risks and blocked work.`}
+      >
+        <NavLink className="btn" to="/my-work">
+          <Icons.CircleUserRound />
+          View my work
+        </NavLink>
+        <NavLink className="btn primary" to="/tickets/new">
+          <Icons.Plus />
+          New ticket
+        </NavLink>
+      </PageHead>
       <div className="metrics">
         {metrics.map(([label, value, sub, icon, tone]) => {
           const Icon = (Icons as any)[String(icon)];
@@ -6035,8 +6320,12 @@ function LandingPage() {
 
 function AuthPageLive({ type }: { type: string }) {
   const nav = useNavigate();
+  const [searchParams] = useSearchParams();
   const [error, setError] = useState("");
+  const [resetLink, setResetLink] = useState("");
   const [busy, setBusy] = useState(false);
+  const token = searchParams.get("token") || "";
+  const tokenFlow = type === "reset-password" || type === "accept-invite";
   const titles: Record<string, string> = {
     login: "Welcome back",
     register: "Create your workspace",
@@ -6048,6 +6337,7 @@ function AuthPageLive({ type }: { type: string }) {
     e.preventDefault();
     setBusy(true);
     setError("");
+    setResetLink("");
     const data = new FormData(e.currentTarget);
     try {
       if (type === "login") {
@@ -6073,16 +6363,38 @@ function AuthPageLive({ type }: { type: string }) {
         return;
       }
       if (type === "forgot-password") {
-        await api("/auth/forgot-password", {
+        const result = await api<{ resetToken?: string }>("/auth/forgot-password", {
           method: "POST",
           body: JSON.stringify({ email: data.get("email") }),
         });
         setError("If the account exists, reset instructions were created.");
+        if (result.resetToken) {
+          setResetLink(`${window.location.origin}/reset-password?token=${encodeURIComponent(result.resetToken)}`);
+        }
         return;
       }
-      setError(
-        "Open this page using the token from your invitation or password-reset link.",
-      );
+      if (!token) throw new Error("Open this page using the token from your invitation or password-reset link.");
+      const password = String(data.get("password") || "");
+      if (password !== String(data.get("confirmPassword") || "")) {
+        throw new Error("Passwords do not match");
+      }
+      if (type === "reset-password") {
+        await api("/auth/reset-password", {
+          method: "POST",
+          body: JSON.stringify({ token, password }),
+        });
+        nav("/login");
+        return;
+      }
+      const session = await api<any>("/auth/accept-invite", {
+        method: "POST",
+        body: JSON.stringify({ token, password, name: data.get("name") || undefined }),
+      });
+      localStorage.setItem("itrack_token", session.token);
+      localStorage.setItem("itrack_refresh_token", session.refreshToken);
+      nav("/dashboard");
+      location.reload();
+      return;
     } catch (err) {
       setError(err instanceof Error ? err.message : "Request failed");
     } finally {
@@ -6122,7 +6434,9 @@ function AuthPageLive({ type }: { type: string }) {
           <p>
             {type === "login"
               ? "Sign in to load your workspace data."
-              : "Complete the details below to continue."}
+              : tokenFlow
+                ? "Use the secure link you received to finish setup."
+                : "Complete the details below to continue."}
           </p>
           {type === "register" && (
             <>
@@ -6136,15 +6450,23 @@ function AuthPageLive({ type }: { type: string }) {
               </label>
             </>
           )}
-          <label className="field">
-            <span>Email address</span>
-            <input
-              name="email"
-              type="email"
-              defaultValue={type === "login" ? "maya@itrack.dev" : ""}
-              required
-            />
-          </label>
+          {type === "accept-invite" && (
+            <label className="field">
+              <span>Full name</span>
+              <input name="name" minLength={2} required />
+            </label>
+          )}
+          {!tokenFlow && (
+            <label className="field">
+              <span>Email address</span>
+              <input
+                name="email"
+                type="email"
+                defaultValue={type === "login" ? "maya@itrack.dev" : ""}
+                required
+              />
+            </label>
+          )}
           {type !== "forgot-password" && (
             <label className="field">
               <span>Password</span>
@@ -6157,6 +6479,17 @@ function AuthPageLive({ type }: { type: string }) {
               />
             </label>
           )}
+          {tokenFlow && (
+            <label className="field">
+              <span>Confirm password</span>
+              <input name="confirmPassword" type="password" minLength={8} required />
+            </label>
+          )}
+          {tokenFlow && !token && (
+            <div className="auth-message">
+              Open this page using the token from your invitation or password-reset link.
+            </div>
+          )}
           {error && (
             <div
               className={cx(
@@ -6167,13 +6500,22 @@ function AuthPageLive({ type }: { type: string }) {
               {error}
             </div>
           )}
-          <button className="btn primary wide" disabled={busy}>
+          {resetLink && (
+            <a className="auth-switch" href={resetLink}>
+              Open password reset page
+            </a>
+          )}
+          <button className="btn primary wide" disabled={busy || (tokenFlow && !token)}>
             {busy
               ? "Please wait…"
               : type === "login"
                 ? "Sign in"
                 : type === "forgot-password"
                   ? "Send reset instructions"
+                  : type === "reset-password"
+                    ? "Set new password"
+                    : type === "accept-invite"
+                      ? "Accept invitation"
                   : "Continue"}
           </button>
           {type === "login" && (

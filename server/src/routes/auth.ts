@@ -12,6 +12,12 @@ import { User } from "../models/User.js";
 const router = Router();
 const credentials = z.object({ email: z.string().email(), password: z.string().min(8) });
 const registerSchema = credentials.extend({ name: z.string().min(2), organizationName: z.string().min(2) });
+const notificationPreferencesSchema = z.object({
+  ticketAssignments: z.boolean(),
+  mentionsAndComments: z.boolean(),
+  sprintRiskAlerts: z.boolean(),
+  weeklySummary: z.boolean(),
+});
 
 function slugify(value: string) {
   return value.toLowerCase().trim().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "").slice(0, 48) || "workspace";
@@ -41,6 +47,7 @@ function publicUser(user: Awaited<ReturnType<typeof User.findOne>>) {
     availability: user.availability,
     capacity: user.capacity,
     avatarColor: user.avatarColor,
+    notificationPreferences: user.notificationPreferences,
   };
 }
 
@@ -167,6 +174,17 @@ router.post("/change-password", requireAuth, async (req: AuthRequest, res) => {
   user.passwordHash = await bcrypt.hash(parsed.data.newPassword, 10); await user.save();
   await Session.updateMany({ user: user._id, revokedAt: { $exists: false } }, { revokedAt: new Date() });
   return res.json({ ok: true });
+});
+
+router.patch("/preferences", requireAuth, async (req: AuthRequest, res) => {
+  const parsed = z.object({ notificationPreferences: notificationPreferencesSchema }).safeParse(req.body);
+  if (!parsed.success) return res.status(400).json({ message: "Notification preferences are invalid" });
+  const user = await User.findByIdAndUpdate(
+    req.user!.userId,
+    { notificationPreferences: parsed.data.notificationPreferences },
+    { new: true },
+  );
+  return user ? res.json({ user: publicUser(user) }) : res.status(404).json({ message: "User not found" });
 });
 
 router.get("/sessions", requireAuth, async (req: AuthRequest, res) => res.json({ sessions: await Session.find({ user: req.user!.userId, revokedAt: { $exists: false } }).select("-tokenHash") }));

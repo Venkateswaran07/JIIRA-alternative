@@ -47,6 +47,7 @@ export function FilterBar({ placeholder = "Search…" }: { placeholder?: string 
           set("filter", params.get("filter") === "open" ? "" : "open")
         }
         aria-pressed={params.get("filter") === "open"}
+        title="Show open items only"
       >
         <Icons.SlidersHorizontal />
         Filter
@@ -58,7 +59,7 @@ export function FilterBar({ placeholder = "Search…" }: { placeholder?: string 
         }
       >
         <Icons.ArrowUpDown />
-        Sort
+        Sort {params.get("sort") === "desc" ? "newest" : "oldest"}
       </button>
       <button
         className="icon-btn"
@@ -66,6 +67,8 @@ export function FilterBar({ placeholder = "Search…" }: { placeholder?: string 
           set("view", params.get("view") === "grid" ? "list" : "grid")
         }
         aria-label="Toggle layout"
+        aria-pressed={params.get("view") === "grid"}
+        title={params.get("view") === "grid" ? "Use list view" : "Use grid view"}
       >
         {params.get("view") === "grid" ? <Icons.List /> : <Icons.LayoutGrid />}
       </button>
@@ -83,7 +86,7 @@ export function Badge({
 }
 export function Avatar({ name, color }: { name: string; color?: string }) {
   return (
-    <span className="avatar" style={{ background: color }}>
+    <span className="avatar" style={{ background: color }} aria-hidden="true">
       {name
         .split(" ")
         .map((s) => s[0])
@@ -100,7 +103,14 @@ export function Progress({
   tone?: string;
 }) {
   return (
-    <div className={`progress ${tone}`}>
+    <div
+      className={`progress ${tone}`}
+      role="progressbar"
+      aria-label="Progress"
+      aria-valuemin={0}
+      aria-valuemax={100}
+      aria-valuenow={Math.max(0, Math.min(100, value))}
+    >
       <i style={{ width: `${value}%` }} />
     </div>
   );

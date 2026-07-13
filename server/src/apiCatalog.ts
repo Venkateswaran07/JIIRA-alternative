@@ -2,7 +2,7 @@ export const apiCatalog = {
   version: "1.0.0",
   basePath: "/api/v1",
   groups: {
-    auth: ["POST /auth/register", "POST /auth/login", "POST /auth/refresh", "POST /auth/logout", "GET /auth/me", "POST /auth/forgot-password", "POST /auth/reset-password", "POST /auth/change-password", "POST /auth/accept-invite", "GET /auth/sessions", "DELETE /auth/sessions/:id"],
+    auth: ["POST /auth/register", "POST /auth/login", "POST /auth/refresh", "POST /auth/logout", "GET /auth/me", "POST /auth/forgot-password", "POST /auth/reset-password", "POST /auth/change-password", "PATCH /auth/preferences", "POST /auth/accept-invite", "GET /auth/sessions", "DELETE /auth/sessions/:id"],
     users: ["GET /users", "GET /users/:id", "PATCH /users/:id", "POST /users/:id/deactivate", "POST /users/:id/reactivate", "DELETE /users/:id", "POST /invitations", "POST /invitations/:userId/resend", "DELETE /invitations/:userId"],
     projects: ["GET /projects", "POST /projects", "GET /projects/:id", "PATCH /projects/:id", "DELETE /projects/:id", "PUT /projects/:id/members", "POST /projects/:id/archive", "POST /projects/:id/restore"],
     planning: ["GET /backlog", "GET /sprints", "POST /sprints", "PATCH /sprints/:id", "DELETE /sprints/:id", "POST /sprints/:id/start", "POST /sprints/:id/complete", "POST /sprints/:id/reopen", "GET /cycles", "POST /cycles", "GET /cycles/:id", "PATCH /cycles/:id", "DELETE /cycles/:id"],

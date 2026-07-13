@@ -10,6 +10,7 @@ export interface ITicket {
   title: string;
   description: string;
   acceptanceCriteria: string[];
+  acceptanceCriteriaDone?: boolean[];
   status: TicketStatus;
   priority: TicketPriority;
   storyPoints: number;
@@ -47,6 +48,7 @@ const ticketSchema = new Schema<ITicket>(
     title: { type: String, required: true },
     description: { type: String, required: true },
     acceptanceCriteria: [{ type: String }],
+    acceptanceCriteriaDone: { type: [Boolean], default: [] },
     status: { type: String, required: true },
     priority: { type: String, required: true },
     storyPoints: { type: Number, required: true },
