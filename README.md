@@ -28,9 +28,13 @@ Do not put API keys in the client env file.
 
 ## Run
 
-Start MongoDB locally, then seed demo data:
+Start MongoDB locally using the provided memory server script, then seed the demo data:
 
 ```powershell
+# Open a new terminal and leave this running:
+node run-mongo.js
+
+# In your main terminal, seed the database:
 npm run seed
 ```
 
