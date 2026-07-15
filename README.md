@@ -2,6 +2,15 @@
 
 I-TRACK is a split MERN prototype for explainable sprint intelligence. The repo contains a React/Vite client and an Express/MongoDB API with JWT auth, deterministic risk calculations, seeded demo data, and server-side OpenAI-compatible Chat Completions integration.
 
+## Features
+
+- **Sprint Intelligence Dashboard**: Real-time evaluation of delivery risk, tracking blockers, and identifying at-risk sprints using deterministic risk calculations.
+- **Automated SLA Tracking**: Tracks Service Level Agreements (SLAs) based on priority. Predicts likely breaches using velocity and provides warnings for SLA risks and critical breaches.
+- **Hierarchy Progress**: Links tickets in parent-child relationships (e.g., Epics, Stories, Tasks). Tracks weighted completion progress using story points and auto-completes parent tickets when all children are done.
+- **Team Compatibility & Workload**: Evaluates skill gaps by matching required ticket skills against developer skills, and monitors workload capacity to prevent burnout.
+- **AI Integration**: Uses OpenAI-compatible endpoints to intelligently generate tickets and answer queries based on workspace context like SLAs and skill constraints.
+- **Role-Based Access Control**: Secure JWT-based authentication distinguishing between admin, manager, engineer, and designer roles.
+
 ## Stack
 
 - Client: React, Vite, TypeScript, Tailwind CSS, Lucide React, Recharts, React Flow, TanStack Query, Zustand, Framer Motion, Sonner.
