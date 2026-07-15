@@ -90,6 +90,57 @@ router.delete("/tickets/:id/attachments/:attachmentId", async (req: AuthRequest,
 router.delete("/tickets/:id", requireRole(["admin", "manager"]), async (req: AuthRequest, res) => { const ticket = await Ticket.findOneAndDelete({ _id: req.params.id, organization: oid(req) }); return ticket ? res.status(204).send() : res.status(404).json({ message: "Ticket not found" }); });
 router.post("/tickets/:id/clone", requireRole(["admin", "manager"]), async (req: AuthRequest, res) => { const source = await Ticket.findOne({ _id: req.params.id, organization: oid(req) }).lean(); if (!source) return res.status(404).json({ message: "Ticket not found" }); const project = await Project.findById(source.project); const counter = await Counter.findOneAndUpdate({ organization: oid(req), scope: `ticket:${source.project}` }, { $inc: { value: 1 } }, { upsert: true, new: true, setDefaultsOnInsert: true }); const { _id, createdAt, updatedAt, ...copy } = source as typeof source & { createdAt?: Date; updatedAt?: Date }; const ticket = await Ticket.create({ ...copy, title: `${source.title} (copy)`, ticketId: `${project?.key}-${counter.value}`, history: [{ event: "Cloned", createdAt: new Date() }] }); return res.status(201).json({ ticket }); });
 
+// ── Hierarchy endpoints (children never stored — always queried dynamically) ──
+
+/** GET /tickets/:id/children — direct children of a task */
+router.get("/tickets/:id/children", async (req: AuthRequest, res) => {
+  const children = await Ticket.find({ parentTaskId: req.params.id, organization: oid(req) }).sort("rank");
+  return res.json({ children });
+});
+
+/** GET /tickets/:id/tree — full recursive subtree (max depth 10) */
+router.get("/tickets/:id/tree", async (req: AuthRequest, res) => {
+  async function buildTree(id: string, depth: number): Promise<any[]> {
+    if (depth > 10) return [];
+    const children = await Ticket.find({ parentTaskId: id, organization: oid(req) }).lean();
+    return Promise.all(children.map(async c => ({
+      ...c,
+      children: await buildTree(String(c._id), depth + 1),
+    })));
+  }
+  const root = await Ticket.findOne({ _id: req.params.id, organization: oid(req) }).lean();
+  if (!root) return res.status(404).json({ message: "Ticket not found" });
+  const tree = { ...root, children: await buildTree(String(req.params.id), 1) };
+  return res.json({ tree });
+});
+
+/** GET /tickets/:id/ancestors — full parent chain */
+router.get("/tickets/:id/ancestors", async (req: AuthRequest, res) => {
+  const ancestors: any[] = [];
+  let current = await Ticket.findOne({ _id: req.params.id, organization: oid(req) }).lean();
+  const visited = new Set<string>();
+  while (current?.parentTaskId && !visited.has(String(current._id))) {
+    visited.add(String(current._id));
+    const parent = await Ticket.findOne({ _id: current.parentTaskId, organization: oid(req) }).lean();
+    if (!parent) break;
+    ancestors.unshift(parent);
+    current = parent;
+  }
+  return res.json({ ancestors });
+});
+
+/** PATCH /tickets/:id/parent — move task to new parent or remove parent */
+router.patch("/tickets/:id/parent", requireRole(["admin", "manager"]), async (req: AuthRequest, res) => {
+  const parsed = z.object({ parentTaskId: z.string().nullable() }).safeParse(req.body);
+  if (!parsed.success) return res.status(400).json({ message: "parentTaskId must be a string or null" });
+  const update = parsed.data.parentTaskId
+    ? { parentTaskId: parsed.data.parentTaskId, $push: { history: { event: `Moved under parent ${parsed.data.parentTaskId}`, createdAt: new Date() } } }
+    : { $unset: { parentTaskId: 1 }, $push: { history: { event: "Removed from parent — now a root task", createdAt: new Date() } } };
+  const ticket = await Ticket.findOneAndUpdate({ _id: req.params.id, organization: oid(req) }, update, { new: true });
+  if (!ticket) return res.status(404).json({ message: "Ticket not found" });
+  return res.json({ ticket });
+});
+
 router.route("/resources/:kind").get(async (req: AuthRequest, res) => { const kind = String(req.params.kind); if (!resourceKinds.includes(kind as never)) return res.status(404).json({ message: "Resource kind not found" }); return res.json({ resources: await Resources.find({ organization: oid(req), kind, ...(req.query.project ? { project: String(req.query.project) } : {}) }).sort("order name") }); }).post(requireRole(["admin", "manager"]), async (req: AuthRequest, res) => { const kind = String(req.params.kind); if (!resourceKinds.includes(kind as never)) return res.status(404).json({ message: "Resource kind not found" }); const body = parseOr400(z.object({ name: z.string().min(1), project: z.string().optional(), key: z.string().optional(), description: z.string().default(""), status: z.string().default("active"), order: z.number().default(0), config: z.record(z.string(), z.unknown()).default({}) }), req.body, res); if (!body) return; if (body.project && !(await Project.exists({ _id: body.project, organization: oid(req) }))) return res.status(404).json({ message: "Project not found" }); const resource = await Resources.create({ ...body, kind, organization: oid(req) }); return res.status(201).json({ resource }); });
 router.route("/resources/:kind/:id").get(async (req: AuthRequest, res) => { const resource = await Resources.findOne({ _id: String(req.params.id), organization: oid(req), kind: String(req.params.kind) }); return resource ? res.json({ resource }) : res.status(404).json({ message: "Resource not found" }); }).patch(requireRole(["admin", "manager"]), async (req: AuthRequest, res) => { const resource = await Resources.findOneAndUpdate({ _id: String(req.params.id), organization: oid(req), kind: String(req.params.kind) }, req.body, { new: true, runValidators: true }); return resource ? res.json({ resource }) : res.status(404).json({ message: "Resource not found" }); }).delete(requireRole(["admin", "manager"]), async (req: AuthRequest, res) => { const resource = await Resources.findOneAndDelete({ _id: String(req.params.id), organization: oid(req), kind: String(req.params.kind) }); return resource ? res.status(204).send() : res.status(404).json({ message: "Resource not found" }); });
 

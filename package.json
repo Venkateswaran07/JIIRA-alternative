@@ -13,6 +13,7 @@
     "start": "concurrently \"npm run dev:server\" \"npm run dev:client\""
   },
   "devDependencies": {
-    "concurrently": "^10.0.3"
+    "concurrently": "^10.0.3",
+    "mongodb-memory-server": "^11.2.0"
   }
 }

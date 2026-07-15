@@ -7,7 +7,7 @@ import { Organization } from "../models/Organization.js";
 import { Counter } from "../models/Counter.js";
 import { Project } from "../models/Project.js";
 import { Sprint } from "../models/Sprint.js";
-import { Ticket, type TicketStatus } from "../models/Ticket.js";
+import { Ticket, type TicketStatus, slaHoursForPriority, computeSlaStatus, predictSlaLikely } from "../models/Ticket.js";
 import { User } from "../models/User.js";
 
 const router = Router();
@@ -70,6 +70,8 @@ const ticketSchema = z.object({
   dueDate: z.coerce.date(),
   blocked: z.boolean().default(false),
   dependencies: z.array(z.string()).default([]),
+  parentTaskId: z.string().nullable().optional(),
+  requiredSkills: z.array(z.string()).default([]),
 });
 
 const teamSchema = z.object({
@@ -117,6 +119,43 @@ router.get("/dashboard", async (req: AuthRequest, res) => {
   ]);
   const activeSprint = sprints.find((sprint) => sprint.status === "active") ?? sprints[0];
   const blockedTickets = tickets.filter((ticket) => ticket.blocked);
+
+  // SLA health computation
+  const avgVelocity = activeSprint?.velocityHistory?.length
+    ? activeSprint.velocityHistory.reduce((a: number, b: number) => a + b, 0) / activeSprint.velocityHistory.length : 0;
+  const sprintDays = activeSprint
+    ? Math.max(1, Math.round((new Date(activeSprint.endDate).getTime() - new Date(activeSprint.startDate).getTime()) / 86_400_000)) : 14;
+  const dailyVelocityPoints = avgVelocity / sprintDays;
+
+  let slaOnTrack = 0, slaNearBreach = 0, slaLikelyBreach = 0, slaBreached = 0, slaCriticalBreaches = 0;
+  (tickets as any[]).forEach(t => {
+    const createdAt: Date = t.createdAt ?? new Date();
+    const slaHours = t.slaHours ?? slaHoursForPriority(t.priority);
+    const status = computeSlaStatus(createdAt, slaHours, t.completedTime);
+    const likelyBreach = status === "on_track" && predictSlaLikely({ createdAt, slaHours, remainingPoints: t.storyPoints, dailyVelocityPoints, completedTime: t.completedTime });
+    const effectiveStatus = likelyBreach ? "likely_breach" : status;
+    if (effectiveStatus === "on_track") slaOnTrack++;
+    else if (effectiveStatus === "near_breach") slaNearBreach++;
+    else if (effectiveStatus === "likely_breach") slaLikelyBreach++;
+    else if (effectiveStatus === "breached") { slaBreached++; if (t.priority === "critical") slaCriticalBreaches++; }
+  });
+
+  // Hierarchy progress — % of root tickets (no parentTaskId) with all children done
+  const rootTickets = (tickets as any[]).filter(t => !t.parentTaskId);
+  const totalRootPoints = rootTickets.reduce((s, t) => s + (t.storyPoints || 0), 0);
+  const completedRootPoints = rootTickets.filter(t => t.status === "Done").reduce((s, t) => s + (t.storyPoints || 0), 0);
+  const hierarchyProgressPct = totalRootPoints > 0
+    ? Math.round((completedRootPoints / totalRootPoints) * 100) : 0;
+
+  // Team compatibility summary — tickets where requiredSkills exist but aren't covered
+  const incompatibleCount = (tickets as any[]).filter(t => {
+    if (!t.requiredSkills?.length || !t.assignee) return false;
+    const devSkills: string[] = (t.assignee as any)?.skills ?? [];
+    const match = t.requiredSkills.filter((s: string) => devSkills.map((x: string) => x.toLowerCase()).includes(s.toLowerCase())).length;
+    const pct = (match / t.requiredSkills.length) * 100;
+    return pct < 60;
+  }).length;
+
   return res.json({
     summary: {
       activeProjects: projects.length,
@@ -125,6 +164,9 @@ router.get("/dashboard", async (req: AuthRequest, res) => {
       blockedTasks: blockedTickets.length,
       sprintHealth: activeSprint ? 100 - activeSprint.riskScore : 0,
     },
+    slaHealth: { onTrack: slaOnTrack, nearBreach: slaNearBreach, likelyBreach: slaLikelyBreach, breached: slaBreached, criticalBreaches: slaCriticalBreaches },
+    hierarchyProgress: { progressPercent: hierarchyProgressPct, totalRootTasks: rootTickets.length },
+    teamCompatibility: { incompatibleAssignments: incompatibleCount, totalAssigned: (tickets as any[]).filter(t => t.assignee).length },
     projects,
     sprints,
     tickets,
@@ -146,12 +188,17 @@ router.get("/dashboard", async (req: AuthRequest, res) => {
       ],
     },
     recommendation: {
-      title: blockedTickets.length ? "Resolve blockers before scope grows" : "Keep capacity inside the sprint plan",
-      body: blockedTickets.length ? "Blocked work is increasing deterministic sprint risk. Reassign or defer dependency-heavy tickets first." : "Current workspace data is healthy; keep planned points aligned with available capacity.",
-      confidence: blockedTickets.length ? 82 : 74,
+      title: blockedTickets.length ? "Resolve blockers before scope grows" : slaBreached > 0 ? "Address SLA breaches urgently" : "Keep capacity inside the sprint plan",
+      body: blockedTickets.length
+        ? "Blocked work is increasing deterministic sprint risk. Reassign or defer dependency-heavy tickets first."
+        : slaBreached > 0
+          ? `${slaBreached} ticket(s) have breached SLA. Prioritize resolution to maintain service commitments.`
+          : "Current workspace data is healthy; keep planned points aligned with available capacity.",
+      confidence: blockedTickets.length ? 82 : slaBreached > 0 ? 88 : 74,
     },
   });
 });
+
 
 router.route("/projects")
   .get(async (req: AuthRequest, res) => {
@@ -235,7 +282,20 @@ router.route("/tickets")
       Sprint.exists({ _id: body.sprint, organization: orgId(req) }),
     ]);
     if (!assignee || !project || !sprint) return res.status(404).json({ message: "Assignee, project, or sprint not found" });
-    const ticket = await Ticket.create({ ...body, organization: orgId(req), reporter: userId(req), ticketId: await nextTicketId(req, body.project), history: [{ event: "Created", createdAt: new Date() }] });
+    if (body.parentTaskId) {
+      const parentTicket = await Ticket.findOne({ organization: orgId(req), $or: [{ ticketId: body.parentTaskId }, ...(body.parentTaskId.length === 24 ? [{ _id: body.parentTaskId }] : [])] });
+      if (!parentTicket) return res.status(400).json({ message: "Parent ticket not found" });
+      body.parentTaskId = parentTicket._id.toString();
+    }
+    const slaHours = slaHoursForPriority(body.priority);
+    const ticket = await Ticket.create({
+      ...body,
+      organization: orgId(req),
+      reporter: userId(req),
+      ticketId: await nextTicketId(req, body.project),
+      slaHours,
+      history: [{ event: "Created", createdAt: new Date() }],
+    });
     return res.status(201).json({ ticket: await ticket.populate(populateTicket) });
   });
 
@@ -254,6 +314,11 @@ router.patch("/tickets/:id", requireRole(["admin", "manager"]), async (req: Auth
     body.sprint ? Sprint.exists({ _id: body.sprint, organization: orgId(req), ...(body.project ? { project: body.project } : {}) }) : true,
   ]);
   if (checks.some((value) => !value)) return res.status(400).json({ message: "Assignee, project, or sprint is invalid for this organization" });
+  if (body.parentTaskId) {
+    const parentTicket = await Ticket.findOne({ organization: orgId(req), $or: [{ ticketId: body.parentTaskId }, ...(body.parentTaskId.length === 24 ? [{ _id: body.parentTaskId }] : [])] });
+    if (!parentTicket) return res.status(400).json({ message: "Parent ticket not found" });
+    body.parentTaskId = parentTicket._id.toString();
+  }
   const ticket = await Ticket.findOneAndUpdate({ _id: req.params.id, organization: orgId(req) }, body, { new: true }).populate(populateTicket);
   if (!ticket) return res.status(404).json({ message: "Ticket not found" });
   return res.json({ ticket });
@@ -262,12 +327,31 @@ router.patch("/tickets/:id", requireRole(["admin", "manager"]), async (req: Auth
 router.patch("/tickets/:id/status", requireRole(["admin", "manager", "engineer", "designer"]), async (req: AuthRequest, res) => {
   const body = parseOr400(z.object({ status: z.enum(statuses) }), req.body, res);
   if (!body) return;
+  const completedTime = body.status === "Done" ? new Date() : undefined;
+  const update: any = {
+    status: body.status,
+    $push: { history: { event: `Moved to ${body.status}`, createdAt: new Date() } },
+  };
+  if (completedTime) update.completedTime = completedTime;
   const ticket = await Ticket.findOneAndUpdate(
     { _id: req.params.id, organization: orgId(req) },
-    { status: body.status, $push: { history: { event: `Moved to ${body.status}`, createdAt: new Date() } } },
+    update,
     { new: true },
   ).populate(populateTicket);
   if (!ticket) return res.status(404).json({ message: "Ticket not found" });
+
+  // Cascade: if all siblings Done, auto-complete the parent
+  if (body.status === "Done" && ticket.parentTaskId) {
+    const siblings = await Ticket.find({ parentTaskId: ticket.parentTaskId, organization: orgId(req), _id: { $ne: ticket._id } });
+    const allDone = siblings.every(s => s.status === "Done");
+    if (allDone) {
+      await Ticket.findOneAndUpdate(
+        { _id: ticket.parentTaskId, organization: orgId(req) },
+        { status: "Done", completedTime: new Date(), $push: { history: { event: "Auto-completed: all children done", createdAt: new Date() } } },
+      );
+    }
+  }
+
   return res.json({ ticket });
 });
 

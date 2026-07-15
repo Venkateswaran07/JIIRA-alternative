@@ -8,7 +8,7 @@ import { enforceApiAccess } from "../middleware/access.js";
 import { AuditEvent } from "../models/Operational.js";
 import { Project } from "../models/Project.js";
 import { Sprint } from "../models/Sprint.js";
-import { Ticket } from "../models/Ticket.js";
+import { Ticket, slaHoursForPriority, computeSlaStatus, predictSlaLikely } from "../models/Ticket.js";
 import { User } from "../models/User.js";
 import { generatedTicketSchema } from "../schemas/ai.js";
 
@@ -165,10 +165,16 @@ router.post("/confirm-ticket-plan", requireRole(["admin", "manager"]), async (re
   ]);
   if (!project || !sprint || !assignee || !reporter) return res.status(404).json({ message: "Project, sprint, assignee, or reporter not found" });
 
-  const existingCount = await Ticket.countDocuments({ organization, project: project._id });
-  let next = existingCount + 101;
-  const docs = parsed.data.plan.stories.flatMap((story) => {
+  // Link tasks to their parent story via parentTaskId (hierarchy)
+  const ticketIds: string[] = [];
+  const storyTicketIdMap = new Map<string, string>(); // storyDoc ticketId -> storyTitle
+  const storyMongoIdMap = new Map<string, unknown>(); // storyDoc title -> mongo _id
+  let next = 1;
+
+  const tickets: any[] = [];
+  for (const story of parsed.data.plan.stories) {
     const storyTicketId = `${project.key}-${String(next++).padStart(3, "0")}`;
+    const slaH = slaHoursForPriority(story.priority as any);
     const storyDoc = {
       organization,
       ticketId: storyTicketId,
@@ -187,36 +193,47 @@ router.post("/confirm-ticket-plan", requireRole(["admin", "manager"]), async (re
       dueDate: sprint.endDate,
       blocked: false,
       dependencies: [],
+      requiredSkills: story.labels ?? [],
+      slaHours: slaH,
       comments: [],
       workLogs: [],
       history: [{ event: "Created from AI Task Architect", createdAt: new Date() }],
     };
-    const taskDocs = story.tasks.map((task) => ({
-      organization,
-      ticketId: `${project.key}-${String(next++).padStart(3, "0")}`,
-      title: task.title,
-      description: task.description,
-      acceptanceCriteria: [],
-      status: "Backlog",
-      priority: story.priority,
-      storyPoints: task.storyPoints,
-      assignee: assignee._id,
-      reporter: reporter._id,
-      project: project._id,
-      sprint: sprint._id,
-      epic: parsed.data.plan.epic.title,
-      labels: story.labels,
-      dueDate: sprint.endDate,
-      blocked: task.dependencies.length > 0,
-      dependencies: task.dependencies,
-      comments: [],
-      workLogs: [],
-      history: [{ event: "Created from AI Task Architect", createdAt: new Date() }],
-    }));
-    return [storyDoc, ...taskDocs];
-  });
+    const [storyTicket] = await Ticket.insertMany([storyDoc]);
+    tickets.push(storyTicket);
 
-  const tickets = await Ticket.insertMany(docs);
+    for (const task of story.tasks) {
+      const taskTicketId = `${project.key}-${String(next++).padStart(3, "0")}`;
+      const taskDoc = {
+        organization,
+        ticketId: taskTicketId,
+        title: task.title,
+        description: task.description,
+        acceptanceCriteria: [],
+        status: "Backlog",
+        priority: story.priority,
+        storyPoints: task.storyPoints,
+        assignee: assignee._id,
+        reporter: reporter._id,
+        project: project._id,
+        sprint: sprint._id,
+        epic: parsed.data.plan.epic.title,
+        labels: story.labels,
+        dueDate: sprint.endDate,
+        blocked: task.dependencies.length > 0,
+        dependencies: task.dependencies,
+        requiredSkills: story.labels ?? [],
+        slaHours: slaH,
+        parentTaskId: storyTicket._id, // ← link to parent story
+        comments: [],
+        workLogs: [],
+        history: [{ event: "Created from AI Task Architect", createdAt: new Date() }],
+      };
+      const [taskTicket] = await Ticket.insertMany([taskDoc]);
+      tickets.push(taskTicket);
+    }
+  }
+
   return res.status(201).json({ tickets });
 });
 
@@ -248,38 +265,125 @@ router.post("/chat", async (req, res) => {
     "- When you need to call an I-TRACK API, use the execute_itrack_api tool.",
   ].join("\n");
 
-  const messages: OpenAI.Chat.Completions.ChatCompletionMessageParam[] = [
-    { role: "system", content: systemPrompt },
-    ...(parsed.data.history ?? []).map((m) => ({ role: m.role as "user" | "assistant", content: m.content })),
-    { role: "user", content: parsed.data.message },
-  ];
+  try {
+    // Build live workspace context for the system prompt
+    const authReq2 = req as AuthRequest;
+    const org = authReq2.user!.organizationId;
+    const [wsTickets, wsSprints, wsUsers] = await Promise.all([
+      Ticket.find({ organization: org }).lean().limit(200),
+      Sprint.find({ organization: org }).lean(),
+      User.find({ organization: org }).select("name skills capacity").lean(),
+    ]);
+    const activeSprint = wsSprints.find((s: any) => s.status === "active") ?? wsSprints[0];
+    const sprintTickets = activeSprint ? wsTickets.filter((t: any) => String(t.sprint) === String(activeSprint._id)) : wsTickets;
 
-  const tools: OpenAI.Chat.Completions.ChatCompletionTool[] = [
-    {
-      type: "function",
-      function: {
-        name: "execute_itrack_api",
-        description: "Execute an allowed I-TRACK backend operation as the signed-in user.",
-        parameters: {
-          type: "object",
-          required: ["method", "path"],
-          properties: {
-            method: { type: "string", enum: ["GET", "POST", "PUT", "PATCH", "DELETE"] },
-            path: { type: "string", description: "API path like /tickets or /tickets/:id/status" },
-            body: { type: "object", description: "Request body for POST/PUT/PATCH" },
+    // SLA context
+    const avgV = activeSprint?.velocityHistory?.length
+      ? activeSprint.velocityHistory.reduce((a: number, b: number) => a + b, 0) / activeSprint.velocityHistory.length : 0;
+    const spDays = activeSprint ? Math.max(1, Math.round((new Date((activeSprint as any).endDate).getTime() - new Date((activeSprint as any).startDate).getTime()) / 86_400_000)) : 14;
+    const dvp = avgV / spDays;
+    let slaBreached = 0, slaNear = 0, slaLikely = 0;
+    const slaTicketDetails: string[] = [];
+    sprintTickets.forEach((t: any) => {
+      const createdAt = t.createdAt ?? new Date();
+      const slaH = t.slaHours ?? 72;
+      const st = computeSlaStatus(createdAt, slaH, t.completedTime);
+      const lb = st === "on_track" && predictSlaLikely({ createdAt, slaHours: slaH, remainingPoints: t.storyPoints, dailyVelocityPoints: dvp, completedTime: t.completedTime });
+      if (st === "breached") { slaBreached++; slaTicketDetails.push(`${t.ticketId}:BREACHED`); }
+      else if (st === "near_breach") { slaNear++; slaTicketDetails.push(`${t.ticketId}:NEAR_BREACH`); }
+      else if (lb) { slaLikely++; slaTicketDetails.push(`${t.ticketId}:LIKELY_BREACH`); }
+    });
+
+    // Developer load context
+    const devContext = wsUsers.map((u: any) => {
+      const assigned = sprintTickets.filter((t: any) => String(t.assignee) === String(u._id));
+      const pts = assigned.reduce((s: number, t: any) => s + (t.storyPoints || 0), 0);
+      const pct = u.capacity > 0 ? Math.round((pts / u.capacity) * 100) : 0;
+      return `${u.name}: ${pct}% loaded, skills=[${(u.skills ?? []).join(",")}]`;
+    }).join("; ");
+
+    const workspaceContext = [
+      `Active sprint: ${activeSprint ? (activeSprint as any).name : "none"}, ${sprintTickets.length} tickets`,
+      `SLA status — breached:${slaBreached}, near-breach:${slaNear}, likely-breach:${slaLikely}`,
+      slaTicketDetails.length ? `SLA tickets: ${slaTicketDetails.slice(0, 10).join(", ")}` : "",
+      `Developer load: ${devContext}`,
+      `Blocked tickets: ${sprintTickets.filter((t: any) => t.blocked).length}`,
+    ].filter(Boolean).join("\n");
+
+    const systemPrompt = [
+      "You are the I-TRACK Sprint Intelligence assistant. You have access to live workspace data below.",
+      "",
+      "=== LIVE WORKSPACE CONTEXT ===",
+      workspaceContext,
+      "",
+      "=== AVAILABLE API ENDPOINTS ===",
+      "Use ONLY the following endpoints available for the user's role:",
+      endpointList,
+      "",
+      "=== RULES ===",
+      "- For destructive or irreversible actions (DELETE, archive, deactivate, etc.), describe what will happen and ask for explicit confirmation before proceeding.",
+      "- Never expose credentials, tokens, or internal secrets.",
+      "- Report backend errors accurately — include status codes and messages.",
+      "- When you need to call an I-TRACK API, use the execute_itrack_api tool.",
+      "- For 'what-if' scenarios (e.g. 'if X leaves', 'if we add Y points'), use the simulate_sprint_what_if tool.",
+      "- Answer questions about SLA, developer capacity, skill compatibility, and hierarchy directly from the workspace context.",
+    ].join("\n");
+
+    const messages: OpenAI.Chat.Completions.ChatCompletionMessageParam[] = [
+      { role: "system", content: systemPrompt },
+      ...(parsed.data.history ?? []).map((m) => ({ role: m.role as "user" | "assistant", content: m.content })),
+      { role: "user", content: parsed.data.message },
+    ];
+
+    const tools: OpenAI.Chat.Completions.ChatCompletionTool[] = [
+      {
+        type: "function",
+        function: {
+          name: "execute_itrack_api",
+          description: "Execute an allowed I-TRACK backend operation as the signed-in user.",
+          parameters: {
+            type: "object",
+            required: ["method", "path"],
+            properties: {
+              method: { type: "string", enum: ["GET", "POST", "PUT", "PATCH", "DELETE"] },
+              path: { type: "string", description: "API path like /tickets or /tickets/:id/status" },
+              body: { type: "object", description: "Request body for POST/PUT/PATCH" },
+            },
           },
         },
       },
-    },
-  ];
-
-  try {
-    const client = getClient();
-    const model = env.openaiModel || "grok-3-mini";
+      {
+        type: "function",
+        function: {
+          name: "simulate_sprint_what_if",
+          description: "Simulate a what-if scenario and return before/after sprint risk scores with explanation.",
+          parameters: {
+            type: "object",
+            required: ["scenario"],
+            properties: {
+              scenario: {
+                type: "object",
+                description: "What-if scenario parameters",
+                properties: {
+                  removeMembers: { type: "array", items: { type: "string" }, description: "Developer names to remove from sprint" },
+                  addExtraPoints: { type: "number", description: "Extra story points to add (scope creep)" },
+                  removeDays: { type: "number", description: "Days to shorten the sprint by" },
+                },
+              },
+            },
+          },
+        },
+      },
+    ];
+    // Model selection — no hardcoded fallback
+    const model = env.openaiModel;
+    if (!model || model === "ask-me-before-selecting-a-model") {
+      return res.status(400).json({ requiresModelSelection: true, message: "Select a provider model to enable AI chat.", hint: "Use GET /api/v1/ai/models to list available models." });
+    }
     const allToolCalls: { name: string; arguments: unknown; result: unknown }[] = [];
     const MAX_ITERATIONS = 5;
 
-    let response = await client.chat.completions.create({
+    let response = await getClient().chat.completions.create({
       model,
       temperature: 0.3,
       messages,
@@ -300,6 +404,25 @@ router.post("/chat", async (req, res) => {
       for (const toolCall of assistantMessage.tool_calls) {
         if (toolCall.type !== "function") {
           messages.push({ role: "tool", tool_call_id: toolCall.id, content: JSON.stringify({ error: "Unsupported tool type" }) });
+          continue;
+        }
+
+        if (toolCall.function.name === "simulate_sprint_what_if") {
+          try {
+            const simArgs = JSON.parse(toolCall.function.arguments);
+            const simUrl = `http://127.0.0.1:${env.port}/api/v1/analysis/simulate`;
+            const simRes = await fetch(simUrl, {
+              method: "POST",
+              headers: { authorization: req.headers.authorization ?? "", "content-type": "application/json" },
+              body: JSON.stringify({ scenario: simArgs.scenario }),
+            });
+            const simResult = await simRes.json();
+            allToolCalls.push({ name: toolCall.function.name, arguments: simArgs, result: simResult });
+            messages.push({ role: "tool", tool_call_id: toolCall.id, content: JSON.stringify(simResult) });
+          } catch (err) {
+            const errResult = { error: "Simulation failed", detail: String(err) };
+            messages.push({ role: "tool", tool_call_id: toolCall.id, content: JSON.stringify(errResult) });
+          }
           continue;
         }
 
@@ -357,7 +480,7 @@ router.post("/chat", async (req, res) => {
       }
 
 
-      response = await client.chat.completions.create({
+      response = await getClient().chat.completions.create({
         model,
         temperature: 0.3,
         messages,

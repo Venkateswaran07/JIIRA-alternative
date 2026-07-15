@@ -1859,6 +1859,50 @@ function TicketList() {
     </>
   );
 }
+function TreeLayout({ tickets, nav }: { tickets: any[]; nav: any }) {
+  const roots = tickets.filter(t => !t.parentTaskId);
+  
+  const renderNode = (node: any, depth = 0) => {
+    const children = tickets.filter(t => t.parentTaskId === node.id);
+    const hasChildren = children.length > 0;
+    const deps = tickets.filter(t => (node.dependencies || []).includes(t.id));
+    
+    return (
+      <div key={node.id} style={{ marginLeft: depth * 24, padding: "8px 0", borderLeft: depth > 0 ? "2px solid #eaeaea" : "none", paddingLeft: depth > 0 ? 12 : 0, position: "relative" }}>
+        {depth > 0 && (
+           <div style={{ position: "absolute", left: -2, top: 22, width: 14, height: 2, background: "#eaeaea" }} />
+        )}
+        <div style={{ display: "flex", alignItems: "center", gap: 10, background: "var(--surface, #fff)", padding: "10px", borderRadius: 8, border: "1px solid var(--border, #eaeaea)", maxWidth: 650 }}>
+           <Badge tone={node.status === "Done" ? "green" : node.status === "Backlog" ? "neutral" : "blue"}>{node.status}</Badge>
+           <strong style={{ cursor: "pointer", color: "var(--purple, #7c3aed)" }} onClick={() => nav(`/tickets/${node.key}`)}>{node.key}</strong>
+           <span style={{ fontWeight: 500 }}>{node.title}</span>
+           <div style={{ flex: 1 }} />
+           {deps.length > 0 && (
+             <span title="Blocked by dependencies"><Badge tone="orange"><Icons.Link2 size={12} /> {deps.length} deps</Badge></span>
+           )}
+           {node.assignee ? <Avatar name={node.assignee} /> : <span style={{ opacity: 0.5, fontSize: 12 }}>Unassigned</span>}
+        </div>
+        {hasChildren && (
+          <div style={{ marginTop: 8 }}>
+            {children.map(child => renderNode(child, depth + 1))}
+          </div>
+        )}
+      </div>
+    );
+  };
+
+  return (
+    <div style={{ padding: 24, background: "var(--surface-alt, #f9f8ff)", borderRadius: 12, border: "1px solid var(--border, #eaeaea)", overflowX: "auto" }}>
+      <h3 style={{ marginBottom: 16, display: "flex", alignItems: "center", gap: 8 }}><Icons.FolderTree /> Hierarchy & Dependencies</h3>
+      {roots.length === 0 ? (
+         <div style={{ opacity: 0.6, padding: 20, textAlign: "center" }}>No hierarchy to display.</div>
+      ) : (
+         roots.map(root => renderNode(root, 0))
+      )}
+    </div>
+  );
+}
+
 function Board({
   toast,
   projectFilter,
@@ -1876,7 +1920,7 @@ function Board({
   const nav = useNavigate();
   const [params] = useSearchParams();
   const q = params.get("q") || "";
-  const [view, setView] = useState<"board" | "list">("board");
+  const [view, setView] = useState<"board" | "list" | "tree">("board");
   const [filters, setFilters] = useState(false);
   const [selectedTickets, setSelectedTickets] = useState<string[]>([]);
 
@@ -2028,6 +2072,12 @@ function Board({
           >
             List
           </button>
+          <button
+            className={view === "tree" ? "active" : ""}
+            onClick={() => setView("tree")}
+          >
+            Tree
+          </button>
         </div>
         <span>{activeTickets.length} tickets</span>
         <div className="avatar-stack">
@@ -2105,7 +2155,9 @@ function Board({
         </div>
       )}
 
-      {view === "list" ? (
+      {view === "tree" ? (
+        <TreeLayout tickets={activeTickets} nav={nav} />
+      ) : view === "list" ? (
         <section className="card no-pad">
           <div className="table-wrap">
             <table>
@@ -2186,41 +2238,76 @@ function Board({
               </header>
               {activeTickets
                 .filter((t) => t.status === s)
-                .map((t) => (
-                  <article className="ticket-card" key={t.id}>
-                    <div
-                      style={{
-                        display: "flex",
-                        justifyContent: "space-between",
-                      }}
-                    >
-                      <label
+                .map((t) => {
+                  // Compute hierarchy
+                  const isChild = !!t.parentTaskId;
+                  const hasChildren = activeTickets.some((child) => child.parentTaskId === t.id);
+                  let hierarchyBadge = null;
+                  if (hasChildren) hierarchyBadge = <Badge tone="purple"><Icons.FolderTree size={12} /> Parent</Badge>;
+                  else if (isChild) hierarchyBadge = <Badge tone="neutral"><Icons.CornerDownRight size={12} /> Child</Badge>;
+
+                  // Compute SLA status
+                  const priorityMap: Record<string, number> = { critical: 4, high: 24, medium: 72, low: 120 };
+                  const slaH = t.slaHours ?? priorityMap[t.priority] ?? 72;
+                  const nowTime = (t.status === "Done" && t.completedTime) ? new Date(t.completedTime).getTime() : Date.now();
+                  const elapsed = (nowTime - new Date(t.createdAt || Date.now()).getTime()) / 3_600_000;
+                  let slaTone = "green";
+                  let slaLabel = null;
+                  if (elapsed >= slaH) { slaTone = "red"; slaLabel = "SLA Breached"; }
+                  else if (t.status !== "Done" && elapsed >= slaH * 0.8) { slaTone = "orange"; slaLabel = "SLA Risk"; }
+
+                  // Compute Compatibility Warning
+                  let compatWarning = false;
+                  if (t.requiredSkills?.length && t.assignee) {
+                     const u = dashboard?.users?.find((x: any) => x.name === t.assignee);
+                     if (u && u.skills) {
+                       const match = t.requiredSkills.filter((sk: string) => u.skills.map((x: string) => x.toLowerCase()).includes(sk.toLowerCase())).length;
+                       if (match / t.requiredSkills.length < 0.6) compatWarning = true;
+                     }
+                  }
+
+                  return (
+                    <article className="ticket-card" key={t.id}>
+                      <div
                         style={{
                           display: "flex",
-                          gap: "5px",
-                          alignItems: "center",
+                          justifyContent: "space-between",
+                          flexWrap: "wrap",
+                          gap: 4
                         }}
                       >
-                        <input
-                          type="checkbox"
-                          checked={selectedTickets.includes(t.id)}
-                          onChange={() =>
-                            setSelectedTickets((prev) =>
-                              prev.includes(t.id)
-                                ? prev.filter((x) => x !== t.id)
-                                : [...prev, t.id],
-                            )
-                          }
-                        />
-                        <small>{t.key}</small>
-                      </label>
-                      {t.blocked && (
-                        <Badge tone="red">
-                          <Icons.CircleSlash2 />
-                          Blocked
-                        </Badge>
-                      )}
-                    </div>
+                        <label
+                          style={{
+                            display: "flex",
+                            gap: "5px",
+                            alignItems: "center",
+                          }}
+                        >
+                          <input
+                            type="checkbox"
+                            checked={selectedTickets.includes(t.id)}
+                            onChange={() =>
+                              setSelectedTickets((prev) =>
+                                prev.includes(t.id)
+                                  ? prev.filter((x) => x !== t.id)
+                                  : [...prev, t.id],
+                              )
+                            }
+                          />
+                          <small>{t.key}</small>
+                        </label>
+                        <div style={{ display: "flex", gap: 4, flexWrap: "wrap", justifyContent: "flex-end" }}>
+                          {hierarchyBadge}
+                          {slaLabel && <Badge tone={slaTone}><Icons.Clock size={12} /> {slaLabel}</Badge>}
+                          {compatWarning && <span title="Assignee lacks required skills"><Badge tone="orange"><Icons.AlertTriangle size={12} /> Skill Gap</Badge></span>}
+                          {t.blocked && (
+                            <Badge tone="red">
+                              <Icons.CircleSlash2 size={12} />
+                              Blocked
+                            </Badge>
+                          )}
+                        </div>
+                      </div>
                     <h3
                       onClick={() => nav(`/tickets/${t.key}`)}
                       style={{ cursor: "pointer" }}
@@ -2275,7 +2362,8 @@ function Board({
                       </div>
                     </div>
                   </article>
-                ))}
+                );
+              })}
               {isLeader && (
                 <button
                   className="add-card"
@@ -2588,19 +2676,27 @@ function RiskPage() {
   const { dashboard, tickets, mutate, toast } = useWorkspace();
   const [analysis, setAnalysis] = useState<any>(null);
   const [loading, setLoading] = useState(false);
+  const [expandedFactor, setExpandedFactor] = useState<string | null>(null);
+  // What-if simulation state
+  const [simMode, setSimMode] = useState(false);
+  const [simResult, setSimResult] = useState<any>(null);
+  const [simLoading, setSimLoading] = useState(false);
+  const [removeMember, setRemoveMember] = useState("");
+  const [extraPoints, setExtraPoints] = useState(0);
+  const [removeDays, setRemoveDays] = useState(0);
 
-  const s = (dashboard?.sprints || []).find((x: any) => x._id === sprintId);
-  if (!s)
-    return (
-      <Empty
-        title="Sprint not found"
-        body="The requested sprint does not exist."
-      />
-    );
+  const activeSprintId = (dashboard?.sprints || []).find(
+    (x: any) => x.status === "active"
+  )?._id;
+  const targetSprintId = sprintId || activeSprintId;
+  const s = (dashboard?.sprints || []).find((x: any) => x._id === targetSprintId);
 
-  const sprintTickets = tickets.filter((t) => t.sprintId === s._id);
+  const sprintTickets = s
+    ? tickets.filter((t: any) => t.sprintId === s._id)
+    : [];
 
   const recalculateRisk = async () => {
+    if (!s) return;
     setLoading(true);
     try {
       const plannedPoints = s.plannedPoints || 0;
@@ -2665,9 +2761,35 @@ function RiskPage() {
     }
   };
 
+  const runSimulation = async () => {
+    setSimLoading(true);
+    try {
+      const scenario: any = {};
+      if (removeMember) scenario.removeMembers = [removeMember];
+      if (extraPoints > 0) scenario.addExtraPoints = extraPoints;
+      if (removeDays > 0) scenario.removeDays = removeDays;
+      const result = await api<any>("/analysis/simulate", { method: "POST", body: JSON.stringify({ scenario }) });
+      setSimResult(result);
+    } catch (err) {
+      toast(err instanceof Error ? err.message : "Simulation failed");
+    } finally {
+      setSimLoading(false);
+    }
+  };
+
   useEffect(() => {
-    recalculateRisk();
-  }, [sprintId]);
+    if (s) {
+      recalculateRisk();
+    }
+  }, [targetSprintId, s?._id]);
+
+  if (!s)
+    return (
+      <Empty
+        title="Sprint not found"
+        body="The requested sprint does not exist."
+      />
+    );
 
   const displayScore = analysis ? analysis.risk.finalScore : s.riskScore;
   let riskTone = "green";
@@ -2683,56 +2805,17 @@ function RiskPage() {
     riskLabel = "MEDIUM RISK";
   }
 
-  const factors = [];
-  if (analysis) {
-    factors.push([
-      "Sprint Utilisation",
-      analysis.utilisation.explanation,
-      `${analysis.utilisation.finalScore > 0 ? "+" : ""}${analysis.utilisation.finalScore}`,
-      analysis.utilisation.finalScore > 50
-        ? "red"
-        : analysis.utilisation.finalScore > 25
-          ? "orange"
-          : "green",
-    ]);
-    factors.push([
-      "Dependency Risk",
-      analysis.dependency.explanation,
-      `${analysis.dependency.finalScore > 0 ? "+" : ""}${analysis.dependency.finalScore}`,
-      analysis.dependency.finalScore > 50
-        ? "red"
-        : analysis.dependency.finalScore > 25
-          ? "orange"
-          : "green",
-    ]);
-    factors.push([
-      "Burnout & Workload",
-      analysis.burnout.explanation,
-      `${analysis.burnout.finalScore > 0 ? "+" : ""}${analysis.burnout.finalScore}`,
-      analysis.burnout.finalScore > 50
-        ? "red"
-        : analysis.burnout.finalScore > 25
-          ? "orange"
-          : "green",
-    ]);
-    factors.push([
-      "Skill Gap Risk",
-      analysis.skillGap.explanation,
-      `${analysis.skillGap.finalScore > 0 ? "+" : ""}${analysis.skillGap.finalScore}`,
-      analysis.skillGap.finalScore > 50
-        ? "red"
-        : analysis.skillGap.finalScore > 25
-          ? "orange"
-          : "green",
-    ]);
-  } else {
-    factors.push([
-      "Sprint Utilisation",
-      "Based on planned points vs capacity",
-      "...",
-      "yellow",
-    ]);
-  }
+  type Factor = { key: string; label: string; data: any; weight: string };
+  const factors: Factor[] = analysis ? [
+    { key: "utilisation", label: "Sprint Utilisation", data: analysis.utilisation, weight: "20%" },
+    { key: "dependency", label: "Dependency Risk", data: analysis.dependency, weight: "20%" },
+    { key: "burnout", label: "Burnout & Workload", data: analysis.burnout, weight: "20%" },
+    { key: "skillGap", label: "Skill Gap Risk", data: analysis.skillGap, weight: "10%" },
+    { key: "velocity", label: "Velocity Deviation", data: analysis.velocity, weight: "15%" },
+    { key: "slaHealth", label: "SLA Health", data: analysis.slaHealth, weight: "15%" },
+  ] : [];
+
+  const memberNames = (dashboard?.users || []).map((u: any) => u.name);
 
   return (
     <>
@@ -2744,6 +2827,10 @@ function RiskPage() {
         <button className="btn" onClick={recalculateRisk} disabled={loading}>
           <Icons.RefreshCw className={loading ? "spin" : ""} />
           Recalculate
+        </button>
+        <button className={cx("btn", simMode && "primary")} onClick={() => setSimMode(!simMode)}>
+          <Icons.FlaskConical size={16} />
+          What-if
         </button>
       </PageHead>
       <div className="risk-hero">
@@ -2772,23 +2859,122 @@ function RiskPage() {
           </div>
         </div>
       </div>
+
+      {/* What-if Simulation Panel */}
+      {simMode && (
+        <section className="card" style={{ background: "var(--surface-alt, #f7f5ff)", border: "1.5px solid var(--purple-light, #dcd3f9)", marginBottom: 18 }}>
+          <CardTitle title="What-if Simulation" sub="Test scenarios and see their effect on sprint risk" />
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))", gap: 16, marginTop: 12 }}>
+            <label className="field">
+              <span>Remove developer</span>
+              <select value={removeMember} onChange={e => setRemoveMember(e.target.value)}>
+                <option value="">(None)</option>
+                {memberNames.map((n: string) => <option key={n} value={n}>{n}</option>)}
+              </select>
+            </label>
+            <label className="field">
+              <span>Add extra story points (scope creep)</span>
+              <input type="number" min={0} max={100} value={extraPoints} onChange={e => setExtraPoints(Number(e.target.value))} />
+            </label>
+            <label className="field">
+              <span>Shorten sprint by (days)</span>
+              <input type="number" min={0} max={14} value={removeDays} onChange={e => setRemoveDays(Number(e.target.value))} />
+            </label>
+          </div>
+          <div style={{ display: "flex", gap: 12, marginTop: 14 }}>
+            <button className="btn primary" onClick={runSimulation} disabled={simLoading}>
+              <Icons.Play size={16} />
+              {simLoading ? "Simulating…" : "Run simulation"}
+            </button>
+            <button className="btn" onClick={() => { setSimResult(null); setRemoveMember(""); setExtraPoints(0); setRemoveDays(0); }}>
+              Reset
+            </button>
+          </div>
+          {simResult && (
+            <div style={{ marginTop: 18, padding: 16, background: "var(--bg)", borderRadius: 10, border: "1px solid var(--border)" }}>
+              <div style={{ display: "flex", gap: 32, flexWrap: "wrap", alignItems: "center" }}>
+                <div>
+                  <span style={{ fontSize: 12, opacity: 0.6 }}>BEFORE</span>
+                  <div style={{ fontSize: 36, fontWeight: 800, color: "var(--purple)" }}>{simResult.before}</div>
+                </div>
+                <Icons.ArrowRight size={28} style={{ opacity: 0.4 }} />
+                <div>
+                  <span style={{ fontSize: 12, opacity: 0.6 }}>AFTER</span>
+                  <div style={{ fontSize: 36, fontWeight: 800, color: simResult.delta > 10 ? "var(--red)" : simResult.delta > 0 ? "var(--orange)" : "var(--lime)" }}>
+                    {simResult.after}
+                  </div>
+                </div>
+                <div>
+                  <Badge tone={simResult.delta > 10 ? "red" : simResult.delta > 0 ? "orange" : "green"}>
+                    {simResult.delta > 0 ? "+" : ""}{simResult.delta} points
+                  </Badge>
+                </div>
+              </div>
+              <p style={{ marginTop: 12, opacity: 0.75, fontSize: 14 }}>{simResult.explanation}</p>
+            </div>
+          )}
+        </section>
+      )}
+
       <div className="two-col">
         <section className="card">
           <CardTitle
             title="Contributing factors"
-            sub="Why the score was computed"
+            sub="Click any factor to drill down into the raw data"
           />
           <div className="factor-list">
-            {factors.map(([a, b, c, d]) => (
-              <div key={a}>
-                <i className={d} />
-                <span>
-                  <b>{a}</b>
-                  <small>{b}</small>
-                </span>
-                <strong>{c}</strong>
-              </div>
-            ))}
+            {factors.length > 0 ? factors.map(({ key, label, data, weight }) => {
+              const score = data?.finalScore ?? 0;
+              const tone = score > 50 ? "red" : score > 25 ? "orange" : "green";
+              const isOpen = expandedFactor === key;
+              return (
+                <div key={key} style={{ borderBottom: "1px solid var(--border)" }}>
+                  <div
+                    style={{ display: "flex", alignItems: "center", gap: 12, padding: "10px 0", cursor: "pointer" }}
+                    onClick={() => setExpandedFactor(isOpen ? null : key)}
+                    role="button"
+                    aria-expanded={isOpen}
+                  >
+                    <i className={tone} />
+                    <span style={{ flex: 1 }}>
+                      <b>{label}</b>
+                      <small style={{ display: "block", opacity: 0.6 }}>{data?.explanation || "Calculating…"}</small>
+                    </span>
+                    <strong>{score > 0 ? "+" : ""}{score}</strong>
+                    <Badge tone="neutral">{weight}</Badge>
+                    {isOpen ? <Icons.ChevronUp size={16} /> : <Icons.ChevronDown size={16} />}
+                  </div>
+                  {isOpen && data?.inputValues && (
+                    <div style={{ background: "var(--surface-alt, #f9f8ff)", borderRadius: 8, padding: 12, marginBottom: 10, fontSize: 13 }}>
+                      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
+                        {Object.entries(data.inputValues).map(([k, v]) => (
+                          <div key={k} style={{ display: "flex", justifyContent: "space-between", borderBottom: "1px solid var(--border)" }}>
+                            <span style={{ opacity: 0.7, textTransform: "capitalize" }}>{k.replace(/([A-Z])/g, " $1")}</span>
+                            <strong>{String(v)}</strong>
+                          </div>
+                        ))}
+                      </div>
+                      <div style={{ marginTop: 10, opacity: 0.6, fontFamily: "monospace", fontSize: 12 }}>
+                        Formula: {data.formula}
+                      </div>
+                      {/* SLA detail breakdown */}
+                      {key === "slaHealth" && data.detail && (
+                        <div style={{ marginTop: 10 }}>
+                          {(data.detail.breachedDetail || []).map((t: string) => (
+                            <span key={t} style={{ marginRight: 4 }}><Badge tone="red">{t}</Badge></span>
+                          ))}
+                          {(data.detail.nearBreachDetail || []).map((t: string) => (
+                            <span key={t} style={{ marginRight: 4 }}><Badge tone="orange">{t}</Badge></span>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </div>
+              );
+            }) : (
+              <div style={{ opacity: 0.5, padding: 12 }}>Calculating factors…</div>
+            )}
           </div>
         </section>
         <section className="card recommendation">
@@ -2813,11 +2999,18 @@ function RiskPage() {
               </p>
             </>
           )}
+          {analysis?.risk?.explanation && (
+            <div style={{ marginTop: 16, padding: 12, background: "var(--surface-alt, #f9f8ff)", borderRadius: 8, fontSize: 13 }}>
+              <b style={{ opacity: 0.6, fontSize: 11 }}>EXPLAINER</b>
+              <p style={{ marginTop: 4 }}>{analysis.risk.explanation}</p>
+            </div>
+          )}
         </section>
       </div>
     </>
   );
 }
+
 
 function MyWork() {
   const [view, setView] = useState("list");
@@ -3464,7 +3657,7 @@ function Reports() {
         </div>
       </PageHead>
       <div className="tabs">
-        {["Overview", "Velocity", "Delivery", "Workload", "Risk"].map((x) => (
+        {["Overview", "Velocity", "Delivery", "Workload", "Risk", "Intelligence"].map((x) => (
           <button
             className={tab === x ? "active" : ""}
             key={x}
@@ -3539,43 +3732,86 @@ function Reports() {
         </article>
       </div>
 
-      <div className="two-col">
-        <section className="card">
-          <CardTitle
-            title="Sprint velocity"
-            sub="Completed story points per sprint"
-          />
-          <div className="chart">
-            <ResponsiveContainer>
-              <BarChart data={chartVelocityData}>
-                <CartesianGrid vertical={false} />
-                <XAxis dataKey="n" />
-                <YAxis />
-                <Tooltip />
-                <Bar dataKey="v" fill="#A47BEF" radius={[6, 6, 0, 0]} />
-              </BarChart>
-            </ResponsiveContainer>
+      {tab === "Intelligence" ? (
+        <>
+          <div className="metrics compact" style={{ marginTop: 24 }}>
+            <article className="metric">
+              <div>
+                <span>SLA Health</span>
+                <strong>{dashboard?.slaHealth?.onTrack || 0}</strong>
+                <small>tickets on track</small>
+              </div>
+            </article>
+            <article className="metric">
+              <div>
+                <span>SLA Breached</span>
+                <strong style={{ color: "var(--red, #ef4444)" }}>{dashboard?.slaHealth?.breached || 0}</strong>
+                <small>breaches</small>
+              </div>
+            </article>
+            <article className="metric">
+              <div>
+                <span>Hierarchy Progress</span>
+                <strong>{dashboard?.hierarchyProgress?.progressPercent || 0}%</strong>
+                <small>root tickets done</small>
+              </div>
+            </article>
+            <article className="metric">
+              <div>
+                <span>Compatibility</span>
+                <strong>{dashboard?.teamCompatibility?.incompatibleAssignments || 0}</strong>
+                <small>skill gaps detected</small>
+              </div>
+            </article>
           </div>
-        </section>
-        <section className="card">
-          <CardTitle title="Risk trend" sub="Sprint risk score over time" />
-          <div className="chart">
-            <ResponsiveContainer>
-              <AreaChart data={chartRiskData}>
-                <XAxis dataKey="n" />
-                <YAxis />
-                <Tooltip />
-                <Area
-                  dataKey="v"
-                  stroke="#F28C28"
-                  fill="#F28C2833"
-                  strokeWidth={3}
-                />
-              </AreaChart>
-            </ResponsiveContainer>
-          </div>
-        </section>
-      </div>
+          <section className="card" style={{ marginTop: 24 }}>
+            <CardTitle title="Explainable Sprint Intelligence" sub="Real-time AI metrics" />
+            <p style={{ opacity: 0.7 }}>
+              Our AI analyzes your team's skills, SLA targets, and ticket dependencies to recommend the best assignments and predict risks before they happen.
+              <br /><br />
+              See the <b>Risk Dashboard</b> for full Explainable AI simulations.
+            </p>
+          </section>
+        </>
+      ) : (
+        <div className="two-col" style={{ marginTop: 24 }}>
+          <section className="card">
+            <CardTitle
+              title="Sprint velocity"
+              sub="Completed story points per sprint"
+            />
+            <div className="chart">
+              <ResponsiveContainer>
+                <BarChart data={chartVelocityData}>
+                  <CartesianGrid vertical={false} />
+                  <XAxis dataKey="n" />
+                  <YAxis />
+                  <Tooltip />
+                  <Bar dataKey="v" fill="#A47BEF" radius={[6, 6, 0, 0]} />
+                </BarChart>
+              </ResponsiveContainer>
+            </div>
+          </section>
+          <section className="card">
+            <CardTitle title="Risk trend" sub="Sprint risk score over time" />
+            <div className="chart">
+              <ResponsiveContainer>
+                <AreaChart data={chartRiskData}>
+                  <XAxis dataKey="n" />
+                  <YAxis />
+                  <Tooltip />
+                  <Area
+                    dataKey="v"
+                    stroke="#F28C28"
+                    fill="#F28C2833"
+                    strokeWidth={3}
+                  />
+                </AreaChart>
+              </ResponsiveContainer>
+            </div>
+          </section>
+        </div>
+      )}
     </>
   );
 }
@@ -3660,29 +3896,41 @@ function AIPage({ toast }: { toast: (s: string) => void }) {
       </PageHead>
       <div className="ai-layout">
         <section className="card ai-compose">
-          <div className="model-select">
-            <span className="insight-icon">
-              <Icons.Bot />
-            </span>
-            <div>
-              <small>MODEL</small>
-              <select
-                value={selectedModel}
-                onChange={(e) => setSelectedModel(e.target.value)}
-                disabled={loadingModels || models.length === 0}
-              >
-                <option value="" disabled>
-                  {loadingModels ? "Loading provider models…" : "Select a provider model"}
-                </option>
-                {models.map((model) => (
-                  <option key={model} value={model}>
-                    {model}
-                  </option>
-                ))}
-              </select>
+          {!loadingModels && models.length === 0 ? (
+            <div style={{ padding: "16px", background: "var(--red-light, #fee2e2)", color: "var(--red, #991b1b)", borderRadius: "8px", marginBottom: "20px", display: "flex", gap: "12px", alignItems: "center", border: "1px solid var(--red, #f87171)" }}>
+               <Icons.AlertTriangle size={24} />
+               <div>
+                 <strong style={{ display: "block", marginBottom: 2 }}>AI Provider Unconfigured</strong>
+                 <span style={{ fontSize: 13, opacity: 0.9 }}>
+                   Please configure your AI provider by setting the <code>OPENAI_API_KEY</code> environment variable and restarting the server.
+                 </span>
+               </div>
             </div>
-            <Icons.ChevronDown />
-          </div>
+          ) : (
+            <div className="model-select">
+              <span className="insight-icon">
+                <Icons.Bot />
+              </span>
+              <div>
+                <small>MODEL</small>
+                <select
+                  value={selectedModel}
+                  onChange={(e) => setSelectedModel(e.target.value)}
+                  disabled={loadingModels}
+                >
+                  <option value="" disabled>
+                    {loadingModels ? "Loading provider models…" : "Select a provider model"}
+                  </option>
+                  {models.map((model) => (
+                    <option key={model} value={model}>
+                      {model}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <Icons.ChevronDown />
+            </div>
+          )}
           <h2>What are you planning?</h2>
           <p>
             Describe a feature, initiative, or outcome. Include constraints and
@@ -4452,7 +4700,7 @@ function FormPage({
               <span>Project</span>
               <select name="project" required>
                 {projects.map((project: any) => (
-                  <option key={project._id} value={project.name}>
+                  <option key={project._id} value={project._id}>
                     {project.name}
                   </option>
                 ))}
@@ -4463,7 +4711,7 @@ function FormPage({
               <select name="sprint" required>
                 <option value="">Backlog</option>
                 {sprints.map((sprint: any) => (
-                  <option key={sprint._id} value={sprint.name}>
+                  <option key={sprint._id} value={sprint._id}>
                     {sprint.name}
                   </option>
                 ))}
@@ -4474,7 +4722,7 @@ function FormPage({
               <select name="assignee" required>
                 <option value="">Unassigned</option>
                 {users.map((user: any) => (
-                  <option key={user._id} value={user.name}>
+                  <option key={user._id} value={user._id}>
                     {user.name}
                   </option>
                 ))}
@@ -4811,11 +5059,17 @@ function TicketDetailLive({ toast }: { toast: (s: string) => void }) {
   const [desc, setDesc] = useState(raw.description || "");
   const [isEditingTitle, setIsEditingTitle] = useState(false);
   const [isEditingDesc, setIsEditingDesc] = useState(false);
+  const [recommendation, setRecommendation] = useState<any>(null);
+  const [parentTaskId, setParentTaskId] = useState(raw.parentTaskId || "");
 
   // Sync state if ticket changes
   useEffect(() => {
     setTitle(raw.title);
     setDesc(raw.description || "");
+    setParentTaskId(raw.parentTaskId || "");
+    if (raw.ticketId) {
+       api<any>(`/analysis/recommend-assignee/${raw.ticketId}`).then(setRecommendation).catch(() => {});
+    }
   }, [raw]);
 
   const updateField = async (fields: any) => {
@@ -5299,6 +5553,96 @@ function TicketDetailLive({ toast }: { toast: (s: string) => void }) {
               style={{ width: "80px" }}
             />
           </div>
+
+          <hr style={{ margin: "16px 0", border: "none", borderTop: "1px solid var(--border)" }} />
+
+          {/* SLA Countdown Panel */}
+          {(() => {
+            const priorityMap: Record<string, number> = { critical: 4, high: 24, medium: 72, low: 120 };
+            const slaH = raw.slaHours ?? priorityMap[raw.priority] ?? 72;
+            const elapsed = (Date.now() - new Date(raw.createdAt || Date.now()).getTime()) / 3_600_000;
+            const remaining = Math.max(0, slaH - elapsed);
+            const isBreached = elapsed >= slaH;
+            return (
+              <div style={{ marginBottom: 20 }}>
+                <h4 style={{ fontSize: 11, textTransform: "uppercase", opacity: 0.6, marginBottom: 8 }}>SLA Status</h4>
+                {isBreached ? (
+                  <Badge tone="red"><Icons.AlertCircle size={14} /> BREACHED ({Math.round(elapsed - slaH)}h overdue)</Badge>
+                ) : (
+                  <div>
+                    <div style={{ display: "flex", justifyContent: "space-between", fontSize: 12, marginBottom: 4 }}>
+                      <span>Time elapsed</span>
+                      <strong>{Math.round(elapsed)}h / {slaH}h</strong>
+                    </div>
+                    <Progress value={(elapsed / slaH) * 100} tone={elapsed / slaH > 0.8 ? "orange" : "green"} />
+                  </div>
+                )}
+              </div>
+            );
+          })()}
+
+          {/* Hierarchy Panel */}
+          <div style={{ marginBottom: 20 }}>
+            <h4 style={{ fontSize: 11, textTransform: "uppercase", opacity: 0.6, marginBottom: 8 }}>Hierarchy</h4>
+            <div style={{ display: "flex", gap: 8, flexDirection: "column" }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                <span style={{ fontSize: 12, opacity: 0.8, minWidth: 60 }}>Parent:</span>
+                <input 
+                  type="text" 
+                  value={parentTaskId} 
+                  onChange={e => setParentTaskId(e.target.value)}
+                  onBlur={() => updateField({ parentTaskId: parentTaskId || null })}
+                  onKeyDown={e => { if (e.key === "Enter") updateField({ parentTaskId: parentTaskId || null }); }}
+                  placeholder="e.g. TICK-001 or empty" 
+                  style={{ flex: 1 }}
+                />
+              </div>
+              <div style={{ fontSize: 12, opacity: 0.8 }}>
+                <Icons.CornerDownRight size={14} style={{ opacity: 0.5 }} /> Children are automatically tracked
+              </div>
+            </div>
+          </div>
+
+          {/* Compatibility Panel */}
+          {recommendation && (
+            <div>
+              <h4 style={{ fontSize: 11, textTransform: "uppercase", opacity: 0.6, marginBottom: 8 }}>Intelligence</h4>
+              {raw.assignee ? (
+                (() => {
+                  const dev = recommendation.recommendations.find((r: any) => r.userId === raw.assignee?._id || r.userId === raw.assignee);
+                  if (!dev) return <div style={{ fontSize: 12, opacity: 0.7 }}>Analyzing assignment...</div>;
+                  if (dev.label === "Excellent") return <Badge tone="lime"><Icons.Sparkles size={14} /> Excellent Assignment</Badge>;
+                  if (dev.label === "Moderate") return <Badge tone="yellow"><Icons.Info size={14} /> Moderate Fit (Skill/Capacity gap)</Badge>;
+                  return <Badge tone="red"><Icons.AlertTriangle size={14} /> Poor Fit (Check capacity or skills)</Badge>;
+                })()
+              ) : (
+                <div style={{ background: "var(--surface-alt, #f9f8ff)", padding: 10, borderRadius: 6 }}>
+                  <div style={{ fontSize: 11, fontWeight: 600, color: "var(--purple)", marginBottom: 4 }}>RECOMMENDED ASSIGNEE</div>
+                  {recommendation.bestRecommendation ? (
+                    <div>
+                      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                        <strong>{recommendation.bestRecommendation.name}</strong>
+                        <Badge tone="green">{recommendation.bestRecommendation.score}</Badge>
+                      </div>
+                      <div style={{ fontSize: 11, opacity: 0.7, marginTop: 4 }}>
+                        {recommendation.bestRecommendation.reasons.join(" • ")}
+                      </div>
+                      <button 
+                        className="btn primary" 
+                        style={{ width: "100%", marginTop: 8, padding: "4px 8px", fontSize: 12 }}
+                        onClick={() => updateField({ assigneeId: recommendation.bestRecommendation.userId })}
+                      >
+                        Assign {recommendation.bestRecommendation.name}
+                      </button>
+                    </div>
+                  ) : (
+                    <div style={{ fontSize: 12, opacity: 0.7 }}>No recommendation available.</div>
+                  )}
+                </div>
+              )}
+            </div>
+          )}
+
         </aside>
       </div>
     </>
@@ -5998,9 +6342,24 @@ function AuditLogsLive() {
   );
 }
 
+function SlaStatusBadge({ status }: { status: string }) {
+  const map: Record<string, { tone: string; label: string }> = {
+    on_track: { tone: "green", label: "On Track" },
+    near_breach: { tone: "orange", label: "Near Breach" },
+    likely_breach: { tone: "yellow", label: "Likely Breach" },
+    breached: { tone: "red", label: "Breached" },
+  };
+  const { tone, label } = map[status] || { tone: "neutral", label: status };
+  return <Badge tone={tone}>{label}</Badge>;
+}
+
 function DashboardLive() {
   const { dashboard: d = {}, user: currentUser, organization, projects, tickets, people, risk } = useWorkspace();
+  const nav = useNavigate();
   const summary = d.summary || {};
+  const slaHealth = d.slaHealth || { onTrack: 0, nearBreach: 0, likelyBreach: 0, breached: 0, criticalBreaches: 0 };
+  const hierarchyProgress = d.hierarchyProgress || { progressPercent: 0, totalRootTasks: 0 };
+  const teamCompatibility = d.teamCompatibility || { incompatibleAssignments: 0, totalAssigned: 0 };
   const active =
     (d.sprints || []).find((s: any) => s.status === "active") || d.sprints?.[0];
   const planned = active?.plannedPoints || 0;
@@ -6014,6 +6373,7 @@ function DashboardLive() {
       `${projects.length} total`,
       "FolderKanban",
       "blue",
+      "/projects",
     ],
     [
       "Sprints in progress",
@@ -6021,6 +6381,7 @@ function DashboardLive() {
       `${planned} points planned`,
       "Timer",
       "purple",
+      "/sprints",
     ],
     [
       "At-risk sprints",
@@ -6028,6 +6389,7 @@ function DashboardLive() {
       "Risk threshold exceeded",
       "Activity",
       "orange",
+      "/sprint-risk",
     ],
     [
       "Blocked tasks",
@@ -6035,6 +6397,7 @@ function DashboardLive() {
       `${tickets.filter((t: any) => t.blocked && t.priority === "critical").length} critical`,
       "CircleSlash2",
       "red",
+      "/board",
     ],
     [
       "Sprint health",
@@ -6042,8 +6405,45 @@ function DashboardLive() {
       active?.name || "No active sprint",
       "HeartPulse",
       "green",
+      "/sprint-risk",
     ],
   ];
+
+  const intelligenceCards = [
+    {
+      label: "SLA Health",
+      icon: "Clock",
+      tone: slaHealth.breached > 0 ? "red" : slaHealth.nearBreach > 0 ? "orange" : "green",
+      value: slaHealth.breached > 0 ? `${slaHealth.breached} Breached` : slaHealth.likelyBreach > 0 ? `${slaHealth.likelyBreach} Likely` : `${slaHealth.onTrack} On Track`,
+      sub: `${slaHealth.nearBreach} near breach · ${slaHealth.likelyBreach} likely breach`,
+      link: "/sprint-risk",
+    },
+    {
+      label: "Hierarchy Progress",
+      icon: "Network",
+      tone: hierarchyProgress.progressPercent >= 80 ? "green" : hierarchyProgress.progressPercent >= 40 ? "orange" : "yellow",
+      value: `${hierarchyProgress.progressPercent}%`,
+      sub: `${hierarchyProgress.totalRootTasks} root tasks`,
+      link: "/sprint-risk",
+    },
+    {
+      label: "Team Compatibility",
+      icon: "UserCheck",
+      tone: teamCompatibility.incompatibleAssignments === 0 ? "green" : teamCompatibility.incompatibleAssignments < 3 ? "orange" : "red",
+      value: teamCompatibility.incompatibleAssignments === 0 ? "All matched" : `${teamCompatibility.incompatibleAssignments} mismatch`,
+      sub: `${teamCompatibility.totalAssigned} tickets assigned`,
+      link: "/sprint-risk",
+    },
+    {
+      label: "Critical Breaches",
+      icon: "Siren",
+      tone: slaHealth.criticalBreaches > 0 ? "red" : "green",
+      value: slaHealth.criticalBreaches,
+      sub: "Critical-priority SLA violations",
+      link: "/sprint-risk",
+    },
+  ];
+
   return (
     <>
       <PageHead
@@ -6058,10 +6458,10 @@ function DashboardLive() {
         desc={`Live delivery data from ${organization?.name || "Workspace"}.`}
       />
       <div className="metrics">
-        {metrics.map(([label, value, sub, icon, tone]) => {
+        {metrics.map(([label, value, sub, icon, tone, link]) => {
           const Icon = (Icons as any)[String(icon)];
           return (
-            <article className="metric" key={String(label)}>
+            <article className="metric" key={String(label)} onClick={() => link && nav(String(link))} style={{ cursor: link ? "pointer" : undefined }}>
               <div>
                 <span>{label}</span>
                 <strong>{value}</strong>
@@ -6074,6 +6474,32 @@ function DashboardLive() {
           );
         })}
       </div>
+
+      {/* Intelligence Cards Row */}
+      <div className="metrics" style={{ marginTop: 0 }}>
+        {intelligenceCards.map((card) => {
+          const Icon = (Icons as any)[card.icon];
+          return (
+            <article
+              className="metric"
+              key={card.label}
+              onClick={() => nav(card.link)}
+              style={{ cursor: "pointer", borderTop: `3px solid var(--${card.tone === "green" ? "lime" : card.tone === "red" ? "red" : card.tone === "orange" ? "orange" : "yellow"})` }}
+              title={`Click to view Sprint Intelligence`}
+            >
+              <div>
+                <span>{card.label}</span>
+                <strong>{card.value}</strong>
+                <small>{card.sub}</small>
+              </div>
+              <b className={card.tone}>
+                <Icon />
+              </b>
+            </article>
+          );
+        })}
+      </div>
+
       <div className="dashboard-grid">
         <section className="card span-2">
           <CardTitle title="Sprint risk" sub="Risk score by sprint" />
@@ -6125,6 +6551,29 @@ function DashboardLive() {
             </span>
           </div>
         </section>
+
+        {/* SLA Summary Card */}
+        <section className="card" style={{ gridColumn: "span 1" }}>
+          <CardTitle title="SLA breakdown" sub="Current sprint ticket SLA status" />
+          <div style={{ display: "flex", flexDirection: "column", gap: 10, marginTop: 12 }}>
+            {[
+              { label: "On Track", count: slaHealth.onTrack, tone: "green" },
+              { label: "Near Breach", count: slaHealth.nearBreach, tone: "orange" },
+              { label: "Likely Breach", count: slaHealth.likelyBreach, tone: "yellow" },
+              { label: "Breached", count: slaHealth.breached, tone: "red" },
+            ].map(({ label, count, tone }) => (
+              <div key={label} style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                <SlaStatusBadge status={label.toLowerCase().replace(" ", "_")} />
+                <strong style={{ fontSize: 18 }}>{count}</strong>
+              </div>
+            ))}
+          </div>
+          <button className="btn" style={{ marginTop: 14, width: "100%" }} onClick={() => nav("/sprint-risk")}>
+            <Icons.Activity size={16} />
+            View Sprint Risk
+          </button>
+        </section>
+
         <section className="card span-2">
           <CardTitle
             title="Team workload"

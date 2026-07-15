@@ -2,6 +2,7 @@ import mongoose, { Schema } from "mongoose";
 
 export type TicketStatus = "Backlog" | "To Do" | "In Progress" | "In Review" | "Done";
 export type TicketPriority = "low" | "medium" | "high" | "critical";
+export type SlaStatus = "on_track" | "near_breach" | "likely_breach" | "breached";
 
 export interface ITicket {
   organization: mongoose.Types.ObjectId;
@@ -28,6 +29,50 @@ export interface ITicket {
   attachments: { name: string; url: string; mimeType?: string; size?: number; uploadedBy: mongoose.Types.ObjectId; createdAt: Date }[];
   rank: number;
   archivedAt?: Date;
+  // Hierarchy — children are NEVER stored; always fetched via find({ parentTaskId: id })
+  parentTaskId?: mongoose.Types.ObjectId;
+  // SLA & Skills
+  requiredSkills: string[];
+  slaHours?: number;
+  completedTime?: Date;
+  slaBreachedAuditLogged?: boolean;
+}
+
+/** Returns SLA hours based on ticket priority */
+export function slaHoursForPriority(priority: TicketPriority): number {
+  const map: Record<TicketPriority, number> = { critical: 4, high: 24, medium: 72, low: 120 };
+  return map[priority] ?? 72;
+}
+
+/** Compute SLA status given creation time and SLA hours */
+export function computeSlaStatus(createdAt: Date, slaHours: number, completedTime?: Date): SlaStatus {
+  const now = completedTime ?? new Date();
+  const elapsed = (now.getTime() - createdAt.getTime()) / 3_600_000;
+  const elapsed_pct = elapsed / slaHours;
+  if (elapsed_pct >= 1) return "breached";
+  if (elapsed_pct >= 0.8) return "near_breach";
+  return "on_track";
+}
+
+/**
+ * Predict if a ticket is "likely to breach" SLA based on current team velocity.
+ * If daily velocity is 0 or unknown, defaults to flagging the ticket if >60% SLA elapsed.
+ */
+export function predictSlaLikely(params: {
+  createdAt: Date;
+  slaHours: number;
+  remainingPoints: number;
+  dailyVelocityPoints: number;
+  completedTime?: Date;
+}): boolean {
+  if (params.completedTime) return false;
+  const now = new Date();
+  const elapsed = (now.getTime() - params.createdAt.getTime()) / 3_600_000;
+  if (elapsed >= params.slaHours) return false;
+  const remainingHours = params.slaHours - elapsed;
+  if (params.dailyVelocityPoints <= 0) return (elapsed / params.slaHours) > 0.6;
+  const estimatedHoursToComplete = (params.remainingPoints / params.dailyVelocityPoints) * 8;
+  return estimatedHoursToComplete > remainingHours;
 }
 
 const ticketSchema = new Schema<ITicket>(
@@ -56,10 +101,18 @@ const ticketSchema = new Schema<ITicket>(
     attachments: [{ name: String, url: String, mimeType: String, size: Number, uploadedBy: { type: Schema.Types.ObjectId, ref: "User" }, createdAt: Date }],
     rank: { type: Number, default: 0 },
     archivedAt: Date,
+    // Hierarchy
+    parentTaskId: { type: Schema.Types.ObjectId, ref: "Ticket" },
+    // SLA & Skills
+    requiredSkills: [{ type: String }],
+    slaHours: { type: Number },
+    completedTime: { type: Date },
+    slaBreachedAuditLogged: { type: Boolean, default: false },
   },
   { timestamps: true },
 );
 
 ticketSchema.index({ organization: 1, ticketId: 1 }, { unique: true });
+ticketSchema.index({ organization: 1, parentTaskId: 1 });
 
 export const Ticket = mongoose.model<ITicket>("Ticket", ticketSchema);
