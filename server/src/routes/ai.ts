@@ -1,4 +1,4 @@
-import { Router } from "express";
+import { Router, type Request } from "express";
 import OpenAI from "openai";
 import { z } from "zod";
 import { aiEndpointsForRole, canRoleAccessAiEndpoint, isConfirmationRequired, normalizeAiPath } from "../aiAccess.js";
@@ -20,6 +20,15 @@ router.use(enforceApiAccess);
 function getClient() {
   if (!env.openaiApiKey) throw new Error("OPENAI_API_KEY is not configured");
   return new OpenAI({ apiKey: env.openaiApiKey, baseURL: env.openaiBaseUrl });
+}
+
+function requestOrigin(req: Request) {
+  const forwardedHost = req.get("x-forwarded-host")?.split(",")[0]?.trim();
+  const host = forwardedHost || req.get("host");
+  if (!host) return `http://127.0.0.1:${env.port}`;
+
+  const forwardedProtocol = req.get("x-forwarded-proto")?.split(",")[0]?.trim();
+  return `${forwardedProtocol || req.protocol}://${host}`;
 }
 
 function parseJsonPayload(raw: string) {
@@ -75,7 +84,7 @@ router.post("/execute", async (req: AuthRequest, res) => {
     });
   }
 
-  const url = new URL(`/api/v1${path}`, `http://127.0.0.1:${env.port}`);
+  const url = new URL(`/api/v1${path}`, requestOrigin(req));
   const response = await fetch(url, {
     method,
     headers: {
@@ -232,6 +241,25 @@ router.post("/chat", async (req, res) => {
   }).safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ message: "Invalid chat request", issues: parsed.error.issues });
 
+  const streamsToolActivity = req.get("accept")?.includes("application/x-ndjson") ?? false;
+  if (streamsToolActivity) {
+    res.status(200);
+    res.setHeader("Content-Type", "application/x-ndjson; charset=utf-8");
+    res.setHeader("Cache-Control", "no-cache, no-transform");
+    res.setHeader("X-Accel-Buffering", "no");
+    res.flushHeaders();
+  }
+
+  const sendEvent = (event: Record<string, unknown>) => {
+    if (streamsToolActivity && !res.writableEnded) res.write(`${JSON.stringify(event)}\n`);
+  };
+  const finish = (payload: Record<string, unknown>) => {
+    if (!streamsToolActivity) return res.json(payload);
+    const { toolCalls: _toolCalls, ...clientPayload } = payload;
+    sendEvent({ type: "done", ...clientPayload });
+    res.end();
+  };
+
   const authReq = req as AuthRequest;
   const userRole = authReq.user!.role!;
   const endpoints = aiEndpointsForRole(userRole);
@@ -248,10 +276,20 @@ router.post("/chat", async (req, res) => {
     "- Team and workspace: list/update users, send invitations, resend/cancel invitations, manage SLA policy, settings, resources, integrations, notifications, sessions, reports, exports, imports, and audit logs when the role allows it.",
     "- For requests that need missing IDs or required fields, first read the relevant list endpoint or ask the user for the missing value.",
     "",
+    "Output formatting:",
+    "- Respond in clear GitHub-flavored Markdown and lead with the direct answer or outcome.",
+    "- Use short headings only when they make a longer response easier to scan.",
+    "- Use Markdown tables for comparisons or metric summaries, bullets for related items, and numbered lists for ordered next steps.",
+    "- Use **bold** sparingly for key labels or results, `inline code` for IDs, routes, fields, and commands, and fenced code blocks only for multiline code or payload examples.",
+    "- Keep paragraphs concise and place a blank line between headings, paragraphs, lists, and tables.",
+    "- Do not emit raw HTML, except `<br>` when a table cell needs multiple lines. Never wrap the entire response in a code fence.",
+    "- Summarize tool results instead of dumping raw payloads unless the user asks for raw data. Clearly distinguish zero values from missing or unavailable data.",
+    "",
     "Rules:",
     "- For destructive or irreversible actions (DELETE, archive, deactivate, etc.), describe what will happen and ask for explicit confirmation before proceeding.",
     "- Never expose credentials, tokens, or internal secrets.",
     "- Report backend errors accurately — include status codes and messages.",
+    "- Never retry a failed create, update, or delete request with the same arguments. Explain the failure or ask for corrected information.",
     "- When you need to call an I-TRACK API, use the execute_itrack_api tool.",
   ].join("\n");
 
@@ -283,8 +321,13 @@ router.post("/chat", async (req, res) => {
   try {
     const client = getClient();
     const model = env.openaiModel || "grok-3-mini";
-    const allToolCalls: { name: string; arguments: unknown; result: unknown }[] = [];
+    const allToolCalls: { name: string; arguments: unknown; result: unknown; error?: boolean }[] = [];
     const MAX_ITERATIONS = 5;
+    const fallbackReply = () => allToolCalls.some((call) => call.error)
+      ? "One or more requests failed. Please review the API error and try again with corrected information."
+      : allToolCalls.length
+        ? "I finished the requested API operations."
+        : "I couldn't generate a response. Please try again.";
 
     let response = await client.chat.completions.create({
       model,
@@ -301,7 +344,7 @@ router.post("/chat", async (req, res) => {
       messages.push(assistantMessage);
 
       if (choice.finish_reason !== "tool_calls" || !assistantMessage.tool_calls?.length) {
-        return res.json({ reply: assistantMessage.content ?? "", ...(allToolCalls.length ? { toolCalls: allToolCalls } : {}) });
+        return finish({ reply: assistantMessage.content || fallbackReply(), ...(allToolCalls.length ? { toolCalls: allToolCalls } : {}) });
       }
 
       for (const toolCall of assistantMessage.tool_calls) {
@@ -321,7 +364,7 @@ router.post("/chat", async (req, res) => {
         } catch {
           const errResult = { error: "Invalid tool arguments" };
           messages.push({ role: "tool", tool_call_id: toolCall.id, content: JSON.stringify(errResult) });
-          allToolCalls.push({ name: toolCall.function.name, arguments: toolCall.function.arguments, result: errResult });
+          allToolCalls.push({ name: toolCall.function.name, arguments: toolCall.function.arguments, result: errResult, error: true });
           continue;
         }
 
@@ -329,7 +372,7 @@ router.post("/chat", async (req, res) => {
         const actionKey = `${method} ${path}`;
 
         if (isConfirmationRequired(method, path) && parsed.data.confirmed?.action !== actionKey) {
-          return res.json({
+          return finish({
             reply: `I need your confirmation to perform a destructive action: **${actionKey}**. Please confirm to proceed.`,
             requiresConfirmation: true,
             pendingAction: {
@@ -341,7 +384,9 @@ router.post("/chat", async (req, res) => {
           });
         }
 
-        const executeUrl = `http://127.0.0.1:${env.port}/api/v1/ai/execute`;
+        sendEvent({ type: "tool_start", id: toolCall.id, name: toolCall.function.name, arguments: args });
+
+        const executeUrl = new URL("/api/v1/ai/execute", requestOrigin(req));
         const executeRes = await fetch(executeUrl, {
           method: "POST",
           headers: {
@@ -352,14 +397,19 @@ router.post("/chat", async (req, res) => {
         });
 
         const resultText = await executeRes.text();
-        let result: unknown;
+        let payload: unknown;
         try {
-          result = JSON.parse(resultText);
+          payload = JSON.parse(resultText);
         } catch {
-          result = resultText;
+          payload = resultText;
         }
 
-        allToolCalls.push({ name: toolCall.function.name, arguments: args, result });
+        const result = executeRes.ok
+          ? payload
+          : { error: true, status: executeRes.status, details: payload };
+
+        allToolCalls.push({ name: toolCall.function.name, arguments: args, result, ...(!executeRes.ok ? { error: true } : {}) });
+        sendEvent({ type: "tool_result", id: toolCall.id, ok: executeRes.ok, status: executeRes.status });
         messages.push({ role: "tool", tool_call_id: toolCall.id, content: typeof result === "string" ? result : JSON.stringify(result) });
       }
 
@@ -373,8 +423,13 @@ router.post("/chat", async (req, res) => {
     }
 
     const finalChoice = response.choices[0];
-    return res.json({ reply: finalChoice?.message?.content ?? "", ...(allToolCalls.length ? { toolCalls: allToolCalls } : {}) });
+    return finish({ reply: finalChoice?.message?.content || fallbackReply(), ...(allToolCalls.length ? { toolCalls: allToolCalls } : {}) });
   } catch (error) {
+    if (streamsToolActivity) {
+      sendEvent({ type: "error", message: error instanceof Error ? error.message : "Unknown error" });
+      res.end();
+      return;
+    }
     return res.status(500).json({ message: "AI chat failed", detail: error instanceof Error ? error.message : "Unknown error" });
   }
 });

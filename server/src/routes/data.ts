@@ -72,26 +72,58 @@ router.get("/dashboard", async (req: AuthRequest, res) => {
       ...invitations.map((invitation: any) => ({ _id: invitation.id, id: invitation.id, name: invitation.name, email: invitation.email, role: invitation.role, inviteStatus: "invited", capacity: invitation.capacity, skills: [] })),
     ],
     trends: {
-      risk: [
-        { name: "Mon", value: 58 },
-        { name: "Tue", value: 64 },
-        { name: "Wed", value: 69 },
-        { name: "Thu", value: activeSprint?.riskScore ?? 0 },
-        { name: "Fri", value: Math.max((activeSprint?.riskScore ?? 0) - 2, 0) },
-      ],
-      velocity: [
-        { name: "S20", value: 92 },
-        { name: "S21", value: 104 },
-        { name: "S22", value: 97 },
-        { name: "S23", value: 111 },
-        { name: "S24", value: activeSprint?.completedPoints ?? 0 },
-      ],
+      risk: sprints.length
+        ? sprints.slice(-5).map((sprint) => ({ name: sprint.name, value: sprint.riskScore }))
+        : [{ name: "Current", value: 0 }],
+      velocity: sprints
+        .flatMap((sprint) => (sprint.velocityHistory || []).map((value, index) => ({ name: `${sprint.name} ${index + 1}`, value })))
+        .slice(-5),
     },
     recommendation: {
       title: blockedTickets.length ? "Resolve blockers before scope grows" : "Keep capacity inside the sprint plan",
       body: blockedTickets.length ? "Blocked work is increasing deterministic sprint risk. Reassign or defer dependency-heavy tickets first." : "Current workspace data is healthy; keep planned points aligned with available capacity.",
-      confidence: blockedTickets.length ? 82 : 74,
+      confidence: Math.max(0, Math.min(100, Math.round(100 - (activeSprint?.riskScore ?? 0) * 0.6 - Math.min(blockedTickets.length * 5, 30)))),
     },
+  });
+});
+
+router.get("/my-work", async (req: AuthRequest, res) => {
+  const [user, tickets, sprints] = await Promise.all([
+    User.findById(userId(req)).select("name capacity"),
+    Ticket.find(orgFilter(req)),
+    Sprint.find(orgFilter(req)).sort("startDate"),
+  ]);
+  const now = new Date();
+  const weekStart = new Date(now);
+  weekStart.setHours(0, 0, 0, 0);
+  weekStart.setDate(weekStart.getDate() - ((weekStart.getDay() + 6) % 7));
+  const weekEnd = new Date(weekStart);
+  weekEnd.setDate(weekEnd.getDate() + 7);
+  const assigned = tickets.filter((ticket) => String(ticket.assignee || "") === String(user?._id || ""));
+  const dueThisWeek = assigned.filter((ticket) => ticket.dueDate >= weekStart && ticket.dueDate < weekEnd);
+  const watched = tickets.filter((ticket) => ticket.watchers.some((watcher) => String(watcher) === String(user?._id || "")));
+  const activeSprint = sprints.find((sprint) => sprint.status === "active") || sprints.at(-1);
+  const sprintStart = activeSprint?.startDate ? new Date(activeSprint.startDate) : null;
+  const sprintEnd = activeSprint?.endDate ? new Date(activeSprint.endDate) : null;
+  if (sprintEnd) sprintEnd.setHours(23, 59, 59, 999);
+  const loggedHours = tickets.reduce((total, ticket) => {
+    if (!activeSprint || String(ticket.sprint || "") !== String(activeSprint._id)) return total;
+    return total + ticket.workLogs.reduce((hours, log) => {
+      const createdAt = new Date(log.createdAt);
+      const inSprint = !sprintStart || !sprintEnd || (createdAt >= sprintStart && createdAt <= sprintEnd);
+      return log.author === user?.name && inSprint ? hours + (log.hours || 0) : hours;
+    }, 0);
+  }, 0);
+  const updatedToday = watched.filter((ticket) => ticket.updatedAt?.toDateString() === now.toDateString()).length;
+  return res.json({
+    assigned: assigned.length,
+    projects: new Set(assigned.map((ticket) => String(ticket.project))).size,
+    dueThisWeek: dueThisWeek.length,
+    dueThisWeekHighPriority: dueThisWeek.filter((ticket) => ticket.priority === "high" || ticket.priority === "critical").length,
+    loggedHours,
+    capacity: user?.capacity ?? 0,
+    watched: watched.length,
+    watchedUpdatedToday: updatedToday,
   });
 });
 
@@ -392,16 +424,22 @@ router.get("/reports", async (req: AuthRequest, res) => {
   const [tickets, sprints] = await Promise.all([Ticket.find(orgFilter(req)), Sprint.find(orgFilter(req))]);
   const done = tickets.filter((ticket) => ticket.status === "Done").length;
   const cycleMetrics = cycleMetricsForTickets(tickets);
+  const burnoutTrend = sprints.slice(-5).map((sprint) => sprint.capacity ? Math.round(Math.min(100, (sprint.plannedPoints / sprint.capacity) * 100)) : 0);
+  const now = new Date();
+  const blockedDuration = tickets.filter((ticket) => ticket.blocked).reduce((days, ticket) => {
+    const started = ticket.updatedAt || ticket.createdAt || now;
+    return days + Math.max(0, (now.getTime() - started.getTime()) / 86400000);
+  }, 0);
   return res.json({
     reports: {
       velocity: sprints.flatMap((sprint) => sprint.velocityHistory).slice(-5),
       completion: tickets.length ? Math.round((done / tickets.length) * 100) : 0,
-      burnoutTrend: [41, 48, 55, 62, 66],
+      burnoutTrend,
       riskTrend: sprints.length ? sprints.map((sprint) => sprint.riskScore).slice(-5) : [0],
       cycleTime: cycleMetrics.cycleTime,
       leadTime: cycleMetrics.leadTime,
       measuredTickets: cycleMetrics.measuredTickets,
-      blockedDuration: tickets.filter((ticket) => ticket.blocked).length * 3,
+      blockedDuration: Math.round(blockedDuration * 10) / 10,
       missingFeatures,
     },
   });

@@ -1,11 +1,11 @@
-# I-TRACK MERN
+# I-TRACK
 
-I-TRACK is a split MERN prototype for explainable sprint intelligence. The repo contains a React/Vite client and an Express/MongoDB API with JWT auth, deterministic risk calculations, seeded demo data, and server-side OpenAI-compatible Chat Completions integration.
+I-TRACK is a split React/Express prototype for explainable sprint intelligence. PostgreSQL is the target database, with a local Docker instance for schema validation and Supabase for the hosted environment.
 
 ## Stack
 
 - Client: React, Vite, TypeScript, Tailwind CSS, Lucide React, Recharts, React Flow, TanStack Query, Zustand, Framer Motion, Sonner.
-- Server: Express, TypeScript, MongoDB/Mongoose, JWT, Zod, OpenAI JavaScript client.
+- Server: Express, TypeScript, PostgreSQL/Supabase, JWT, Zod, OpenAI JavaScript client.
 - Palette: midnight navy, electric blue, cyan, and rose accents, with the prohibited hue family excluded from UI tokens.
 
 ## Setup
@@ -16,7 +16,7 @@ Copy-Item server\.env.local.example server\.env
 Copy-Item client\.env.local.example client\.env.local
 ```
 
-Update `server\.env` with a strong `JWT_SECRET`, your `MONGODB_URI`, and optional OpenAI-compatible provider values:
+Update `server\.env` with a strong `JWT_SECRET`, your Supabase Session Pooler `DATABASE_URL`, and optional OpenAI-compatible provider values:
 
 ```env
 OPENAI_API_KEY=ocz_your_api_key
@@ -28,10 +28,12 @@ Do not put API keys in the client env file.
 
 ## Run
 
-Start MongoDB locally, then seed demo data:
+Start PostgreSQL locally and apply the schema:
 
 ```powershell
-npm run seed
+docker compose -f docker-compose.postgres.yml up -d
+cd server
+npm run db:local:schema
 ```
 
 Run the API and client concurrently in a single terminal:

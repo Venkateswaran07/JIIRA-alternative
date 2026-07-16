@@ -5,7 +5,7 @@ const { Pool } = pg;
 
 export const postgres = new Pool({
   connectionString: env.databaseUrl,
-  ssl: env.nodeEnv === "production" ? { rejectUnauthorized: false } : undefined,
+  ssl: env.databaseUrl?.includes("supabase.com") ? { rejectUnauthorized: false } : undefined,
 });
 
 export async function connectPostgres() {

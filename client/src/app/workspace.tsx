@@ -244,6 +244,7 @@ export function ApiGate({
         priority: t.priority,
         points: t.storyPoints,
         assignee: t.assignee?.name || "Unassigned",
+        assigneeId: String(t.assignee?._id || t.assignee || ""),
         project: t.project?.name || "",
         labels: t.labels || [],
         blocked: t.blocked,

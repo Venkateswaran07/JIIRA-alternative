@@ -17,6 +17,7 @@ export type Ticket = {
   priority: Priority;
   points: number;
   assignee: string;
+  assigneeId?: string;
   project: string;
   labels: string[];
   slaStatus?: "healthy" | "due_soon" | "breached" | "resolved";

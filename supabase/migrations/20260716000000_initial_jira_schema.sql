@@ -24,7 +24,10 @@ create table if not exists users (
   updated_at timestamptz not null default now()
 );
 
-alter table organizations add constraint organizations_owner_fk foreign key (owner) references users(id) not valid;
+do $$ begin
+  alter table organizations add constraint organizations_owner_fk foreign key (owner) references users(id) not valid;
+exception when duplicate_object then null;
+end $$;
 create table if not exists organization_memberships (
   id text primary key default gen_random_uuid()::text,
   user_id text not null references users(id),
@@ -115,6 +118,34 @@ create table if not exists sessions (
   created_at timestamptz not null default now(), updated_at timestamptz not null default now()
 );
 
+create table if not exists action_tokens (
+  id text primary key default gen_random_uuid()::text,
+  user_id text not null references users(id), organization text references organizations(id),
+  kind text not null, token_hash text not null unique, expires_at timestamptz not null, used_at timestamptz,
+  created_at timestamptz not null default now(), updated_at timestamptz not null default now()
+);
+
+create table if not exists notifications (
+  id text primary key default gen_random_uuid()::text,
+  organization text not null references organizations(id), user_id text not null references users(id),
+  type text not null, title text not null, body text, entity_type text, entity_id text, read_at timestamptz,
+  created_at timestamptz not null default now(), updated_at timestamptz not null default now()
+);
+
+create table if not exists integrations (
+  id text primary key default gen_random_uuid()::text,
+  organization text not null references organizations(id), kind text not null, name text not null,
+  secret_hash text, url text, events jsonb not null default '[]'::jsonb, active boolean not null default true,
+  last_used_at timestamptz, created_at timestamptz not null default now(), updated_at timestamptz not null default now(),
+  unique (organization, kind, name)
+);
+
+create table if not exists counters (
+  id text primary key default gen_random_uuid()::text,
+  organization text not null references organizations(id), scope text not null, value bigint not null default 100,
+  unique (organization, scope)
+);
+
 create table if not exists audit_events (
   id text primary key default gen_random_uuid()::text, organization text not null, actor text not null,
   action text not null, entity_type text, entity_id text, metadata jsonb not null default '{}'::jsonb,
@@ -124,3 +155,6 @@ create table if not exists audit_events (
 create index if not exists tickets_org_status_idx on tickets (organization, status);
 create index if not exists audit_events_org_created_idx on audit_events (organization, created_at desc);
 create index if not exists sessions_expires_idx on sessions (expires_at);
+create index if not exists memberships_org_status_idx on organization_memberships (organization, status);
+create index if not exists invitations_email_status_idx on invitations (lower(email), status, expires_at);
+create index if not exists notifications_user_created_idx on notifications (organization, user_id, created_at desc);

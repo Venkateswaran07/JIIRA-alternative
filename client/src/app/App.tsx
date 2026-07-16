@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { createContext, useContext, useEffect, useMemo, useState } from "react";
 import {
   BrowserRouter,
   NavLink,
@@ -42,6 +42,7 @@ import {
   Progress,
 } from "./components/ui";
 import { cx, fmt } from "../utils/ui";
+import { CustomMarkdown } from "./components/Markdown";
 
 const defaultNotificationPreferences: NotificationPreferences = {
   ticketAssignments: true,
@@ -214,6 +215,7 @@ function Shell({
   }, [mobile, search, aiPanel]);
 
   return (
+    <AiAgentProvider toast={toast}>
     <div className={cx("app", collapsed && "collapsed")}>
       <a className="skip-link" href="#main-content">
         Skip to main content
@@ -223,7 +225,7 @@ function Shell({
         aria-label="Workspace navigation"
       >
         <div className="brand">
-          <div className="brand-mark">I</div>
+          <div className="brand-mark"><img src="/logo-mark.png" alt="" /></div>
           <span>I-TRACK</span>
           <button
             className="icon-btn collapse"
@@ -454,8 +456,9 @@ function Shell({
           <Icons.Plus />
         </button>
       )}
-      <AiAgentPanel open={aiPanel} onClose={() => setAiPanel(false)} toast={toast} />
+      <AiAgentPanel open={aiPanel} onClose={() => setAiPanel(false)} />
     </div>
+    </AiAgentProvider>
   );
 }
 function Command({
@@ -557,13 +560,30 @@ type AiChatMessage = {
   id: number;
   role: "user" | "assistant";
   content: string;
-  toolCalls?: { name: string; args?: any; arguments?: any; result: any; error?: boolean }[];
   requiresConfirmation?: boolean;
   pendingAction?: { method: string; path: string; body?: any; description: string };
 };
 
-type FormattedPart = { kind: "text" | "strong" | "code"; text: string };
-type FormattedBlock = { type: "paragraph" | "bullet" | "number"; parts: FormattedPart[]; index?: string };
+type AiToolActivity = {
+  id: string;
+  method: string;
+  path: string;
+  status: "running" | "complete" | "error";
+};
+
+type AiAgentContextValue = {
+  messages: AiChatMessage[];
+  input: string;
+  setInput: React.Dispatch<React.SetStateAction<string>>;
+  loading: boolean;
+  toolActivities: AiToolActivity[];
+  sendMessage: (text: string, confirmed?: { action: string }) => Promise<void>;
+  confirmMessage: (message: AiChatMessage) => void;
+  denyMessage: () => void;
+  clearChat: () => void;
+};
+
+const AiAgentContext = createContext<AiAgentContextValue | null>(null);
 
 const aiActionPrompts = [
   { label: "Show what you can do", icon: "ListChecks", prompt: "Show what you can do in this workspace. Group actions by tickets, projects, sprints, team, resources, reports, settings, and integrations." },
@@ -576,62 +596,175 @@ const aiActionPrompts = [
   { label: "Show reports", icon: "ChartNoAxesCombined", prompt: "Show reports and summarize delivery, workload, risk, and velocity insights." },
 ];
 
-function formatInlineMarkdown(text: string): FormattedPart[] {
-  const parts: FormattedPart[] = [];
-  const pattern = /(`([^`]+)`|\*\*([^*]+)\*\*)/g;
-  let last = 0;
-  for (const match of text.matchAll(pattern)) {
-    if (match.index === undefined) continue;
-    if (match.index > last) parts.push({ kind: "text", text: text.slice(last, match.index) });
-    if (match[2]) parts.push({ kind: "code", text: match[2] });
-    if (match[3]) parts.push({ kind: "strong", text: match[3] });
-    last = match.index + match[0].length;
-  }
-  if (last < text.length) parts.push({ kind: "text", text: text.slice(last) });
-  return parts.length ? parts : [{ kind: "text", text }];
+function aiActivityLabel(activity: AiToolActivity) {
+  const path = activity.path.split("?")[0] || "/request";
+  const segments = path.split("/").filter(Boolean);
+  const action = segments.at(-1) || "";
+  const parent = segments.at(-2)?.replace(/[-_]/g, " ") || "item";
+  const actionLabels: Record<string, string> = {
+    assign: "Assigning ticket",
+    archive: `Archiving ${parent.replace(/s$/, "")}`,
+    attachments: "Adding attachment",
+    bulk: "Updating tickets",
+    clone: "Cloning ticket",
+    comments: "Adding comment",
+    complete: "Completing sprint",
+    deactivate: "Deactivating user",
+    invitations: "Sending invitation",
+    members: "Updating project members",
+    reactivate: "Reactivating user",
+    "read-all": "Marking notifications as read",
+    reopen: "Reopening sprint",
+    resend: "Resending invitation",
+    restore: `Restoring ${parent.replace(/s$/, "")}`,
+    start: "Starting sprint",
+    status: "Updating ticket status",
+    watch: "Updating ticket watchers",
+    "work-logs": "Adding work log",
+  };
+  if (activity.method !== "GET" && actionLabels[action]) return actionLabels[action];
+
+  const idLike = /^[a-f\d]{24}$/i.test(action) || /^[a-f\d-]{32,36}$/i.test(action);
+  const resource = (idLike ? parent : action.replace(/[-_]/g, " ")) || "workspace data";
+  const readable = resource === "me" ? "your profile" : resource.replace(/s$/, "");
+  const verb = activity.method === "GET"
+    ? "Fetching"
+    : activity.method === "POST"
+      ? "Creating"
+      : activity.method === "DELETE"
+        ? "Removing"
+        : "Updating";
+  return `${verb} ${readable}`;
 }
 
-function aiMessageBlocks(content: string): FormattedBlock[] {
-  return content
-    .split(/\n+/)
-    .map((line) => line.trim())
-    .filter(Boolean)
-    .map((line) => {
-      const bullet = line.match(/^[-*]\s+(.+)$/);
-      if (bullet) return { type: "bullet", parts: formatInlineMarkdown(bullet[1]) };
-      const numbered = line.match(/^(\d+[.)])\s+(.+)$/);
-      if (numbered) return { type: "number", index: numbered[1], parts: formatInlineMarkdown(numbered[2]) };
-      return { type: "paragraph", parts: formatInlineMarkdown(line) };
-    });
-}
-
-function AiFormattedMessage({ content }: { content: string }) {
-  const blocks = aiMessageBlocks(content);
-  return (
-    <div className="ai-formatted">
-      {blocks.map((block, blockIndex) => (
-        <div className={cx("ai-format-line", block.type)} key={`${block.type}-${blockIndex}`}>
-          {block.type === "bullet" && <span className="ai-format-marker">*</span>}
-          {block.type === "number" && <span className="ai-format-marker">{block.index}</span>}
-          <span>
-            {block.parts.map((part, partIndex) => {
-              const key = `${blockIndex}-${partIndex}`;
-              if (part.kind === "strong") return <strong key={key}>{part.text}</strong>;
-              if (part.kind === "code") return <code key={key}>{part.text}</code>;
-              return <React.Fragment key={key}>{part.text}</React.Fragment>;
-            })}
-          </span>
-        </div>
-      ))}
-    </div>
-  );
-}
-
-function AiAgentPanel({ open, onClose, toast }: { open: boolean; onClose: () => void; toast: (s: string) => void }) {
+function AiAgentProvider({ children, toast }: { children: React.ReactNode; toast: (s: string) => void }) {
   const [messages, setMessages] = useState<AiChatMessage[]>([]);
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
-  const [expandedTools, setExpandedTools] = useState<Set<number>>(new Set());
+  const [toolActivities, setToolActivities] = useState<AiToolActivity[]>([]);
+
+  const sendMessage = async (text: string, confirmed?: { action: string }) => {
+    if (!text.trim() && !confirmed) return;
+    const userMsg: AiChatMessage = { id: Date.now(), role: "user", content: text };
+    if (!confirmed) setMessages((m) => [...m, userMsg]);
+    setInput("");
+    setLoading(true);
+    setToolActivities([]);
+    try {
+      const history = messages.filter((m) => !m.requiresConfirmation).map((m) => ({ role: m.role, content: m.content }));
+      const token = getToken();
+      const response = await fetch("/api/v1/ai/chat", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Accept: "application/x-ndjson",
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        },
+        body: JSON.stringify({ message: text, history, ...(confirmed ? { confirmed } : {}) }),
+      });
+      if (!response.ok) {
+        const body = await response.json().catch(() => ({}));
+        throw new Error(body.message || `Request failed (${response.status})`);
+      }
+      if (!response.body) throw new Error("The AI response stream was unavailable.");
+
+      let buffer = "";
+      let res: any = null;
+      let streamError = "";
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+      const consumeEvent = (line: string) => {
+        if (!line.trim()) return;
+        const event = JSON.parse(line);
+        if (event.type === "tool_start") {
+          const args = event.arguments || {};
+          setToolActivities((current) => [...current, {
+            id: event.id,
+            method: args.method || "GET",
+            path: args.path || "/request",
+            status: "running",
+          }]);
+        } else if (event.type === "tool_result") {
+          setToolActivities((current) => current.map((activity) => activity.id === event.id
+            ? { ...activity, status: event.ok ? "complete" : "error" }
+            : activity));
+        } else if (event.type === "done") {
+          res = event;
+        } else if (event.type === "error") {
+          streamError = event.message || "AI chat failed";
+        }
+      };
+
+      while (true) {
+        const { value, done } = await reader.read();
+        buffer += decoder.decode(value, { stream: !done });
+        const lines = buffer.split("\n");
+        buffer = lines.pop() || "";
+        lines.forEach(consumeEvent);
+        if (done) break;
+      }
+      consumeEvent(buffer);
+      if (streamError) throw new Error(streamError);
+      if (!res) throw new Error("The AI response ended before it was complete.");
+
+      const assistantMsg: AiChatMessage = {
+        id: Date.now() + 1,
+        role: "assistant",
+        content: res.reply || "I couldn't process that request.",
+        requiresConfirmation: res.requiresConfirmation,
+        pendingAction: res.pendingAction,
+      };
+      setMessages((m) => [...m, assistantMsg]);
+    } catch (e) {
+      toast(e instanceof Error ? e.message : "AI request failed");
+      setMessages((m) => [...m, {
+        id: Date.now() + 1,
+        role: "assistant",
+        content: e instanceof Error ? `Sorry, something went wrong: ${e.message}` : "An unexpected error occurred.",
+      }]);
+    } finally {
+      setLoading(false);
+      setToolActivities([]);
+    }
+  };
+
+  const handleConfirm = (msg: AiChatMessage) => {
+    if (!msg.pendingAction) return;
+    const lastUserMsg = [...messages].reverse().find((m) => m.role === "user");
+    sendMessage(lastUserMsg?.content || "confirm", { action: msg.pendingAction.description });
+  };
+
+  const handleDeny = () => {
+    setMessages((m) => [...m, { id: Date.now(), role: "assistant", content: "Understood — action cancelled. How else can I help?" }]);
+  };
+
+  const clearChat = () => { setMessages([]); setToolActivities([]); };
+
+  return (
+    <AiAgentContext.Provider value={{
+      messages,
+      input,
+      setInput,
+      loading,
+      toolActivities,
+      sendMessage,
+      confirmMessage: handleConfirm,
+      denyMessage: handleDeny,
+      clearChat,
+    }}>
+      {children}
+    </AiAgentContext.Provider>
+  );
+}
+
+function useAiAgent() {
+  const context = useContext(AiAgentContext);
+  if (!context) throw new Error("useAiAgent must be used inside AiAgentProvider");
+  return context;
+}
+
+function AiAgentPanel({ open, onClose }: { open: boolean; onClose: () => void }) {
+  const { messages, input, setInput, loading, toolActivities, sendMessage, confirmMessage, denyMessage, clearChat } = useAiAgent();
   const [actionsOpen, setActionsOpen] = useState(false);
   const bodyRef = React.useRef<HTMLDivElement>(null);
   const inputRef = React.useRef<HTMLTextAreaElement>(null);
@@ -643,7 +776,7 @@ function AiAgentPanel({ open, onClose, toast }: { open: boolean; onClose: () => 
 
   useEffect(() => {
     if (bodyRef.current) bodyRef.current.scrollTop = bodyRef.current.scrollHeight;
-  }, [messages, loading]);
+  }, [messages, loading, toolActivities]);
 
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
@@ -652,52 +785,6 @@ function AiAgentPanel({ open, onClose, toast }: { open: boolean; onClose: () => 
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
   }, [onClose]);
-
-  const sendMessage = async (text: string, confirmed?: { action: string }) => {
-    if (!text.trim() && !confirmed) return;
-    const userMsg: AiChatMessage = { id: Date.now(), role: "user", content: text };
-    if (!confirmed) setMessages((m) => [...m, userMsg]);
-    setInput("");
-    setLoading(true);
-    try {
-      const history = messages.filter((m) => !m.requiresConfirmation).map((m) => ({ role: m.role, content: m.content }));
-      const res = await api<any>("/ai/chat", {
-        method: "POST",
-        body: JSON.stringify({ message: text, history, ...(confirmed ? { confirmed } : {}) }),
-      });
-      const assistantMsg: AiChatMessage = {
-        id: Date.now() + 1,
-        role: "assistant",
-        content: res.reply || "I couldn't process that request.",
-        toolCalls: res.toolCalls,
-        requiresConfirmation: res.requiresConfirmation,
-        pendingAction: res.pendingAction,
-      };
-      setMessages((m) => [...m, assistantMsg]);
-    } catch (e) {
-      setMessages((m) => [...m, {
-        id: Date.now() + 1,
-        role: "assistant",
-        content: e instanceof Error ? `Sorry, something went wrong: ${e.message}` : "An unexpected error occurred.",
-      }]);
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const handleConfirm = (msg: AiChatMessage) => {
-    if (!msg.pendingAction) return;
-    const lastUserMsg = [...messages].reverse().find((m) => m.role === "user");
-    sendMessage(lastUserMsg?.content || "confirm", { action: msg.pendingAction.description });
-  };
-
-  const handleDeny = (msg: AiChatMessage) => {
-    setMessages((m) => [...m, { id: Date.now(), role: "assistant", content: "Understood — action cancelled. How else can I help?" }]);
-  };
-
-  const toggleTool = (id: number) => setExpandedTools((s) => { const n = new Set(s); n.has(id) ? n.delete(id) : n.add(id); return n; });
-
-  const clearChat = () => { setMessages([]); setExpandedTools(new Set()); };
 
   const quickActions = ["Show my tickets", "Sprint status", "Create a ticket", "Team overview", "Show backlog"];
 
@@ -765,26 +852,15 @@ function AiAgentPanel({ open, onClose, toast }: { open: boolean; onClose: () => 
               </div>
               <div>
                 <div className="ai-msg-bubble">
-                  {msg.role === "assistant" ? <AiFormattedMessage content={msg.content} /> : msg.content}
+                  {msg.role === "assistant" ? <CustomMarkdown content={msg.content} /> : msg.content}
                 </div>
-                {msg.toolCalls?.map((tc, i) => (
-                  <div key={i}>
-                    <div className={cx("ai-tool-badge", tc.error && "error")} onClick={() => toggleTool(msg.id * 100 + i)}>
-                      {tc.error ? <Icons.AlertCircle size={12} /> : <Icons.Zap size={12} />}
-                      {tc.name.replace("execute_itrack_api", "API Call")}: {(tc.args ?? tc.arguments)?.method} {(tc.args ?? tc.arguments)?.path}
-                    </div>
-                    {expandedTools.has(msg.id * 100 + i) && (
-                      <div className="ai-tool-detail">{JSON.stringify(tc.result, null, 2)}</div>
-                    )}
-                  </div>
-                ))}
                 {msg.requiresConfirmation && msg.pendingAction && (
                   <div className="ai-confirm-bar">
                     <p><Icons.ShieldAlert size={14} /> Confirmation Required</p>
                     <span>{msg.pendingAction.description}</span>
                     <div>
-                      <button className="btn-confirm" onClick={() => handleConfirm(msg)}>Yes, proceed</button>
-                      <button className="btn-deny" onClick={() => handleDeny(msg)}>Cancel</button>
+                      <button className="btn-confirm" onClick={() => confirmMessage(msg)}>Yes, proceed</button>
+                      <button className="btn-deny" onClick={denyMessage}>Cancel</button>
                     </div>
                   </div>
                 )}
@@ -796,7 +872,20 @@ function AiAgentPanel({ open, onClose, toast }: { open: boolean; onClose: () => 
               <div className="ai-msg-avatar" style={{ background: "linear-gradient(135deg, var(--purple), var(--blue))", color: "#fff", width: 30, height: 30, borderRadius: 9, display: "flex", alignItems: "center", justifyContent: "center" }}>
                 <Icons.Bot size={16} />
               </div>
-              <div className="ai-typing-dots"><span /><span /><span /></div>
+              {toolActivities.length ? (
+                <div className="ai-request-activity" aria-live="polite">
+                  {toolActivities.map((activity) => (
+                    <div className={cx("ai-request-row", activity.status)} key={activity.id}>
+                      <span className="ai-request-indicator">
+                        {activity.status === "complete" && <Icons.Check size={13} />}
+                        {activity.status === "error" && <Icons.AlertCircle size={13} />}
+                      </span>
+                      <span>{aiActivityLabel(activity)}</span>
+                      {activity.status === "running" && <span className="ai-request-ellipsis" aria-hidden="true">...</span>}
+                    </div>
+                  ))}
+                </div>
+              ) : <div className="ai-typing-dots"><span /><span /><span /></div>}
             </div>
           )}
         </div>
@@ -871,7 +960,7 @@ function AppRoutes({
       />
       <Route path="/team/:userId" element={<UserDetail />} />
       <Route path="/reports/*" element={<Reports />} />
-      <Route path="/ai/*" element={<AIPage toast={toast} />} />
+      <Route path="/ai/*" element={<AIPage />} />
       <Route path="/resources/*" element={<ResourcesLive toast={toast} />} />
       <Route
         path="/organization"
@@ -2668,7 +2757,13 @@ function RiskPage() {
 
 function MyWork() {
   const [view, setView] = useState("list");
-  const { tickets, labelOptions } = useWorkspace();
+  const [summary, setSummary] = useState<any>(null);
+  const { tickets, labelOptions, dashboard, user } = useWorkspace();
+  const currentUserId = String(user?._id || user?.id || "");
+  useEffect(() => {
+    api<any>("/my-work").then(setSummary).catch(() => setSummary(null));
+  }, [dashboard]);
+  const formatHours = (hours: number) => `${Number.isInteger(hours) ? hours : hours.toFixed(1)}h`;
   return (
     <>
       <PageHead
@@ -2696,29 +2791,29 @@ function MyWork() {
         <article className="metric">
           <div>
             <span>Assigned to me</span>
-            <strong>12</strong>
-            <small>Across 3 projects</small>
+            <strong>{summary?.assigned ?? 0}</strong>
+            <small>Across {summary?.projects ?? 0} projects</small>
           </div>
         </article>
         <article className="metric">
           <div>
             <span>Due this week</span>
-            <strong>5</strong>
-            <small>2 high priority</small>
+            <strong>{summary?.dueThisWeek ?? 0}</strong>
+            <small>{summary?.dueThisWeekHighPriority ?? 0} high priority</small>
           </div>
         </article>
         <article className="metric">
           <div>
             <span>Logged this sprint</span>
-            <strong>26h</strong>
-            <small>Of 32h capacity</small>
+            <strong>{formatHours(summary?.loggedHours ?? 0)}</strong>
+            <small>Of {summary?.capacity ?? user?.capacity ?? 0}h capacity</small>
           </div>
         </article>
         <article className="metric">
           <div>
             <span>Watched</span>
-            <strong>8</strong>
-            <small>3 updated today</small>
+            <strong>{summary?.watched ?? 0}</strong>
+            <small>{summary?.watchedUpdatedToday ?? 0} updated today</small>
           </div>
         </article>
       </div>
@@ -2727,7 +2822,7 @@ function MyWork() {
         <section className="card no-pad">
           <TicketTable
             rows={tickets.filter(
-              (t) => t.assignee === "Maya Chen" || t.watched,
+              (t) => t.assigneeId === currentUserId || t.watched,
             )}
           />
         </section>
@@ -3457,258 +3552,146 @@ function Reports() {
   );
 }
 
-function AIPage({ toast }: { toast: (s: string) => void }) {
-  const { dashboard, refetch, role, labelOptions } = useWorkspace();
-  const navigate = useNavigate();
-  const isLeader = role === "admin" || role === "manager";
-  const [plan, setPlan] = useState<any>(null),
-    [prompt, setPrompt] = useState(""),
-    [busy, setBusy] = useState(false),
-    [models, setModels] = useState<string[]>([]),
-    [selectedModel, setSelectedModel] = useState(""),
-    [loadingModels, setLoadingModels] = useState(true);
+const aiWorkspacePrompts = [
+  { icon: Icons.Ticket, title: "Triage my work", text: "Show my tickets and prioritize what I should work on next." },
+  { icon: Icons.Timer, title: "Review the sprint", text: "Summarize the current sprint, blockers, risks, and recommended next steps." },
+  { icon: Icons.FilePlus2, title: "Create work", text: "Help me create a ticket. Ask me for any missing details first." },
+  { icon: Icons.ChartNoAxesCombined, title: "Surface insights", text: "Analyze delivery, workload, velocity, and risk across this workspace." },
+];
+
+function AIPage() {
+  const { user } = useWorkspace();
+  const {
+    messages,
+    input,
+    setInput,
+    loading,
+    toolActivities,
+    sendMessage,
+    confirmMessage,
+    denyMessage,
+    clearChat,
+  } = useAiAgent();
+  const conversationRef = React.useRef<HTMLDivElement>(null);
+  const inputRef = React.useRef<HTMLTextAreaElement>(null);
+  const firstName = user?.name?.split(" ")[0] || "there";
 
   useEffect(() => {
-    let active = true;
-    const loadModels = async () => {
-      try {
-        const result = await api<{ models: string[] }>("/ai/models");
-        if (!active) return;
-        setModels(result.models);
-        setSelectedModel((current) => current || result.models[0] || "");
-      } catch (error) {
-        if (active) {
-          toast(error instanceof Error ? error.message : "Unable to load provider models");
-        }
-      } finally {
-        if (active) setLoadingModels(false);
-      }
-    };
-    void loadModels();
-    return () => {
-      active = false;
-    };
-  }, [toast]);
+    if (conversationRef.current) conversationRef.current.scrollTop = conversationRef.current.scrollHeight;
+  }, [messages, loading, toolActivities]);
 
-  const generate = async () => {
-    setBusy(true);
-    try {
-      const result = await api<any>("/ai/generate-tickets", {
-        method: "POST",
-        body: JSON.stringify({ prompt, ...(selectedModel ? { model: selectedModel } : {}) }),
-      });
-      setPlan(result.plan);
-      toast("Ticket plan generated");
-    } catch (error) {
-      toast(error instanceof Error ? error.message : "Generation failed");
-    } finally {
-      setBusy(false);
-    }
-  };
-  const updateStory = (index: number, fields: Record<string, unknown>) => {
-    setPlan((current: any) => {
-      if (!current) return current;
-      return {
-        ...current,
-        stories: current.stories.map((story: any, storyIndex: number) =>
-          storyIndex === index ? { ...story, ...fields } : story,
-        ),
-      };
-    });
-  };
-  const confirm = async () => {
-    if (!plan?.stories?.length) return toast("Add at least one ticket to the plan");
-    const project = dashboard?.projects?.[0],
-      sprint = dashboard?.sprints?.[0],
-      assignee = dashboard?.users?.[0];
-    if (!project || !sprint || !assignee)
-      return toast("Create a project, sprint, and user first");
-    await api("/ai/confirm-ticket-plan", {
-      method: "POST",
-      body: JSON.stringify({
-        plan,
-        projectId: project._id,
-        sprintId: sprint._id,
-        assigneeId: assignee._id,
-      }),
-    });
-    toast("Ticket plan created");
-    await refetch();
-    navigate("/tickets");
-  };
+  const submit = () => void sendMessage(input);
+
   return (
-    <>
-      <PageHead
-        eyebrow="AI WORKSPACE"
-        title="Plan faster with I-Track AI"
-        desc="Turn product requirements into structured, reviewable work."
-      >
-        <Badge tone="lime">
-          <Icons.Sparkles />
-          AI ENABLED
-        </Badge>
-      </PageHead>
-      <div className="ai-layout">
-        <section className="card ai-compose">
-          <div className="model-select">
-            <span className="insight-icon">
-              <Icons.Bot />
-            </span>
-            <div>
-              <small>MODEL</small>
-              <select
-                value={selectedModel}
-                onChange={(e) => setSelectedModel(e.target.value)}
-                disabled={loadingModels || models.length === 0}
-              >
-                <option value="" disabled>
-                  {loadingModels ? "Loading provider models…" : "Select a provider model"}
-                </option>
-                {models.map((model) => (
-                  <option key={model} value={model}>
-                    {model}
-                  </option>
+    <section className="ai-workspace">
+      <div className="ai-workspace-topline">
+        <div>
+          <span className="ai-workspace-kicker"><Icons.Sparkles size={14} /> AI WORKSPACE</span>
+          <h1>Your work, one conversation away.</h1>
+          <p>Plan, investigate, and take action across I-TRACK with the same AI Agent available throughout your workspace.</p>
+        </div>
+        <div className="ai-agent-status"><i /><span><b>AI Agent</b><small>Online and workspace-aware</small></span></div>
+      </div>
+
+      <div className="ai-workspace-grid">
+        <div className="ai-workspace-main">
+          <div className="ai-workspace-chat-head">
+            <div className="ai-workspace-avatar"><Icons.Bot size={20} /></div>
+            <span><b>I-TRACK AI Agent</b><small>Ask, review, then approve actions</small></span>
+            {messages.length > 0 && <button className="icon-btn" onClick={clearChat} title="Start a new conversation" aria-label="Start a new conversation"><Icons.RotateCcw size={16} /></button>}
+          </div>
+
+          <div className={cx("ai-workspace-conversation", messages.length === 0 && "empty")} ref={conversationRef}>
+            {messages.length === 0 ? (
+              <div className="ai-workspace-welcome">
+                <span className="ai-workspace-orb"><Icons.Sparkles size={27} /></span>
+                <span className="ai-workspace-overline">READY WHEN YOU ARE</span>
+                <h2>Hi {firstName}, what can I move forward?</h2>
+                <p>Give me an outcome or a question. I can inspect live workspace data, create and update work, and ask before sensitive actions.</p>
+                <div className="ai-workspace-prompts">
+                  {aiWorkspacePrompts.map(({ icon: Icon, title, text }) => (
+                    <button key={title} onClick={() => void sendMessage(text)}>
+                      <span><Icon size={17} /></span>
+                      <b>{title}</b>
+                      <small>{text}</small>
+                      <Icons.ArrowUpRight size={15} />
+                    </button>
+                  ))}
+                </div>
+              </div>
+            ) : (
+              <div className="ai-workspace-messages">
+                {messages.map((message) => (
+                  <div className={cx("ai-msg", message.role)} key={message.id}>
+                    <div className="ai-msg-avatar">{message.role === "assistant" ? <Icons.Bot size={16} /> : <Icons.User size={16} />}</div>
+                    <div>
+                      <div className="ai-msg-bubble">{message.role === "assistant" ? <CustomMarkdown content={message.content} /> : message.content}</div>
+                      {message.requiresConfirmation && message.pendingAction && (
+                        <div className="ai-confirm-bar">
+                          <p><Icons.ShieldAlert size={14} /> Confirmation required</p>
+                          <span>{message.pendingAction.description}</span>
+                          <div><button className="btn-confirm" onClick={() => confirmMessage(message)}>Yes, proceed</button><button className="btn-deny" onClick={denyMessage}>Cancel</button></div>
+                        </div>
+                      )}
+                    </div>
+                  </div>
                 ))}
-              </select>
+                {loading && (
+                  <div className="ai-typing">
+                    <div className="ai-msg-avatar ai-workspace-thinking"><Icons.Bot size={16} /></div>
+                    {toolActivities.length ? (
+                      <div className="ai-request-activity" aria-live="polite">
+                        {toolActivities.map((activity) => (
+                          <div className={cx("ai-request-row", activity.status)} key={activity.id}>
+                            <span className="ai-request-indicator">{activity.status === "complete" && <Icons.Check size={13} />}{activity.status === "error" && <Icons.AlertCircle size={13} />}</span>
+                            <span>{aiActivityLabel(activity)}</span>
+                            {activity.status === "running" && <span className="ai-request-ellipsis" aria-hidden="true">...</span>}
+                          </div>
+                        ))}
+                      </div>
+                    ) : <div className="ai-typing-dots"><span /><span /><span /></div>}
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+
+          <div className="ai-workspace-composer">
+            <div>
+              <textarea
+                ref={inputRef}
+                value={input}
+                onChange={(event) => setInput(event.target.value)}
+                onKeyDown={(event) => { if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); submit(); } }}
+                placeholder="Ask about your work, or tell the agent what to do…"
+                rows={2}
+              />
+              <button className="ai-workspace-send" onClick={submit} disabled={!input.trim() || loading} aria-label="Send message"><Icons.ArrowUp size={18} /></button>
             </div>
-            <Icons.ChevronDown />
+            <span><Icons.ShieldCheck size={13} /> Actions that need approval will always ask first</span>
           </div>
-          <h2>What are you planning?</h2>
-          <p>
-            Describe a feature, initiative, or outcome. Include constraints and
-            acceptance criteria when useful.
-          </p>
-          <textarea
-            value={prompt}
-            onChange={(e) => setPrompt(e.target.value)}
-            placeholder="Example: Add enterprise SSO with SAML, organization discovery, audit events, and a safe migration for existing users…"
-          />
-          <div className="prompt-actions">
-            <span>{prompt.length} / 4,000</span>
-            <button
-              className="btn lime"
-              onClick={generate}
-              disabled={prompt.trim().length < 20 || busy}
-            >
-              <Icons.Sparkles />
-              Generate ticket plan
-            </button>
+        </div>
+
+        <aside className="ai-workspace-side">
+          <div className="ai-side-card ai-side-capabilities">
+            <span className="ai-side-icon purple"><Icons.WandSparkles size={18} /></span>
+            <h3>One agent, full context</h3>
+            <p>This is the same agent in the header. Your conversation follows you between this page and the side panel.</p>
+            <div><span><Icons.Search size={15} /> Inspect workspace data</span><span><Icons.PencilLine size={15} /> Create and update work</span><span><Icons.ChartNoAxesCombined size={15} /> Summarize delivery signals</span></div>
           </div>
-          <div className="prompt-chips">
-            {[
-              "Break down an epic",
-              "Plan a migration",
-              "Create test coverage",
-            ].map((x) => (
-              <button key={x} onClick={() => setPrompt(x)}>
-                {x}
-              </button>
+          <div className="ai-side-card">
+            <span className="ai-side-label">TRY ASKING</span>
+            {["What needs my attention today?", "Find blockers in the active sprint", "Draft a release plan", "Show what you can do"].map((prompt) => (
+              <button className="ai-side-prompt" key={prompt} onClick={() => void sendMessage(prompt)}><span>{prompt}</span><Icons.ArrowRight size={14} /></button>
             ))}
           </div>
-        </section>
-        <aside className="card ai-side">
-          <CardTitle title="How it works" />
-          <ol>
-            <li>
-              <span>1</span>
-              <p>
-                <b>Describe the outcome</b>Give AI enough context to plan well.
-              </p>
-            </li>
-            <li>
-              <span>2</span>
-              <p>
-                <b>Review every ticket</b>Edit priorities, points and
-                dependencies.
-              </p>
-            </li>
-            <li>
-              <span>3</span>
-              <p>
-                <b>Confirm the plan</b>Nothing is created without approval.
-              </p>
-            </li>
-          </ol>
-          <div className="safe-note">
-            <Icons.ShieldCheck />
-            <p>
-              <b>You stay in control</b>Destructive AI actions always require
-              explicit confirmation.
-            </p>
+          <div className="ai-side-card ai-side-safety">
+            <span className="ai-side-icon lime"><Icons.ShieldCheck size={18} /></span>
+            <div><h3>You stay in control</h3><p>The agent previews sensitive changes and waits for explicit confirmation.</p></div>
           </div>
         </aside>
       </div>
-      {plan && (
-        <section className="generated">
-          <div className="generated-head">
-            <div>
-              <Badge tone="lime">{plan.stories.length} TICKETS GENERATED</Badge>
-              <h2>Review your ticket plan</h2>
-            </div>
-            <button className="btn primary" onClick={confirm} disabled={!plan.stories.length}>
-              Confirm and create {plan.stories.length} tickets
-            </button>
-          </div>
-          {plan.stories.map((t: any, i: number) => (
-            <article className="generated-ticket" key={`${t.title}-${i}`}>
-              <span>{i + 1}</span>
-              <div>
-                <input
-                  value={t.title || ""}
-                  onChange={(event) => updateStory(i, { title: event.target.value })}
-                  aria-label={`Ticket ${i + 1} title`}
-                />
-                <textarea
-                  value={t.description || ""}
-                  onChange={(event) => updateStory(i, { description: event.target.value })}
-                  aria-label={`Ticket ${i + 1} description`}
-                />
-                <div>
-                  <select
-                    value={t.priority || "medium"}
-                    onChange={(event) => updateStory(i, { priority: event.target.value })}
-                    aria-label={`Ticket ${i + 1} priority`}
-                  >
-                    {(["low", "medium", "high", "critical"] as const).map((priority) => (
-                      <option key={priority} value={priority}>{priority}</option>
-                    ))}
-                  </select>
-                  <input
-                    type="number"
-                    min="1"
-                    max="21"
-                    value={t.storyPoints || 1}
-                    onChange={(event) => updateStory(i, { storyPoints: Number(event.target.value) })}
-                    aria-label={`Ticket ${i + 1} story points`}
-                  />
-                </div>
-                <LabelPicker
-                  label={`Ticket ${i + 1} labels`}
-                  labels={t.labels || []}
-                  suggestions={labelOptions}
-                  onChange={(labels) => updateStory(i, { labels })}
-                  disabled={!isLeader}
-                />
-              </div>
-              <button
-                className="icon-btn"
-                aria-label={`Remove ${t.title}`}
-                onClick={() =>
-                  setPlan({
-                    ...plan,
-                    stories: plan.stories.filter(
-                      (_: any, index: number) => index !== i,
-                    ),
-                  })
-                }
-              >
-                <Icons.Trash2 />
-              </button>
-            </article>
-          ))}
-        </section>
-      )}
-    </>
+    </section>
   );
 }
 
@@ -6339,10 +6322,24 @@ function DashboardLive() {
 }
 
 function LandingPage() {
-  const [marketing, setMarketing] = useState<any>(null);
-  useEffect(() => {
-    api<any>("/marketing").then(setMarketing).catch(() => setMarketing({}));
-  }, []);
+  const marketing = {
+    preview: {
+      sprintHealth: 84,
+      completed: 32,
+      planned: 41,
+      velocityChange: 18,
+      risk: 12,
+      blockersResolved: 3,
+    },
+    proof: { avatars: ["AK", "JM", "RL"], additional: "+2k" },
+    logos: ["northstar", "Vertex", "APERTURE", "lumon", "QUANTUM"],
+    testimonial: {
+      quote: "I-TRACK gave us back the one thing our team was missing: a shared sense of what matters.",
+      name: "Maya Chen",
+      title: "VP of Product at Northstar",
+      initials: "MC",
+    },
+  };
   const [menuOpen, setMenuOpen] = useState(false);
   const isLoggedIn = Boolean(getToken());
   const year = new Date().getFullYear();
@@ -6354,7 +6351,7 @@ function LandingPage() {
   return (
     <div className="landing">
       <header className="landing-nav">
-        <a className="landing-logo" href="#top" aria-label="I-TRACK home"><span>I</span>I-TRACK</a>
+        <a className="landing-logo" href="#top" aria-label="I-TRACK home"><span><img src="/logo-mark.png" alt="" /></span>I-TRACK</a>
         <button className="landing-menu" onClick={() => setMenuOpen(!menuOpen)} aria-label="Toggle navigation" aria-expanded={menuOpen}>
           {menuOpen ? <Icons.X /> : <Icons.Menu />}
         </button>
@@ -6391,7 +6388,7 @@ function LandingPage() {
             <div className="visual-glow"></div>
             <div className="mini-app">
               <div className="mini-sidebar">
-                <div className="mini-brand">I</div>
+                <div className="mini-brand"><img src="/logo-mark.png" alt="" /></div>
                 {[Icons.LayoutDashboard, Icons.FolderKanban, Icons.Columns3, Icons.ChartNoAxesCombined].map((Icon, i) => <span className={i === 0 ? "active" : ""} key={i}><Icon /></span>)}
               </div>
               <div className="mini-main">
@@ -6425,7 +6422,7 @@ function LandingPage() {
 
         <section className="cta-section" id="pricing"><div><span className="section-kicker">YOUR NEXT SPRINT STARTS HERE</span><h2>Ready to move<br/>with clarity?</h2></div><div><p>Bring your team, your work, and your ambition. I-TRACK will help you keep the rest on track.</p><a className="landing-button dark" href="/register">Start for free <Icons.ArrowRight/></a><small>Free forever for teams up to 10</small></div></section>
       </main>
-      <footer className="landing-footer"><a className="landing-logo" href="#top"><span>I</span>I-TRACK</a><p>© {year} I-TRACK. Built for momentum.</p><div><a href="#features">Product</a><a href="#pricing">Pricing</a><a href="/login">Log in</a></div></footer>
+      <footer className="landing-footer"><a className="landing-logo" href="#top"><span><img src="/logo-mark.png" alt="" /></span>I-TRACK</a><p>© {year} I-TRACK. Built for momentum.</p><div><a href="#features">Product</a><a href="#pricing">Pricing</a><a href="/login">Log in</a></div></footer>
     </div>
   );
 }
@@ -6464,7 +6461,7 @@ function InvitationAcceptPage() {
   const [preview, setPreview] = useState<any>(null); const [error, setError] = useState(""); const [busy, setBusy] = useState(false);
   useEffect(() => { if (token) api<any>(`/invitations/preview?token=${encodeURIComponent(token)}`).then(setPreview).catch((e) => setError(e.message)); else setError("Invitation token is missing"); }, [token]);
   const submit = async (event: React.FormEvent<HTMLFormElement>) => { event.preventDefault(); setBusy(true); setError(""); const values = new FormData(event.currentTarget); try { if (preview.accountExists && !getToken()) await login(preview.invitation.email, String(values.get("password"))); const password = String(values.get("password") || ""); if (!preview.accountExists && password !== String(values.get("confirmPassword") || "")) throw new Error("Passwords do not match"); const session = await api<any>("/auth/accept-invite", { method: "POST", body: JSON.stringify({ token, ...(!preview.accountExists ? { name: values.get("name"), password } : {}) }) }); saveSession(session); window.location.assign("/dashboard"); } catch (e) { setError(e instanceof Error ? e.message : "Unable to accept invitation"); } finally { setBusy(false); } };
-  return <div className="auth"><section className="auth-brand"><div className="brand big"><div className="brand-mark">I</div><span>I-TRACK</span></div><div><Badge tone="lime">WORKSPACE INVITATION</Badge><h1>Work together.<br />Stay aligned.</h1><p>Review the workspace and your role before joining.</p></div></section><section className="auth-form">{!preview ? <div className="auth-message">{error || "Loading invitation…"}</div> : <form onSubmit={submit}><span className="eyebrow">INVITED WORKSPACE</span><h1>Join {preview.invitation.organization?.name}</h1><p>{preview.invitation.invitedBy?.name || "A workspace admin"} invited you as <b>{fmt(preview.invitation.role)}</b>.</p><div className="invite-summary"><span>Email <b>{preview.invitation.email}</b></span><span>Role <b>{fmt(preview.invitation.role)}</b></span></div>{!preview.accountExists && <label className="field"><span>Full name</span><input name="name" defaultValue={preview.invitation.name} required /></label>}<label className="field"><span>{preview.accountExists ? "Password to sign in" : "Create password"}</span><input name="password" type="password" minLength={8} required /></label>{!preview.accountExists && <label className="field"><span>Confirm password</span><input name="confirmPassword" type="password" minLength={8} required /></label>}{error && <div className="auth-message">{error}</div>}<button className="btn primary wide" disabled={busy}>{busy ? "Joining…" : "Accept invitation"}</button>{preview.accountExists && <button type="button" className="btn wide" onClick={() => nav("/login")}>Use another account</button>}</form>}</section></div>;
+  return <div className="auth"><section className="auth-brand"><div className="brand big"><div className="brand-mark"><img src="/logo-mark.png" alt="" /></div><span>I-TRACK</span></div><div><Badge tone="lime">WORKSPACE INVITATION</Badge><h1>Work together.<br />Stay aligned.</h1><p>Review the workspace and your role before joining.</p></div></section><section className="auth-form">{!preview ? <div className="auth-message">{error || "Loading invitation…"}</div> : <form onSubmit={submit}><span className="eyebrow">INVITED WORKSPACE</span><h1>Join {preview.invitation.organization?.name}</h1><p>{preview.invitation.invitedBy?.name || "A workspace admin"} invited you as <b>{fmt(preview.invitation.role)}</b>.</p><div className="invite-summary"><span>Email <b>{preview.invitation.email}</b></span><span>Role <b>{fmt(preview.invitation.role)}</b></span></div>{!preview.accountExists && <label className="field"><span>Full name</span><input name="name" defaultValue={preview.invitation.name} required /></label>}<label className="field"><span>{preview.accountExists ? "Password to sign in" : "Create password"}</span><input name="password" type="password" minLength={8} required /></label>{!preview.accountExists && <label className="field"><span>Confirm password</span><input name="confirmPassword" type="password" minLength={8} required /></label>}{error && <div className="auth-message">{error}</div>}<button className="btn primary wide" disabled={busy}>{busy ? "Joining…" : "Accept invitation"}</button>{preview.accountExists && <button type="button" className="btn wide" onClick={() => nav("/login")}>Use another account</button>}</form>}</section></div>;
 }
 
 function AuthPageLive({ type }: { type: string }) {
@@ -6552,7 +6549,7 @@ function AuthPageLive({ type }: { type: string }) {
     <div className="auth">
       <section className="auth-brand">
         <div className="brand big">
-          <div className="brand-mark">I</div>
+          <div className="brand-mark"><img src="/logo-mark.png" alt="" /></div>
           <span>I-TRACK</span>
         </div>
         <div>
