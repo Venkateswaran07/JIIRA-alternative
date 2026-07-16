@@ -71,6 +71,7 @@ Open `http://localhost:5173` and sign in with:
 ```powershell
 npm run typecheck
 npm run build
+npm --prefix server test
 ```
 
 Useful API checks (the `/api/v1` path is canonical; `/api` remains available as a compatibility alias):

@@ -91,10 +91,12 @@ Without confirmation, destructive actions return `409`:
 | `POST` | `/workspaces` | authenticated identity | No |
 | `POST` | `/workspaces/:id/switch` | member | No |
 | `POST` | `/workspaces/:id/onboarding/complete` | admin | No |
-| `GET` | `/invitations/preview?token=...` | Public | No |
+| `GET` | `/invitations/preview` | Public | No |
 | `GET` | `/invitations/pending` | authenticated identity | No |
 
 Access tokens are scoped to one active workspace. Switching workspaces returns replacement access and refresh tokens after validating the membership.
+
+`GET /invitations/preview` expects the invitation token in the `token` query parameter.
 
 ## Current User
 
