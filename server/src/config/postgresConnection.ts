@@ -26,9 +26,15 @@ function connectionTimeoutMillis(environment: NodeJS.ProcessEnv = process.env) {
   return Number.isFinite(configured) && configured > 0 ? configured : 5000;
 }
 
+function poolMax(environment: NodeJS.ProcessEnv = process.env) {
+  const configured = Number(environment.DATABASE_POOL_MAX ?? 5);
+  return Number.isFinite(configured) && configured > 0 ? configured : 5;
+}
+
 function createPool(connectionString: string, environment: NodeJS.ProcessEnv = process.env) {
   return new Pool({
     connectionString,
+    max: poolMax(environment),
     connectionTimeoutMillis: connectionTimeoutMillis(environment),
     ssl: connectionString.includes("supabase.com") ? { rejectUnauthorized: false } : undefined,
   });
