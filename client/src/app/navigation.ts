@@ -20,6 +20,7 @@ export const nav: NavGroup[] = [
       ["/resources/release", "Rocket", "Releases"],
       ["/resources/epic", "Map", "Roadmap"],
       ["/sla", "ShieldCheck", "SLA"],
+      ["/team-hero", "Award", "Team Hero Zone"],
     ],
   },
   {

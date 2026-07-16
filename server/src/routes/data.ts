@@ -14,6 +14,7 @@ import { User } from "../models/User.js";
 import { Invitation, OrganizationMembership } from "../models/WorkspaceAccess.js";
 import { cycleSchema, projectSchema, settingsSchema, sprintSchema, teamSchema, ticketSchema } from "../schemas/workspace.js";
 import { applySlaState, cycleMetricsForTickets, normalizeSlaPolicy, slaFieldsForTicket, statusTransition } from "../services/sla.js";
+import { runPredictiveRiskDetection, checkAndLogAssistCredits } from "../services/assistService.js";
 
 const router = Router();
 router.use(requireAuth);
@@ -267,6 +268,8 @@ router.route("/tickets")
     if (!assignee || !project || !sprint) return res.status(404).json({ message: "Assignee, project, or sprint not found" });
     const now = new Date();
     const ticket = await Ticket.create({ ...body, ...slaFieldsForTicket(body.priority, now, organization?.settings?.slaPolicy), slaStatus: "healthy", organization: orgId(req), reporter: userId(req), ticketId: await nextTicketId(req, body.project), history: [{ event: "Created", createdAt: now }], statusTransitions: [statusTransition(undefined, body.status, now, userId(req))] });
+    await runPredictiveRiskDetection(ticket);
+    await ticket.save();
     return res.status(201).json({ ticket: await ticket.populate(ticketPopulation) });
   });
 
@@ -292,7 +295,9 @@ router.patch("/tickets/:id", requireRole(["admin", "manager"]), async (req: Auth
   }
   const ticket = await Ticket.findOneAndUpdate({ _id: req.params.id, organization: orgId(req) }, update, { new: true }).populate(ticketPopulation);
   if (!ticket) return res.status(404).json({ message: "Ticket not found" });
-  await applySlaState(ticket).save();
+  applySlaState(ticket);
+  await runPredictiveRiskDetection(ticket);
+  await ticket.save();
   return res.json({ ticket });
 });
 
@@ -308,6 +313,15 @@ router.patch("/tickets/:id/status", requireRole(["admin", "manager", "engineer",
   existing.statusTransitions.push(statusTransition(fromStatus, body.status, now, userId(req)));
   if (body.status === "Done" && !existing.resolvedAt) existing.resolvedAt = now;
   applySlaState(existing, now);
+
+  // Check and log team assist credits if peer completes an assisted task
+  await checkAndLogAssistCredits(existing, userId(req));
+
+  // Run risk listener if not Done
+  if (existing.status !== "Done") {
+    await runPredictiveRiskDetection(existing);
+  }
+
   await existing.save();
   const ticket = await existing.populate(ticketPopulation);
   if (!ticket) return res.status(404).json({ message: "Ticket not found" });

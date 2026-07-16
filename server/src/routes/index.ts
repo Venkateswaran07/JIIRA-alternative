@@ -8,6 +8,7 @@ import dataRoutes from "./data.js";
 import extendedRoutes from "./extended.js";
 import marketingRoutes from "./marketing.js";
 import workspaceRoutes from "./workspaces.js";
+import teamAssistRoutes from "./teamAssist.js";
 
 function registerVersionedRoutes(app: express.Express) {
   app.get("/api/v1/health", (_req, res) => res.json({ ok: true, service: "itrack-api", version: "v1" }));
@@ -20,6 +21,7 @@ function registerVersionedRoutes(app: express.Express) {
   app.use("/api/v1", workspaceRoutes);
   app.use("/api/v1/analysis", analysisRoutes);
   app.use("/api/v1/ai", aiRoutes);
+  app.use("/api/v1/team-assist", teamAssistRoutes);
   app.use("/api/v1", dataRoutes);
   app.use("/api/v1", extendedRoutes);
 }
@@ -30,6 +32,7 @@ function registerLegacyRoutes(app: express.Express) {
   app.use("/api", dataRoutes);
   app.use("/api/analysis", analysisRoutes);
   app.use("/api/ai", aiRoutes);
+  app.use("/api/team-assist", teamAssistRoutes);
   app.use("/api", extendedRoutes);
 }
 

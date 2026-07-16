@@ -30,6 +30,7 @@ import { resourceKinds } from "../constants/resources";
 import type { NotificationPreferences, Role, Ticket, TicketStatus, Toast } from "../types/domain";
 import { ApiGate, useWorkspace } from "./workspace";
 import { nav } from "./navigation";
+import { TeamHeroZone } from "./TeamHeroZone";
 import {
   Avatar,
   Badge,
@@ -938,6 +939,7 @@ function AppRoutes({
       <Route path="/projects/:projectId/*" element={<ProjectDetail />} />
       <Route path="/backlog" element={<BacklogLive toast={toast} />} />
       <Route path="/board" element={<Board toast={toast} />} />
+      <Route path="/team-hero" element={<TeamHeroZone toast={toast} />} />
       <Route path="/cycles" element={<CyclesLive toast={toast} />} />
       <Route path="/sprints" element={<SprintsLive toast={toast} />} />
       <Route path="/sla" element={<SlaPage toast={toast} />} />

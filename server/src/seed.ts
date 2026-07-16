@@ -1,3 +1,4 @@
+import "dotenv/config";
 import bcrypt from "bcryptjs";
 import { connectDb } from "./config/db.js";
 import { postgres } from "./config/postgres.js";
