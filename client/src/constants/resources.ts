@@ -10,4 +10,8 @@ export const resourceKinds = [
   "template",
   "board",
   "milestone",
+  "automation-rule",
+  "notification-rule",
+  "permission-scheme",
+  "saved-filter",
 ];

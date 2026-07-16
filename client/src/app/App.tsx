@@ -25,7 +25,7 @@ import {
   XAxis,
   YAxis,
 } from "recharts";
-import { api, clearSession, login } from "../api";
+import { api, clearSession, getToken, login, saveSession } from "../api";
 import { resourceKinds } from "../constants/resources";
 import type { NotificationPreferences, Role, Ticket, TicketStatus, Toast } from "../types/domain";
 import { ApiGate, useWorkspace } from "./workspace";
@@ -91,8 +91,9 @@ export function App() {
           />
           <Route
             path="/accept-invite"
-            element={<AuthPageLive type="accept-invite" />}
+            element={<InvitationAcceptPage />}
           />
+          <Route path="/onboarding/:step" element={<OnboardingFlow toast={toast} />} />
           <Route
             path="/*"
             element={
@@ -143,12 +144,16 @@ function Shell({
     organization,
     user: currentUser,
     notifications = [],
+    memberships = [],
+    pendingInvitations = [],
+    refetch,
   } = useWorkspace();
   const [collapsed, setCollapsed] = useState(false),
     [mobile, setMobile] = useState(false),
     [search, setSearch] = useState(false),
     [workspaceMenu, setWorkspaceMenu] = useState(false);
   const [aiPanel, setAiPanel] = useState(false);
+  const [selectedInvitation, setSelectedInvitation] = useState<any>(null);
   const mobileMenuButton = React.useRef<HTMLButtonElement>(null);
   const searchButton = React.useRef<HTMLButtonElement>(null);
   const loc = useLocation();
@@ -159,6 +164,17 @@ function Shell({
       .find((i) => loc.pathname.startsWith(i[0]))?.[2] ||
     fmt(loc.pathname.split("/").filter(Boolean).at(-1) || "Dashboard");
   const effectiveRole = (currentUser?.role || role) as Role;
+  const switchWorkspace = async (organizationId: string) => {
+    const session = await api<any>(`/workspaces/${organizationId}/switch`, { method: "POST", body: JSON.stringify({ refreshToken: localStorage.getItem("itrack_refresh_token") }) });
+    saveSession(session);
+    window.location.assign("/dashboard");
+  };
+  const acceptPendingInvitation = async () => {
+    if (!selectedInvitation) return;
+    const session = await api<any>("/auth/accept-invite", { method: "POST", body: JSON.stringify({ invitationId: selectedInvitation.id }) });
+    saveSession(session);
+    window.location.assign("/dashboard");
+  };
 
   const unreadCount = notifications.filter((n: any) => !n.readAt).length;
 
@@ -250,17 +266,12 @@ function Shell({
           </button>
           {workspaceMenu && (
             <div className="workspace-menu" role="menu">
-              <p>WORKSPACE</p>
-              <div className="workspace-menu-item selected" role="menuitem" aria-current="true">
-                <span className="avatar square">
-                  {(organization?.name || "W").slice(0, 2).toUpperCase()}
-                </span>
-                <span>
-                  <b>{organization?.name}</b>
-                  <small>Current workspace</small>
-                </span>
-                <Icons.Check size={16} />
-              </div>
+              <p>WORKSPACES</p>
+              {memberships.map((membership: any) => {
+                const selected = String(membership.organization?.id) === String(organization?.id || organization?._id);
+                return <button key={membership.id} className={selected ? "selected" : ""} role="menuitem" onClick={() => selected ? setWorkspaceMenu(false) : switchWorkspace(membership.organization.id)}><span className="avatar square">{(membership.organization?.name || "W").slice(0, 2).toUpperCase()}</span><span><b>{membership.organization?.name}</b><small>{selected ? "Current workspace" : fmt(membership.role)}</small></span>{selected && <Icons.Check size={16} />}</button>;
+              })}
+              {pendingInvitations.length > 0 && <><hr /><p>PENDING INVITATIONS</p>{pendingInvitations.map((invitation: any) => <button key={invitation.id} role="menuitem" onClick={() => { setWorkspaceMenu(false); setSelectedInvitation(invitation); }}><Icons.MailPlus size={17} /><span><b>{invitation.organization?.name}</b><small>Invited as {fmt(invitation.role)}</small></span></button>)}</>}
               <hr />
               <button
                 role="menuitem"
@@ -396,6 +407,7 @@ function Shell({
         </div>
       </header>
       <main id="main-content" tabIndex={-1}>{children}</main>
+      {selectedInvitation && <div className="modal-wrap" role="presentation" onMouseDown={(event) => event.target === event.currentTarget && setSelectedInvitation(null)}><section className="card invite-review" role="dialog" aria-modal="true" aria-labelledby="invite-review-title"><button className="icon-btn modal-close" onClick={() => setSelectedInvitation(null)} aria-label="Close invitation"><Icons.X /></button><Badge tone="blue">WORKSPACE INVITATION</Badge><h2 id="invite-review-title">Join {selectedInvitation.organization?.name}</h2><p>{selectedInvitation.invitedBy?.name || "A workspace admin"} invited you to collaborate as <b>{fmt(selectedInvitation.role)}</b>.</p><div className="invite-summary"><span>Workspace <b>{selectedInvitation.organization?.name}</b></span><span>Role <b>{fmt(selectedInvitation.role)}</b></span><span>Email <b>{selectedInvitation.email}</b></span></div><div className="form-actions"><button className="btn" onClick={() => setSelectedInvitation(null)}>Not now</button><button className="btn primary" onClick={acceptPendingInvitation}>Accept and open workspace</button></div></section></div>}
       <nav className="bottom-nav" aria-label="Mobile navigation">
         {[
           ["/dashboard", "House", "Home"],
@@ -2414,7 +2426,9 @@ function RiskPage() {
   const [loading, setLoading] = useState(false);
   const isLeader = role === "admin" || role === "manager";
 
-  const s = (dashboard?.sprints || []).find((x: any) => x._id === sprintId);
+  const s = sprintId
+    ? (dashboard?.sprints || []).find((x: any) => String(x._id) === String(sprintId))
+    : (dashboard?.sprints || []).find((x: any) => x.status === "active") || dashboard?.sprints?.[0];
   const sprintTickets = s ? tickets.filter((t) => t.sprintId === s._id) : [];
 
   const recalculateRisk = async () => {
@@ -2820,7 +2834,7 @@ function Notifications({ toast }: { toast: (s: string) => void }) {
 }
 
 function Team() {
-  const { dashboard, role, refetch, toast } = useWorkspace();
+  const { dashboard, organization, role, refetch, toast } = useWorkspace();
   const nav = useNavigate();
   const [params] = useSearchParams();
   const q = params.get("q") || "";
@@ -2864,8 +2878,8 @@ function Team() {
       });
       toast(
         "Invitation link resent: " +
-          (res.inviteToken
-            ? `${window.location.origin}/accept-invite?token=${res.inviteToken}`
+          (res.inviteUrl
+            ? res.inviteUrl
             : "Success"),
       );
       await refetch();
@@ -2902,8 +2916,9 @@ function Team() {
       <FilterBar placeholder="Search people or skills…" />
       <div className="team-grid">
         {sorted.map((u: any) => {
+          const weeklyCapacity = organization?.settings?.weeklyCapacityHours ?? 40;
           const workload = u.capacity
-            ? Math.min(100, Math.round(((u.capacity || 0) / 40) * 100))
+            ? Math.min(100, Math.round(((u.capacity || 0) / weeklyCapacity) * 100))
             : 0;
           return (
             <article
@@ -2968,7 +2983,7 @@ function Team() {
                   value={workload}
                   tone={workload > 80 ? "orange" : "purple"}
                 />
-                <small>{u.capacity || 0} of 40 hours available</small>
+                <small>{u.capacity || 0} of {weeklyCapacity} hours available</small>
               </div>
             </article>
           );
@@ -3776,6 +3791,9 @@ function Settings({
   const [sprintLengthDays, setSprintLengthDays] = useState(
     organization?.settings?.sprintLengthDays ?? 14,
   );
+  const [weeklyCapacityHours, setWeeklyCapacityHours] = useState(
+    organization?.settings?.weeklyCapacityHours ?? 40,
+  );
   const [timezone, setTimezone] = useState(
     organization?.settings?.timezone ?? "UTC",
   );
@@ -3802,6 +3820,7 @@ function Settings({
     if (organization?.settings) {
       setRiskThreshold(organization.settings.riskThreshold ?? 50);
       setSprintLengthDays(organization.settings.sprintLengthDays ?? 14);
+      setWeeklyCapacityHours(organization.settings.weeklyCapacityHours ?? 40);
       setTimezone(organization.settings.timezone ?? "UTC");
       setAiEnabled(organization.settings.aiEnabled ?? true);
     }
@@ -3840,6 +3859,7 @@ function Settings({
           body: JSON.stringify({
             riskThreshold: Number(riskThreshold),
             sprintLengthDays: Number(sprintLengthDays),
+            weeklyCapacityHours: Number(weeklyCapacityHours),
             timezone,
             aiEnabled,
           }),
@@ -4036,6 +4056,10 @@ function Settings({
                     onChange={(e) => setSprintLengthDays(e.target.value)}
                     disabled={!isAdmin}
                   />
+                </label>
+                <label className="field">
+                  <span>Weekly capacity (hours)</span>
+                  <input type="number" min="1" max="168" value={weeklyCapacityHours} onChange={(e) => setWeeklyCapacityHours(e.target.value)} disabled={!isAdmin} />
                 </label>
                 <label className="field">
                   <span>Risk threshold (0 - 100)</span>
@@ -4261,10 +4285,10 @@ function FormPage({
             capacity: Number(values.get("capacity")),
           }),
         });
-        if (res.inviteToken) {
+        if (res.inviteUrl) {
           window.prompt(
             "Send this invitation link to the user:",
-            `${window.location.origin}/accept-invite?token=${res.inviteToken}`
+            res.inviteUrl
           );
         }
       }
@@ -5894,7 +5918,6 @@ function ResourcesLive({ toast }: { toast: (s: string) => void }) {
           ) : (
             <Empty
               title={`No ${fmt(kind).toLowerCase()}`}
-              body="No resources of this type exist yet."
             />
           )}
         </section>
@@ -6316,7 +6339,12 @@ function DashboardLive() {
 }
 
 function LandingPage() {
+  const [marketing, setMarketing] = useState<any>(null);
+  useEffect(() => {
+    api<any>("/marketing").then(setMarketing).catch(() => setMarketing({}));
+  }, []);
   const [menuOpen, setMenuOpen] = useState(false);
+  const isLoggedIn = Boolean(getToken());
   const year = new Date().getFullYear();
   const features = [
     { icon: Icons.Gauge, title: "See risk before it slips", text: "Live sprint health, workload signals, and delivery forecasts give every team an honest view of what happens next." },
@@ -6337,7 +6365,9 @@ function LandingPage() {
           <a href="#pricing" onClick={() => setMenuOpen(false)}>Pricing</a>
         </nav>
         <div className="landing-actions">
-          <a href="/login">Log in</a>
+          <a href={isLoggedIn ? "/dashboard" : "/login"}>
+            {isLoggedIn ? "Dashboard" : "Log in"}
+          </a>
           <a className="landing-button small" href="/register">Start free <Icons.ArrowUpRight /></a>
         </div>
       </header>
@@ -6352,8 +6382,8 @@ function LandingPage() {
               <a className="landing-button" href="/register">Start tracking for free <Icons.ArrowRight /></a>
               <a className="text-link" href="#workflow"><Icons.PlayCircle /> See how it works</a>
             </div>
-            <div className="hero-proof">
-              <div className="proof-avatars"><span>AK</span><span>JM</span><span>RL</span><span>+2k</span></div>
+              <div className="hero-proof">
+              <div className="proof-avatars">{(marketing?.proof?.avatars || []).map((avatar: string) => <span key={avatar}>{avatar}</span>)}{marketing?.proof?.additional && <span>{marketing.proof.additional}</span>}</div>
               <p><b>Trusted by ambitious teams</b><br/>No credit card · Free to get started</p>
             </div>
           </div>
@@ -6368,23 +6398,19 @@ function LandingPage() {
                 <div className="mini-top"><span>SPRINT OVERVIEW</span><div><Icons.Search/><b>AK</b></div></div>
                 <div className="mini-heading"><div><small>Current sprint</small><h3>Momentum is building.</h3></div><button disabled>+ Create issue</button></div>
                 <div className="mini-stats">
-                  <article><small>SPRINT HEALTH</small><strong>84<span>%</span></strong><i>On track</i></article>
-                  <article><small>COMPLETED</small><strong>32<span>/ 41</span></strong><div className="mini-bar"><i></i></div></article>
-                  <article><small>TEAM VELOCITY</small><strong>+18<span>%</span></strong><svg viewBox="0 0 120 30"><path d="M0 25 C22 23 24 11 42 17 S70 24 82 8 S105 11 120 2"/></svg></article>
+                  <article><small>SPRINT HEALTH</small><strong>{marketing?.preview?.sprintHealth ?? "—"}<span>{marketing ? "%" : ""}</span></strong><i>On track</i></article>
+                  <article><small>COMPLETED</small><strong>{marketing?.preview?.completed ?? "—"}<span>{marketing ? ` / ${marketing.preview.planned}` : ""}</span></strong><div className="mini-bar"><i></i></div></article>
+                  <article><small>TEAM VELOCITY</small><strong>{marketing ? `+${marketing.preview.velocityChange}` : "—"}<span>{marketing ? "%" : ""}</span></strong><svg viewBox="0 0 120 30"><path d="M0 25 C22 23 24 11 42 17 S70 24 82 8 S105 11 120 2"/></svg></article>
                 </div>
-                <div className="mini-board">
-                  <div><small>TO DO <b>4</b></small><article><i></i><p>Refine onboarding flow</p><span>WEB-241 <b>JM</b></span></article><article><i></i><p>Mobile empty states</p><span>APP-88 <b>RL</b></span></article></div>
-                  <div><small>IN PROGRESS <b>3</b></small><article className="purple"><i></i><p>Workspace analytics</p><span>WEB-238 <b>AK</b></span></article><article><i></i><p>API rate limits</p><span>API-104 <b>DS</b></span></article></div>
-                  <div><small>DONE <b>12</b></small><article><i className="done"></i><p>Search command</p><span>WEB-233 <b>JM</b></span></article><article><i className="done"></i><p>Sprint summary</p><span>APP-82 <b>AK</b></span></article></div>
-                </div>
+                <div className="mini-board"><div className="mini-board-empty">Connect your workspace to see live tickets</div></div>
               </div>
             </div>
-            <div className="floating-card risk-card"><span><Icons.ShieldCheck /></span><div><small>SPRINT RISK</small><b>Low risk</b></div><strong>12</strong></div>
-            <div className="floating-card ai-card"><Icons.Sparkles /><div><small>I-TRACK AI</small><b>3 blockers resolved this week</b></div></div>
+            <div className="floating-card risk-card"><span><Icons.ShieldCheck /></span><div><small>SPRINT RISK</small><b>Low risk</b></div><strong>{marketing?.preview?.risk ?? "—"}</strong></div>
+            <div className="floating-card ai-card"><Icons.Sparkles /><div><small>I-TRACK AI</small><b>{marketing ? `${marketing.preview.blockersResolved} blockers resolved this week` : "Loading workspace insight"}</b></div></div>
           </div>
         </section>
 
-        <section className="logo-strip" id="customers"><p>Helping modern teams build what matters</p><div><b>northstar</b><b>Vertex</b><b>APERTURE</b><b>lumon</b><b>QUANTUM</b></div></section>
+        <section className="logo-strip" id="customers"><p>Helping modern teams build what matters</p><div>{(marketing?.logos || []).map((logo: string) => <b key={logo}>{logo}</b>)}</div></section>
 
         <section className="landing-section" id="features">
           <div className="section-intro"><div><span className="section-kicker">ONE WORKSPACE. TOTAL CLARITY.</span><h2>Less tracking.<br/>More momentum.</h2></div><p>Your team shouldn't have to chase updates across five tools. I-TRACK puts the signal front and center, so everyone knows what matters now.</p></div>
@@ -6395,13 +6421,50 @@ function LandingPage() {
           <div className="workflow-card"><div className="workflow-copy"><span className="section-kicker">FROM PLAN TO PROGRESS</span><h2>A clearer way to move work forward.</h2><p>Turn goals into focused sprints, spot trouble early, and help every teammate do their best work.</p>{["Plan around real team capacity","Catch blockers before standup","Share progress without the status chase"].map(x=><div className="workflow-point" key={x}><Icons.Check />{x}</div>)}<a className="landing-button" href="/register">Explore I-TRACK <Icons.ArrowRight/></a></div><div className="workflow-visual"><div className="pulse-ring"><span><Icons.Activity/></span></div><div className="signal signal-one"><small>SPRINT CONFIDENCE</small><b>92%</b><i></i></div><div className="signal signal-two"><Icons.Zap/><span><b>2 risks caught early</b><small>AI sprint analysis</small></span></div><div className="signal signal-three"><small>DELIVERY TREND</small><svg viewBox="0 0 180 65"><path d="M0 56 C30 53 30 40 55 44 S86 42 105 25 S143 30 180 5"/></svg></div></div></div>
         </section>
 
-        <section className="quote-section"><Icons.Quote/><blockquote>“I-TRACK gave us back the one thing our team was missing: a shared sense of what matters. We plan less, unblock faster, and ship with confidence.”</blockquote><div className="quote-person"><span>MC</span><p><b>Maya Chen</b><small>VP of Product at Northstar</small></p></div></section>
+        <section className="quote-section"><Icons.Quote/><blockquote>{marketing?.testimonial?.quote ? `“${marketing.testimonial.quote}”` : ""}</blockquote><div className="quote-person"><span>{marketing?.testimonial?.initials || ""}</span><p><b>{marketing?.testimonial?.name || ""}</b><small>{marketing?.testimonial?.title || ""}</small></p></div></section>
 
         <section className="cta-section" id="pricing"><div><span className="section-kicker">YOUR NEXT SPRINT STARTS HERE</span><h2>Ready to move<br/>with clarity?</h2></div><div><p>Bring your team, your work, and your ambition. I-TRACK will help you keep the rest on track.</p><a className="landing-button dark" href="/register">Start for free <Icons.ArrowRight/></a><small>Free forever for teams up to 10</small></div></section>
       </main>
       <footer className="landing-footer"><a className="landing-logo" href="#top"><span>I</span>I-TRACK</a><p>© {year} I-TRACK. Built for momentum.</p><div><a href="#features">Product</a><a href="#pricing">Pricing</a><a href="/login">Log in</a></div></footer>
     </div>
   );
+}
+
+function OnboardingFlow({ toast }: { toast: (message: string) => void }) {
+  const { step = "workspace" } = useParams();
+  const nav = useNavigate();
+  const { organization, pendingInvitations = [], refetch } = useWorkspace();
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  const [inviteUrl, setInviteUrl] = useState("");
+  const submit = async (event: React.FormEvent<HTMLFormElement>) => {
+    event.preventDefault(); setBusy(true); setError(""); const values = new FormData(event.currentTarget);
+    try {
+      if (step === "workspace") {
+        const session = await api<any>("/workspaces", { method: "POST", body: JSON.stringify({ name: values.get("name") }) });
+        saveSession(session); await refetch(); nav("/onboarding/project");
+      } else if (step === "project") {
+        await api("/projects", { method: "POST", body: JSON.stringify({ name: values.get("name"), key: values.get("key"), description: values.get("description"), status: "active", progress: 0, riskLevel: "medium", activeSprint: "Planning", members: [] }) });
+        nav("/onboarding/invite");
+      } else {
+        const result = await api<any>("/invitations", { method: "POST", body: JSON.stringify({ name: values.get("name"), email: values.get("email"), role: values.get("role"), capacity: Number(values.get("capacity")) }) });
+        setInviteUrl(result.inviteUrl); toast("Invitation created"); event.currentTarget.reset();
+      }
+    } catch (requestError) { setError(requestError instanceof Error ? requestError.message : "Unable to continue"); } finally { setBusy(false); }
+  };
+  const acceptInvitation = async (invitationId: string) => { const session = await api<any>("/auth/accept-invite", { method: "POST", body: JSON.stringify({ invitationId }) }); saveSession(session); window.location.assign("/dashboard"); };
+  const finish = async () => { if (!organization) return; await api(`/workspaces/${organization.id || organization._id}/onboarding/complete`, { method: "POST" }); window.location.assign("/dashboard"); };
+  const headings: Record<string, [string, string]> = { workspace: ["Create or join a workspace", "A workspace keeps each team’s projects, people, and permissions separate."], project: ["Create your first project", "Give your team a clear place to start planning work."], invite: ["Invite your team", "Create invitation links now, or skip and invite teammates later."] };
+  const heading = headings[step] || headings.workspace;
+  return <div className="onboarding-shell"><div className="onboarding-progress"><span className={step === "workspace" ? "active" : "done"}>1 Account</span><span className={step === "workspace" ? "active" : step === "project" ? "active" : "done"}>2 Workspace</span><span className={step === "project" ? "active" : step === "invite" ? "done" : ""}>3 Project</span><span className={step === "invite" ? "active" : ""}>4 Team</span></div><section className="card onboarding-card"><Badge tone="blue">GET STARTED</Badge><PageHead title={heading[0]} desc={heading[1]} />{step === "workspace" && pendingInvitations.length > 0 && <div className="pending-onboarding"><h3>Pending invitations</h3>{pendingInvitations.map((invitation: any) => <article key={invitation.id}><div><b>{invitation.organization?.name}</b><small>Join as {fmt(invitation.role)}</small></div><button className="btn" onClick={() => acceptInvitation(invitation.id)}>Review and join</button></article>)}<div className="or-divider">or create a new workspace</div></div>}<form onSubmit={submit}>{step === "workspace" && <label className="field"><span>Workspace name</span><input name="name" placeholder="Acme Product" minLength={2} autoFocus required /></label>}{step === "project" && <div className="form-grid"><label className="field full"><span>Project name</span><input name="name" placeholder="Product launch" autoFocus required /></label><label className="field"><span>Project key</span><input name="key" placeholder="PL" minLength={2} maxLength={12} required /></label><label className="field full"><span>Description</span><textarea name="description" placeholder="What will this project deliver?" minLength={5} required /></label></div>}{step === "invite" && <div className="form-grid"><label className="field full"><span>Full name</span><input name="name" required /></label><label className="field full"><span>Email address</span><input name="email" type="email" required /></label><label className="field"><span>Role</span><select name="role" defaultValue="engineer"><option value="engineer">Engineer</option><option value="designer">Designer</option><option value="manager">Manager</option></select></label><label className="field"><span>Weekly capacity</span><input name="capacity" type="number" min="0" defaultValue="32" /></label></div>}{error && <div className="auth-message">{error}</div>}{inviteUrl && <div className="invite-link"><span>Invitation link</span><input readOnly value={inviteUrl} /><button type="button" className="btn" onClick={() => navigator.clipboard.writeText(inviteUrl)}>Copy</button></div>}<div className="form-actions">{step === "invite" && <button type="button" className="btn" onClick={finish}>Skip for now</button>}<button className="btn primary" disabled={busy}>{busy ? "Please wait…" : step === "workspace" ? "Create workspace" : step === "project" ? "Create project" : "Create invitation"}</button>{step === "invite" && inviteUrl && <button type="button" className="btn primary" onClick={finish}>Finish onboarding</button>}</div></form></section></div>;
+}
+
+function InvitationAcceptPage() {
+  const [params] = useSearchParams(); const token = params.get("token") || ""; const nav = useNavigate();
+  const [preview, setPreview] = useState<any>(null); const [error, setError] = useState(""); const [busy, setBusy] = useState(false);
+  useEffect(() => { if (token) api<any>(`/invitations/preview?token=${encodeURIComponent(token)}`).then(setPreview).catch((e) => setError(e.message)); else setError("Invitation token is missing"); }, [token]);
+  const submit = async (event: React.FormEvent<HTMLFormElement>) => { event.preventDefault(); setBusy(true); setError(""); const values = new FormData(event.currentTarget); try { if (preview.accountExists && !getToken()) await login(preview.invitation.email, String(values.get("password"))); const password = String(values.get("password") || ""); if (!preview.accountExists && password !== String(values.get("confirmPassword") || "")) throw new Error("Passwords do not match"); const session = await api<any>("/auth/accept-invite", { method: "POST", body: JSON.stringify({ token, ...(!preview.accountExists ? { name: values.get("name"), password } : {}) }) }); saveSession(session); window.location.assign("/dashboard"); } catch (e) { setError(e instanceof Error ? e.message : "Unable to accept invitation"); } finally { setBusy(false); } };
+  return <div className="auth"><section className="auth-brand"><div className="brand big"><div className="brand-mark">I</div><span>I-TRACK</span></div><div><Badge tone="lime">WORKSPACE INVITATION</Badge><h1>Work together.<br />Stay aligned.</h1><p>Review the workspace and your role before joining.</p></div></section><section className="auth-form">{!preview ? <div className="auth-message">{error || "Loading invitation…"}</div> : <form onSubmit={submit}><span className="eyebrow">INVITED WORKSPACE</span><h1>Join {preview.invitation.organization?.name}</h1><p>{preview.invitation.invitedBy?.name || "A workspace admin"} invited you as <b>{fmt(preview.invitation.role)}</b>.</p><div className="invite-summary"><span>Email <b>{preview.invitation.email}</b></span><span>Role <b>{fmt(preview.invitation.role)}</b></span></div>{!preview.accountExists && <label className="field"><span>Full name</span><input name="name" defaultValue={preview.invitation.name} required /></label>}<label className="field"><span>{preview.accountExists ? "Password to sign in" : "Create password"}</span><input name="password" type="password" minLength={8} required /></label>{!preview.accountExists && <label className="field"><span>Confirm password</span><input name="confirmPassword" type="password" minLength={8} required /></label>}{error && <div className="auth-message">{error}</div>}<button className="btn primary wide" disabled={busy}>{busy ? "Joining…" : "Accept invitation"}</button>{preview.accountExists && <button type="button" className="btn wide" onClick={() => nav("/login")}>Use another account</button>}</form>}</section></div>;
 }
 
 function AuthPageLive({ type }: { type: string }) {
@@ -6414,7 +6477,7 @@ function AuthPageLive({ type }: { type: string }) {
   const tokenFlow = type === "reset-password" || type === "accept-invite";
   const titles: Record<string, string> = {
     login: "Welcome back",
-    register: "Create your workspace",
+    register: "Create your account",
     "forgot-password": "Reset your password",
     "reset-password": "Choose a new password",
     "accept-invite": "Join your workspace",
@@ -6427,8 +6490,8 @@ function AuthPageLive({ type }: { type: string }) {
     const data = new FormData(e.currentTarget);
     try {
       if (type === "login") {
-        await login(String(data.get("email")), String(data.get("password")));
-        nav("/dashboard");
+        const session = await login(String(data.get("email")), String(data.get("password")));
+        nav(session.next || "/dashboard");
         location.reload();
         return;
       }
@@ -6437,14 +6500,12 @@ function AuthPageLive({ type }: { type: string }) {
           method: "POST",
           body: JSON.stringify({
             name: data.get("name"),
-            organizationName: data.get("organizationName"),
             email: data.get("email"),
             password: data.get("password"),
           }),
         });
-        localStorage.setItem("itrack_token", session.token);
-        localStorage.setItem("itrack_refresh_token", session.refreshToken);
-        nav("/dashboard");
+        saveSession(session);
+        nav(session.next || "/onboarding/workspace");
         location.reload();
         return;
       }
@@ -6522,17 +6583,15 @@ function AuthPageLive({ type }: { type: string }) {
               ? "Sign in to load your workspace data."
               : tokenFlow
                 ? "Use the secure link you received to finish setup."
-                : "Complete the details below to continue."}
+                : type === "register"
+                  ? "Start with your identity. You’ll create a workspace next."
+                  : "Complete the details below to continue."}
           </p>
           {type === "register" && (
             <>
               <label className="field">
                 <span>Full name</span>
                 <input name="name" required />
-              </label>
-              <label className="field">
-                <span>Organization</span>
-                <input name="organizationName" required />
               </label>
             </>
           )}
@@ -6548,7 +6607,6 @@ function AuthPageLive({ type }: { type: string }) {
               <input
                 name="email"
                 type="email"
-                defaultValue={type === "login" ? "maya@itrack.dev" : ""}
                 required
               />
             </label>
@@ -6559,7 +6617,6 @@ function AuthPageLive({ type }: { type: string }) {
               <input
                 name="password"
                 type="password"
-                defaultValue={type === "login" ? "Password123!" : ""}
                 minLength={8}
                 required
               />

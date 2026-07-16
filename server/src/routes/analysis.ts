@@ -1,11 +1,12 @@
 import { Router } from "express";
 import { z } from "zod";
-import { requireAuth } from "../middleware/auth.js";
+import { requireAuth, requireWorkspace } from "../middleware/auth.js";
 import { enforceApiAccess } from "../middleware/access.js";
 import { burnoutScore, dependencyRisk, historicalVelocityDeviation, skillGapRisk, sprintRiskScore, sprintUtilisation, teamCapacity, workloadScore } from "../services/analysis.js";
 
 const router = Router();
 router.use(requireAuth);
+router.use(requireWorkspace);
 router.use(enforceApiAccess);
 
 const sprintRiskInput = z.object({

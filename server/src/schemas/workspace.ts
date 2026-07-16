@@ -72,6 +72,7 @@ export const teamSchema = z.object({
 export const settingsSchema = z.object({
   riskThreshold: z.number().min(0).max(100),
   sprintLengthDays: z.number().min(1).max(60),
+  weeklyCapacityHours: z.number().min(1).max(168).default(40),
   timezone: z.string().min(2),
   aiEnabled: z.boolean(),
   slaPolicy: z.object({

@@ -1,6 +1,6 @@
 import mongoose, { Schema } from "mongoose";
 
-export const resourceKinds = ["epic", "label", "component", "release", "issue-type", "priority", "workflow", "custom-field", "template", "board", "milestone"] as const;
+export const resourceKinds = ["epic", "label", "component", "release", "issue-type", "priority", "workflow", "custom-field", "template", "board", "milestone", "automation-rule", "notification-rule", "permission-scheme", "saved-filter"] as const;
 export type ResourceKind = typeof resourceKinds[number];
 
 const workspaceResourceSchema = new Schema(

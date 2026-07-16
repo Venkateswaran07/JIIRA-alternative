@@ -110,3 +110,5 @@ I-TRACK API listening on http://localhost:4000
 [0mGET /api/v1/resources/label [36m304[0m 60.538 ms - -[0m
 [0mGET /api/v1/auth/me [36m304[0m 87.209 ms - -[0m
 [0mGET /api/v1/notifications [36m304[0m 99.131 ms - -[0m
+12:15:31 PM [tsx] change in ./src\routes\index.ts Restarting...
+c◇ injected env (8) from .env // tip: ⌘ enable debugging { debug: true }

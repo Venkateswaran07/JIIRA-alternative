@@ -6,12 +6,13 @@ import { Project } from "./models/Project.js";
 import { Sprint } from "./models/Sprint.js";
 import { Ticket } from "./models/Ticket.js";
 import { User } from "./models/User.js";
+import { Invitation, OrganizationMembership } from "./models/WorkspaceAccess.js";
 import { seedUsers, ticketTemplates } from "./data/seedData.js";
 import { defaultSlaPolicy, getTicketSlaStatus, slaFieldsForTicket, statusTransition } from "./services/sla.js";
 
 async function seed() {
   await connectDb();
-  await Promise.all([Organization.deleteMany({}), User.deleteMany({}), Project.deleteMany({}), Sprint.deleteMany({}), Cycle.deleteMany({}), Ticket.deleteMany({})]);
+  await Promise.all([Organization.deleteMany({}), User.deleteMany({}), OrganizationMembership.deleteMany({}), Invitation.deleteMany({}), Project.deleteMany({}), Sprint.deleteMany({}), Cycle.deleteMany({}), Ticket.deleteMany({})]);
 
   const passwordHash = await bcrypt.hash("Password123!", 10);
   const organization = await Organization.create({
@@ -28,7 +29,9 @@ async function seed() {
   });
   const users = await User.insertMany(seedUsers.map((user, index) => ({ ...user, role: index === 0 ? "admin" : user.role, organization: organization._id, inviteStatus: "active", passwordHash })));
   organization.owner = users[0]._id;
+  organization.onboardingCompletedAt = new Date();
   await organization.save();
+  await OrganizationMembership.insertMany(users.map((user, index) => ({ user: user._id, organization: organization._id, role: index === 0 ? "admin" : user.role, status: "active", skills: user.skills, availability: user.availability, capacity: user.capacity })));
   const project = await Project.create({
     organization: organization._id,
     key: "ITR",

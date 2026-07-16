@@ -2,7 +2,7 @@ import { Router } from "express";
 import { z } from "zod";
 import { priorityLevels, ticketPopulation, ticketStatuses } from "../constants/workflow.js";
 import { listQuerySchema, pageMeta, parseOr400 } from "../lib/http.js";
-import { requireAuth, requireRole, type AuthRequest } from "../middleware/auth.js";
+import { requireAuth, requireRole, requireWorkspace, type AuthRequest } from "../middleware/auth.js";
 import { enforceApiAccess } from "../middleware/access.js";
 import { Organization } from "../models/Organization.js";
 import { Counter } from "../models/Counter.js";
@@ -11,11 +11,13 @@ import { Project } from "../models/Project.js";
 import { Sprint } from "../models/Sprint.js";
 import { Ticket } from "../models/Ticket.js";
 import { User } from "../models/User.js";
+import { Invitation, OrganizationMembership } from "../models/WorkspaceAccess.js";
 import { cycleSchema, projectSchema, settingsSchema, sprintSchema, teamSchema, ticketSchema } from "../schemas/workspace.js";
 import { applySlaState, cycleMetricsForTickets, normalizeSlaPolicy, slaFieldsForTicket, statusTransition } from "../services/sla.js";
 
 const router = Router();
 router.use(requireAuth);
+router.use(requireWorkspace);
 router.use(enforceApiAccess);
 
 const orgId = (req: AuthRequest) => req.user!.organizationId;
@@ -43,12 +45,13 @@ router.get("/me", async (req: AuthRequest, res) => {
 });
 
 router.get("/dashboard", async (req: AuthRequest, res) => {
-  const [projects, sprints, cycles, tickets, users] = await Promise.all([
+  const [projects, sprints, cycles, tickets, users, invitations] = await Promise.all([
     Project.find(orgFilter(req)).populate("members", "name role avatarColor organization"),
     Sprint.find(orgFilter(req)).populate("project", "key name organization"),
     Cycle.find(orgFilter(req)).populate({ path: "sprints", select: "name status startDate endDate plannedPoints completedPoints riskScore organization project", populate: { path: "project", select: "key name organization" } }),
     Ticket.find(orgFilter(req)).populate(ticketPopulation),
-    User.find(orgFilter(req)).select("-passwordHash"),
+    OrganizationMembership.find({ organization: orgId(req) }).populate("user", "name email avatarColor notificationPreferences"),
+    Invitation.find({ organization: orgId(req), status: "pending" }),
   ]);
   const activeSprint = sprints.find((sprint) => sprint.status === "active") ?? sprints[0];
   const blockedTickets = tickets.filter((ticket) => ticket.blocked);
@@ -64,7 +67,10 @@ router.get("/dashboard", async (req: AuthRequest, res) => {
     sprints,
     cycles,
     tickets,
-    users,
+    users: [
+      ...users.map((membership: any) => ({ ...(membership.user?.toObject?.() || membership.user || {}), role: membership.role, inviteStatus: membership.status, skills: membership.skills, availability: membership.availability, capacity: membership.capacity })),
+      ...invitations.map((invitation: any) => ({ _id: invitation.id, id: invitation.id, name: invitation.name, email: invitation.email, role: invitation.role, inviteStatus: "invited", capacity: invitation.capacity, skills: [] })),
+    ],
     trends: {
       risk: [
         { name: "Mon", value: 58 },
@@ -112,7 +118,7 @@ router.route("/projects/:id")
     const body = parseOr400(projectSchema.partial(), req.body, res);
     if (!body) return;
     if (body.members) {
-      const memberCount = await User.countDocuments({ _id: { $in: body.members }, organization: orgId(req) });
+      const memberCount = await OrganizationMembership.countDocuments({ user: { $in: body.members }, organization: orgId(req), status: "active" });
       if (memberCount !== new Set(body.members).size) return res.status(400).json({ message: "One or more project members are invalid" });
     }
     const project = await Project.findOneAndUpdate({ _id: req.params.id, organization: orgId(req) }, body, { new: true }).populate("members", "name role avatarColor organization");
@@ -347,7 +353,7 @@ router.patch("/tickets/:id/dependencies", requireRole(["admin", "manager"]), asy
 });
 
 router.route("/team")
-  .get(async (req: AuthRequest, res) => res.json({ users: await User.find(orgFilter(req)).select("-passwordHash") }))
+  .get(async (req: AuthRequest, res) => { const memberships = await OrganizationMembership.find({ organization: orgId(req) }).populate("user", "name email avatarColor notificationPreferences"); return res.json({ users: memberships.map((membership: any) => ({ ...(membership.user?.toObject?.() || {}), role: membership.role, inviteStatus: membership.status, skills: membership.skills, availability: membership.availability, capacity: membership.capacity })) }); })
   .post(requireRole(["admin"]), async (req: AuthRequest, res) => {
     const body = parseOr400(teamSchema, req.body, res);
     if (!body) return;

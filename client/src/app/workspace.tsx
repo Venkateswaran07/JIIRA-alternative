@@ -41,6 +41,8 @@ const serverData: any = {
 const WorkspaceContext = React.createContext<{
   user: any;
   organization: any;
+  memberships: any[];
+  pendingInvitations: any[];
   dashboard: any;
   notifications: any[];
   reports: any;
@@ -89,6 +91,8 @@ export function ApiGate({
   const [workspace, setWorkspace] = useState<any>({
     user: null,
     organization: null,
+    memberships: [],
+    pendingInvitations: [],
     dashboard: null,
     notifications: [],
     reports: null,
@@ -116,6 +120,13 @@ export function ApiGate({
 
   const loadData = async () => {
     try {
+      const me = await api<any>("/auth/me");
+      if (!me.organization || location.pathname.startsWith("/onboarding") || String(me.next || "").startsWith("/onboarding")) {
+        setWorkspace((previous: any) => ({ ...previous, user: me.user, organization: me.organization, memberships: me.memberships || [], pendingInvitations: me.pendingInvitations || [] }));
+        setLoading(false);
+        if (!location.pathname.startsWith("/onboarding")) navigate(me.pendingInvitations?.length && !me.organization ? "/onboarding/workspace" : (me.next || "/onboarding/workspace"), { replace: true });
+        return;
+      }
       const isReports = location.pathname.startsWith("/reports");
       const isSla = location.pathname.startsWith("/sla");
       const isSessions = location.pathname.startsWith("/sessions") || location.pathname.startsWith("/settings");
@@ -123,7 +134,6 @@ export function ApiGate({
       const isIntegrations = location.pathname.startsWith("/integrations");
       const isResources = location.pathname.startsWith("/resources") || location.pathname.startsWith("/organization");
 
-      const mePromise = api<any>("/auth/me");
       const dashboardPromise = api<any>("/dashboard");
       const notificationsPromise = api<any>("/notifications").catch(() => ({ notifications: [] }));
       const labelResourcesPromise = api<any>("/resources/label").catch(() => ({ resources: [] }));
@@ -153,7 +163,6 @@ export function ApiGate({
         : Promise.resolve({ integrations: [] });
 
       const [
-        me,
         dashboard,
         notificationsData,
         labelResourcesData,
@@ -164,7 +173,6 @@ export function ApiGate({
         apiTokens,
         webhooks,
       ] = await Promise.all([
-        mePromise,
         dashboardPromise,
         notificationsPromise,
         labelResourcesPromise,
@@ -214,9 +222,7 @@ export function ApiGate({
         email: u.email,
         role: u.role,
         skills: u.skills || [],
-        load:
-          Math.round((1 - (u.availability ?? 1)) * 100) ||
-          Math.min(100, Math.round(((u.capacity || 0) / 40) * 100)),
+        load: u.capacity,
         color: u.avatarColor || "#A47BEF",
       }));
 
@@ -271,6 +277,8 @@ export function ApiGate({
       const stateVal = {
         user: me.user,
         organization: me.organization,
+        memberships: me.memberships || [],
+        pendingInvitations: me.pendingInvitations || [],
         dashboard,
         notifications: notificationsData.notifications || [],
         reports: isReports ? reportsData?.reports : serverData.reports,

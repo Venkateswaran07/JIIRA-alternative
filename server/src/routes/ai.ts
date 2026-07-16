@@ -3,7 +3,7 @@ import OpenAI from "openai";
 import { z } from "zod";
 import { aiEndpointsForRole, canRoleAccessAiEndpoint, isConfirmationRequired, normalizeAiPath } from "../aiAccess.js";
 import { env } from "../config/env.js";
-import { requireAuth, requireRole, type AuthRequest } from "../middleware/auth.js";
+import { requireAuth, requireRole, requireWorkspace, type AuthRequest } from "../middleware/auth.js";
 import { enforceApiAccess } from "../middleware/access.js";
 import { AuditEvent } from "../models/Operational.js";
 import { Project } from "../models/Project.js";
@@ -14,6 +14,7 @@ import { generatedTicketSchema } from "../schemas/ai.js";
 
 const router = Router();
 router.use(requireAuth);
+router.use(requireWorkspace);
 router.use(enforceApiAccess);
 
 function getClient() {
@@ -42,7 +43,7 @@ function parseJsonPayload(raw: string) {
 }
 
 router.get("/endpoints", (req: AuthRequest, res) => {
-  return res.json({ endpoints: aiEndpointsForRole(req.user!.role) });
+  return res.json({ endpoints: aiEndpointsForRole(req.user!.role!) });
 });
 
 router.post("/execute", async (req: AuthRequest, res) => {
@@ -58,7 +59,7 @@ router.post("/execute", async (req: AuthRequest, res) => {
   const path = normalizeAiPath(parsed.data.path);
   if (path.startsWith("/ai/execute")) return res.status(400).json({ message: "AI execution cannot call itself" });
 
-  const access = canRoleAccessAiEndpoint(req.user!.role, method, path);
+  const access = canRoleAccessAiEndpoint(req.user!.role!, method, path);
   if (!access.allowed) {
     return res.status(403).json({
       message: "Your role cannot access this endpoint through AI",
@@ -232,7 +233,7 @@ router.post("/chat", async (req, res) => {
   if (!parsed.success) return res.status(400).json({ message: "Invalid chat request", issues: parsed.error.issues });
 
   const authReq = req as AuthRequest;
-  const userRole = authReq.user!.role;
+  const userRole = authReq.user!.role!;
   const endpoints = aiEndpointsForRole(userRole);
   const endpointList = endpoints.map((ep) => `${ep.method} ${ep.path}${ep.requiresConfirmation ? " [requires confirmation]" : ""}`).join("\n");
 

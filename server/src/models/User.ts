@@ -13,9 +13,10 @@ export interface IUser {
   name: string;
   email: string;
   passwordHash: string;
-  organization: mongoose.Types.ObjectId;
-  role: UserRole;
-  inviteStatus: InviteStatus;
+  organization?: mongoose.Types.ObjectId;
+  role?: UserRole;
+  inviteStatus?: InviteStatus;
+  lastActiveOrganization?: mongoose.Types.ObjectId;
   skills: string[];
   availability: number;
   capacity: number;
@@ -28,9 +29,10 @@ const userSchema = new Schema<IUser>(
     name: { type: String, required: true },
     email: { type: String, required: true, unique: true, lowercase: true },
     passwordHash: { type: String, required: true },
-    organization: { type: Schema.Types.ObjectId, ref: "Organization", required: true },
-    role: { type: String, required: true },
+    organization: { type: Schema.Types.ObjectId, ref: "Organization" },
+    role: { type: String },
     inviteStatus: { type: String, default: "active" },
+    lastActiveOrganization: { type: Schema.Types.ObjectId, ref: "Organization" },
     skills: [{ type: String }],
     availability: { type: Number, default: 1 },
     capacity: { type: Number, default: 32 },
@@ -44,7 +46,5 @@ const userSchema = new Schema<IUser>(
   },
   { timestamps: true },
 );
-
-userSchema.index({ organization: 1, email: 1 }, { unique: true });
 
 export const User = mongoose.model<IUser>("User", userSchema);

@@ -7,6 +7,10 @@ export function clearSession() {
   localStorage.removeItem("itrack_token");
   localStorage.removeItem("itrack_refresh_token");
 }
+export function saveSession(session: { token: string; refreshToken: string }) {
+  localStorage.setItem("itrack_token", session.token);
+  localStorage.setItem("itrack_refresh_token", session.refreshToken);
+}
 
 export async function api<T>(
   path: string,
@@ -34,7 +38,6 @@ export async function login(email: string, password: string) {
     method: "POST",
     body: JSON.stringify({ email, password }),
   });
-  localStorage.setItem("itrack_token", session.token);
-  localStorage.setItem("itrack_refresh_token", session.refreshToken);
+  saveSession(session);
   return session;
 }

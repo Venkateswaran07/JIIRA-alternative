@@ -8,7 +8,7 @@ import { userRoles } from "../constants/workflow.js";
 import { hashSha256, randomBase64UrlToken } from "../lib/crypto.js";
 import { parseOr400 } from "../lib/http.js";
 import { currentUserId, organizationId } from "../lib/routeContext.js";
-import { requireAuth, requireRole, type AuthRequest } from "../middleware/auth.js";
+import { requireAuth, requireRole, requireWorkspace, type AuthRequest } from "../middleware/auth.js";
 import { enforceApiAccess } from "../middleware/access.js";
 import { recordAuditEvent } from "../services/audit.js";
 import { Organization } from "../models/Organization.js";
@@ -19,11 +19,13 @@ import { Project } from "../models/Project.js";
 import { Sprint } from "../models/Sprint.js";
 import { Ticket } from "../models/Ticket.js";
 import { User } from "../models/User.js";
+import { Invitation, OrganizationMembership } from "../models/WorkspaceAccess.js";
 import { resourceKinds, WorkspaceResource } from "../models/WorkspaceResource.js";
 import { applySlaState, statusTransition } from "../services/sla.js";
 
 const router = Router();
 router.use(requireAuth);
+router.use(requireWorkspace);
 router.use(enforceApiAccess);
 const INVITE_TOKEN_TTL_MS = 7 * 86400_000;
 const oid = organizationId;
@@ -35,10 +37,10 @@ const Integrations = Integration as any;
 const audit = recordAuditEvent;
 
 const userPatch = z.object({ name: z.string().min(2).optional(), role: z.enum(userRoles).optional(), skills: z.array(z.string()).optional(), availability: z.number().min(0).max(1).optional(), capacity: z.number().min(0).optional(), avatarColor: z.string().optional() });
-router.get("/users", async (req: AuthRequest, res) => res.json({ users: await User.find({ organization: oid(req) }).select("-passwordHash") }));
+router.get("/users", async (req: AuthRequest, res) => { const memberships = await OrganizationMembership.find({ organization: oid(req) }).populate("user", "name email avatarColor notificationPreferences"); return res.json({ users: memberships.map((m: any) => ({ ...(m.user?.toObject?.() || {}), role: m.role, inviteStatus: m.status, skills: m.skills, availability: m.availability, capacity: m.capacity })) }); });
 router.get("/users/:id", async (req: AuthRequest, res) => {
-  const user = await User.findOne({ _id: req.params.id, organization: oid(req) }).select("-passwordHash");
-  return user ? res.json({ user }) : res.status(404).json({ message: "User not found" });
+  const membership: any = await OrganizationMembership.findOne({ user: req.params.id, organization: oid(req) }).populate("user", "name email avatarColor notificationPreferences");
+  return membership ? res.json({ user: { ...(membership.user?.toObject?.() || {}), role: membership.role, inviteStatus: membership.status, skills: membership.skills, availability: membership.availability, capacity: membership.capacity } }) : res.status(404).json({ message: "User not found" });
 });
 router.patch("/users/:id", async (req: AuthRequest, res) => {
   const body = parseOr400(userPatch, req.body, res); if (!body) return;
@@ -46,20 +48,24 @@ router.patch("/users/:id", async (req: AuthRequest, res) => {
   const isSelf = req.params.id === uid(req);
   if (!isAdmin && !isSelf) return res.status(403).json({ message: "You do not have permission to update this user" });
   if (!isAdmin && body.role !== undefined) return res.status(403).json({ message: "Only admins can change user roles" });
-  const user = await User.findOneAndUpdate({ _id: req.params.id, organization: oid(req) }, body, { new: true }).select("-passwordHash");
-  if (!user) return res.status(404).json({ message: "User not found" }); await audit(req, "user.updated", "user", user._id); return res.json({ user });
+  const membershipFields = Object.fromEntries(Object.entries(body).filter(([key]) => ["role", "skills", "availability", "capacity"].includes(key)));
+  const profileFields = Object.fromEntries(Object.entries(body).filter(([key]) => ["name", "avatarColor"].includes(key)));
+  const membership: any = await OrganizationMembership.findOneAndUpdate({ user: req.params.id, organization: oid(req) }, membershipFields, { new: true }).populate("user", "name email avatarColor notificationPreferences");
+  if (!membership) return res.status(404).json({ message: "User not found" });
+  if (Object.keys(profileFields).length) await User.updateOne({ _id: req.params.id }, profileFields);
+  await membership.populate("user", "name email avatarColor notificationPreferences"); await audit(req, "user.updated", "user", req.params.id); return res.json({ user: { ...(membership.user?.toObject?.() || {}), role: membership.role, inviteStatus: membership.status, skills: membership.skills, availability: membership.availability, capacity: membership.capacity } });
 });
 router.post("/users/:id/deactivate", requireRole(["admin"]), async (req: AuthRequest, res) => {
   if (req.params.id === uid(req)) return res.status(400).json({ message: "You cannot deactivate yourself" });
-  const user = await User.findOneAndUpdate({ _id: req.params.id, organization: oid(req) }, { inviteStatus: "disabled" }, { new: true }).select("-passwordHash");
-  if (!user) return res.status(404).json({ message: "User not found" }); await Session.updateMany({ user: user._id }, { revokedAt: new Date() }); return res.json({ user });
+  const membership = await OrganizationMembership.findOneAndUpdate({ user: req.params.id, organization: oid(req) }, { status: "disabled" }, { new: true });
+  if (!membership) return res.status(404).json({ message: "User not found" }); await Session.updateMany({ user: req.params.id, organization: oid(req) }, { revokedAt: new Date() }); return res.json({ membership });
 });
 router.post("/users/:id/reactivate", requireRole(["admin"]), async (req: AuthRequest, res) => {
-  const user = await User.findOneAndUpdate({ _id: req.params.id, organization: oid(req) }, { inviteStatus: "active" }, { new: true }).select("-passwordHash"); return user ? res.json({ user }) : res.status(404).json({ message: "User not found" });
+  const membership = await OrganizationMembership.findOneAndUpdate({ user: req.params.id, organization: oid(req) }, { status: "active" }, { new: true }); return membership ? res.json({ membership }) : res.status(404).json({ message: "User not found" });
 });
 router.delete("/users/:id", requireRole(["admin"]), async (req: AuthRequest, res) => {
   if (req.params.id === uid(req)) return res.status(400).json({ message: "You cannot delete yourself" });
-  const user = await User.findOneAndDelete({ _id: req.params.id, organization: oid(req) }); if (!user) return res.status(404).json({ message: "User not found" }); return res.status(204).send();
+  const membership = await OrganizationMembership.findOneAndDelete({ user: req.params.id, organization: oid(req) }); if (!membership) return res.status(404).json({ message: "User not found" }); await Session.updateMany({ user: req.params.id, organization: oid(req) }, { revokedAt: new Date() }); return res.status(204).send();
 });
 router.post("/invitations", requireRole(["admin"]), async (req: AuthRequest, res) => {
   const body = parseOr400(z.object({ name: z.string().min(2), email: z.string().email(), role: z.enum(userRoles).default("engineer"), capacity: z.number().min(0).optional() }), req.body, res); if (!body) return;
@@ -75,7 +81,7 @@ router.post("/invitations/:userId/resend", requireRole(["admin"]), async (req: A
 router.delete("/invitations/:userId", requireRole(["admin"]), async (req: AuthRequest, res) => { const user = await User.findOneAndDelete({ _id: req.params.userId, organization: oid(req), inviteStatus: "invited" }); if (!user) return res.status(404).json({ message: "Invitation not found" }); await ActionToken.deleteMany({ user: user._id }); return res.status(204).send(); });
 
 router.get("/projects/:id", async (req: AuthRequest, res) => { const project = await Project.findOne({ _id: req.params.id, organization: oid(req) }).populate("members", "name email role"); return project ? res.json({ project }) : res.status(404).json({ message: "Project not found" }); });
-router.put("/projects/:id/members", requireRole(["admin", "manager"]), async (req: AuthRequest, res) => { const body = parseOr400(z.object({ userIds: z.array(z.string()) }), req.body, res); if (!body) return; const count = await User.countDocuments({ _id: { $in: body.userIds }, organization: oid(req) }); if (count !== new Set(body.userIds).size) return res.status(400).json({ message: "Invalid member" }); const project = await Project.findOneAndUpdate({ _id: req.params.id, organization: oid(req) }, { members: body.userIds }, { new: true }).populate("members", "name email role"); return project ? res.json({ project }) : res.status(404).json({ message: "Project not found" }); });
+router.put("/projects/:id/members", requireRole(["admin", "manager"]), async (req: AuthRequest, res) => { const body = parseOr400(z.object({ userIds: z.array(z.string()) }), req.body, res); if (!body) return; const count = await OrganizationMembership.countDocuments({ user: { $in: body.userIds }, organization: oid(req), status: "active" }); if (count !== new Set(body.userIds).size) return res.status(400).json({ message: "Invalid member" }); const project = await Project.findOneAndUpdate({ _id: req.params.id, organization: oid(req) }, { members: body.userIds }, { new: true }).populate("members", "name email"); return project ? res.json({ project }) : res.status(404).json({ message: "Project not found" }); });
 router.post("/projects/:id/archive", requireRole(["admin", "manager"]), async (req: AuthRequest, res) => { const project = await Project.findOneAndUpdate({ _id: req.params.id, organization: oid(req) }, { status: "done" }, { new: true }); return project ? res.json({ project }) : res.status(404).json({ message: "Project not found" }); });
 router.post("/projects/:id/restore", requireRole(["admin", "manager"]), async (req: AuthRequest, res) => { const project = await Project.findOneAndUpdate({ _id: req.params.id, organization: oid(req) }, { status: "active" }, { new: true }); return project ? res.json({ project }) : res.status(404).json({ message: "Project not found" }); });
 
@@ -89,6 +95,7 @@ router.post("/tickets/:id/assign", async (req: AuthRequest, res) => { const body
 router.post("/tickets/:id/archive", requireRole(["admin", "manager"]), async (req: AuthRequest, res) => { const ticket = await Ticket.findOneAndUpdate({ _id: req.params.id, organization: oid(req) }, { archivedAt: new Date() }, { new: true }); return ticket ? res.json({ ticket }) : res.status(404).json({ message: "Ticket not found" }); });
 router.post("/tickets/:id/restore", requireRole(["admin", "manager"]), async (req: AuthRequest, res) => { const ticket = await Ticket.findOneAndUpdate({ _id: req.params.id, organization: oid(req) }, { $unset: { archivedAt: 1 } }, { new: true }); return ticket ? res.json({ ticket }) : res.status(404).json({ message: "Ticket not found" }); });
 router.patch("/tickets/:id/rank", async (req: AuthRequest, res) => { const body = parseOr400(z.object({ rank: z.number(), sprint: z.string().nullable().optional(), status: z.enum(["Backlog", "To Do", "In Progress", "In Review", "Done"]).optional() }), req.body, res); if (!body) return; const ticket = await Ticket.findOne({ _id: req.params.id, organization: oid(req) }); if (!ticket) return res.status(404).json({ message: "Ticket not found" }); const fromStatus = ticket.status; ticket.rank = body.rank; if (body.status) { ticket.status = body.status; ticket.history.push({ event: `Moved to ${body.status}`, createdAt: new Date() }); ticket.statusTransitions.push(statusTransition(fromStatus, body.status, new Date(), uid(req))); if (body.status === "Done" && !ticket.resolvedAt) ticket.resolvedAt = new Date(); } if (body.sprint === null) ticket.sprint = undefined as never; else if (body.sprint) ticket.sprint = new mongoose.Types.ObjectId(body.sprint); applySlaState(ticket); await ticket.save(); return res.json({ ticket }); });
+router.post("/tickets/:id/links", async (req: AuthRequest, res) => { const body = parseOr400(z.object({ type: z.enum(["blocks", "is-blocked-by", "relates-to", "duplicates"]), ticket: z.string().min(1) }), req.body, res); if (!body) return; const [source, target] = await Promise.all([Ticket.findOne({ _id: req.params.id, organization: oid(req) }), Ticket.findOne({ _id: body.ticket, organization: oid(req) })]); if (!source || !target) return res.status(404).json({ message: "Ticket not found" }); source.issueLinks.push({ ...body, createdAt: new Date() }); await source.save(); await audit(req, "ticket.linked", "ticket", source._id, { type: body.type, ticket: target.ticketId }); return res.status(201).json({ ticket: source }); });
 router.post("/tickets/:id/watch", async (req: AuthRequest, res) => { const ticket = await Ticket.findOneAndUpdate({ _id: req.params.id, organization: oid(req) }, { $addToSet: { watchers: uid(req) } }, { new: true }); return ticket ? res.json({ ticket }) : res.status(404).json({ message: "Ticket not found" }); });
 router.delete("/tickets/:id/watch", async (req: AuthRequest, res) => { const ticket = await Ticket.findOneAndUpdate({ _id: req.params.id, organization: oid(req) }, { $pull: { watchers: uid(req) } }, { new: true }); return ticket ? res.json({ ticket }) : res.status(404).json({ message: "Ticket not found" }); });
 router.get("/tickets/:id/history", async (req: AuthRequest, res) => { const ticket = await Ticket.findOne({ _id: req.params.id, organization: oid(req) }).select("history"); return ticket ? res.json({ history: ticket.history }) : res.status(404).json({ message: "Ticket not found" }); });
@@ -108,6 +115,7 @@ router.get("/notifications", async (req: AuthRequest, res) => res.json({ notific
 router.patch("/notifications/:id/read", async (req: AuthRequest, res) => { const notification = await Notification.findOneAndUpdate({ _id: req.params.id, organization: oid(req), user: uid(req) }, { readAt: new Date() }, { new: true }); return notification ? res.json({ notification }) : res.status(404).json({ message: "Notification not found" }); });
 router.post("/notifications/read-all", async (req: AuthRequest, res) => { await Notification.updateMany({ organization: oid(req), user: uid(req), readAt: { $exists: false } }, { readAt: new Date() }); return res.json({ ok: true }); });
 router.get("/audit-logs", requireRole(["admin"]), async (req: AuthRequest, res) => res.json({ events: await AuditEvent.find({ organization: oid(req) }).sort("-createdAt").limit(200).populate("actor", "name email") }));
+router.get("/audit-logs/export", requireRole(["admin"]), async (req: AuthRequest, res) => { const events = await AuditEvent.find({ organization: oid(req) }).sort("createdAt").populate("actor", "name email").lean(); const header = "timestamp,action,entityType,entityId,actor,metadata"; const csv = [header, ...events.map((event: any) => [event.createdAt?.toISOString() || "", event.action, event.entityType || "", event.entityId || "", event.actor?.email || event.actor?.name || "", JSON.stringify(event.metadata || {})].map((value) => `"${String(value).replaceAll('"', '""')}"`).join(","))].join("\n"); return res.type("text/csv").set("Content-Disposition", `attachment; filename=audit-log-${new Date().toISOString().slice(0, 10)}.csv`).send(csv); });
 
 router.route("/integrations/:kind").get(requireRole(["admin"]), async (req: AuthRequest, res) => res.json({ integrations: await Integrations.find({ organization: oid(req), kind: String(req.params.kind) }).select("-secretHash") })).post(requireRole(["admin"]), async (req: AuthRequest, res) => { const body = parseOr400(z.object({ name: z.string().min(1), url: z.string().url().optional(), events: z.array(z.string()).default([]) }), req.body, res); if (!body) return; const kind = String(req.params.kind); if (!["api-token", "webhook"].includes(kind)) return res.status(404).json({ message: "Integration kind not found" }); const secret = randomBase64UrlToken(); const integration = await Integrations.create({ ...body, organization: oid(req), kind, ...(kind === "api-token" ? { secretHash: hash(secret) } : {}) }); return res.status(201).json({ integration: { ...integration.toObject(), secretHash: undefined }, ...(kind === "api-token" ? { token: secret } : {}) }); });
 router.delete("/integrations/:kind/:id", requireRole(["admin"]), async (req: AuthRequest, res) => { const item = await Integrations.findOneAndDelete({ _id: String(req.params.id), organization: oid(req), kind: String(req.params.kind) }); return item ? res.status(204).send() : res.status(404).json({ message: "Integration not found" }); });
@@ -126,15 +134,15 @@ router.delete("/organization", requireRole(["admin"]), async (req: AuthRequest, 
       await Session.deleteMany(filter, options); await ActionToken.deleteMany(filter, options); await Notification.deleteMany(filter, options);
       await AuditEvent.deleteMany(filter, options); await Integration.deleteMany(filter, options); await Counter.deleteMany(filter, options);
       await WorkspaceResource.deleteMany(filter, options); await Ticket.deleteMany(filter, options); await Cycle.deleteMany(filter, options); await Sprint.deleteMany(filter, options);
-      await Project.deleteMany(filter, options); await User.deleteMany(filter, options);
+      await Project.deleteMany(filter, options); await OrganizationMembership.deleteMany(filter, options); await Invitation.deleteMany(filter, options);
       const result = await Organization.deleteOne({ _id: organization._id }, options);
       if (result.deletedCount !== 1) throw new Error("Organization deletion failed");
     });
     return res.status(204).send();
   } finally { await session.endSession(); }
 });
-router.get("/organization/usage", requireRole(["admin"]), async (req: AuthRequest, res) => { const [users, projects, tickets, storage] = await Promise.all([User.countDocuments({ organization: oid(req) }), Project.countDocuments({ organization: oid(req) }), Ticket.countDocuments({ organization: oid(req) }), Resources.countDocuments({ organization: oid(req) })]); return res.json({ usage: { users, projects, tickets, resources: storage } }); });
-router.get("/export", requireRole(["admin"]), async (req: AuthRequest, res) => { const [organization, users, projects, sprints, cycles, tickets, resources] = await Promise.all([Organization.findById(oid(req)), User.find({ organization: oid(req) }).select("-passwordHash"), Project.find({ organization: oid(req) }), Sprint.find({ organization: oid(req) }), Cycle.find({ organization: oid(req) }), Ticket.find({ organization: oid(req) }), Resources.find({ organization: oid(req) })]); return res.json({ exportedAt: new Date(), organization, users, projects, sprints, cycles, tickets, resources }); });
+router.get("/organization/usage", requireRole(["admin"]), async (req: AuthRequest, res) => { const [users, projects, tickets, storage] = await Promise.all([OrganizationMembership.countDocuments({ organization: oid(req) }), Project.countDocuments({ organization: oid(req) }), Ticket.countDocuments({ organization: oid(req) }), Resources.countDocuments({ organization: oid(req) })]); return res.json({ usage: { users, projects, tickets, resources: storage } }); });
+router.get("/export", requireRole(["admin"]), async (req: AuthRequest, res) => { const [organization, memberships, projects, sprints, cycles, tickets, resources] = await Promise.all([Organization.findById(oid(req)), OrganizationMembership.find({ organization: oid(req) }).populate("user", "name email avatarColor notificationPreferences"), Project.find({ organization: oid(req) }), Sprint.find({ organization: oid(req) }), Cycle.find({ organization: oid(req) }), Ticket.find({ organization: oid(req) }), Resources.find({ organization: oid(req) })]); return res.json({ exportedAt: new Date(), organization, users: memberships.map((m: any) => ({ user: m.user, role: m.role, status: m.status, skills: m.skills, availability: m.availability, capacity: m.capacity })), projects, sprints, cycles, tickets, resources }); });
 router.post("/import/resources", requireRole(["admin"]), async (req: AuthRequest, res) => { const body = parseOr400(z.object({ resources: z.array(z.object({ kind: z.enum(resourceKinds), name: z.string().min(1), project: z.string().optional(), key: z.string().optional(), description: z.string().default(""), status: z.string().default("active"), order: z.number().default(0), config: z.record(z.string(), z.unknown()).default({}) })).max(1000) }), req.body, res); if (!body) return; const result = await Resources.insertMany(body.resources.map((resource: object) => ({ ...resource, organization: oid(req) })), { ordered: false }); await audit(req, "resources.imported", "workspace-resource", undefined, { count: result.length }); return res.status(201).json({ imported: result.length }); });
 
 export default router;

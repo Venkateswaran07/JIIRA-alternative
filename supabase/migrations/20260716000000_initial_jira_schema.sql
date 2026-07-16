@@ -6,6 +6,7 @@ create table if not exists organizations (
   slug text not null unique,
   plan text not null default 'starter',
   owner text,
+  onboarding_completed_at timestamptz,
   settings jsonb not null default '{}'::jsonb,
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
@@ -16,12 +17,7 @@ create table if not exists users (
   name text not null,
   email text not null unique,
   password_hash text not null,
-  organization text not null references organizations(id),
-  role text not null,
-  invite_status text not null default 'active',
-  skills jsonb not null default '[]'::jsonb,
-  availability numeric not null default 1,
-  capacity numeric not null default 32,
+  last_active_organization text references organizations(id),
   avatar_color text not null default '#00AEEF',
   notification_preferences jsonb not null default '{"ticketAssignments":true,"mentionsAndComments":true,"sprintRiskAlerts":true,"weeklySummary":false}'::jsonb,
   created_at timestamptz not null default now(),
@@ -29,7 +25,35 @@ create table if not exists users (
 );
 
 alter table organizations add constraint organizations_owner_fk foreign key (owner) references users(id) not valid;
-create unique index if not exists users_org_email_idx on users (organization, lower(email));
+create table if not exists organization_memberships (
+  id text primary key default gen_random_uuid()::text,
+  user_id text not null references users(id),
+  organization text not null references organizations(id),
+  role text not null,
+  status text not null default 'active',
+  skills jsonb not null default '[]'::jsonb,
+  availability numeric not null default 1,
+  capacity numeric not null default 32,
+  created_at timestamptz not null default now(), updated_at timestamptz not null default now(),
+  unique (user_id, organization)
+);
+
+create table if not exists invitations (
+  id text primary key default gen_random_uuid()::text,
+  organization text not null references organizations(id),
+  email text not null,
+  name text not null,
+  role text not null,
+  capacity numeric not null default 32,
+  invited_by text not null references users(id),
+  token_hash text not null unique,
+  status text not null default 'pending',
+  expires_at timestamptz not null,
+  accepted_by text references users(id),
+  accepted_at timestamptz,
+  created_at timestamptz not null default now(), updated_at timestamptz not null default now()
+);
+create index if not exists invitations_email_status_idx on invitations (lower(email), status, expires_at);
 
 create table if not exists projects (
   id text primary key default gen_random_uuid()::text,
@@ -86,7 +110,7 @@ create table if not exists workspace_resources (
 );
 
 create table if not exists sessions (
-  id text primary key default gen_random_uuid()::text, user_id text not null, organization text not null,
+  id text primary key default gen_random_uuid()::text, user_id text not null, organization text,
   token_hash text not null unique, expires_at timestamptz not null, revoked_at timestamptz, user_agent text,
   created_at timestamptz not null default now(), updated_at timestamptz not null default now()
 );

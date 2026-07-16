@@ -23,6 +23,7 @@ export interface ITicket {
   dueDate: Date;
   blocked: boolean;
   dependencies: string[];
+  issueLinks: { type: string; ticket: string; createdAt: Date }[];
   comments: { author: string; body: string; createdAt: Date }[];
   workLogs: { author: string; hours: number; note: string; createdAt: Date }[];
   history: { event: string; createdAt: Date }[];
@@ -61,6 +62,7 @@ const ticketSchema = new Schema<ITicket>(
     dueDate: { type: Date, required: true },
     blocked: { type: Boolean, default: false },
     dependencies: [{ type: String }],
+    issueLinks: [{ type: String, ticket: String, createdAt: { type: Date, default: Date.now } }],
     comments: [{ author: String, body: String, createdAt: Date }],
     workLogs: [{ author: String, hours: Number, note: String, createdAt: Date }],
     history: [{ event: String, createdAt: Date }],

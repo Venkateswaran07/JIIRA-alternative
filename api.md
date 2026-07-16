@@ -81,6 +81,19 @@ Without confirmation, destructive actions return `409`:
 | `GET` | `/auth/sessions` | all | No |
 | `DELETE` | `/auth/sessions/:id` | all | Requires confirmation |
 
+## Workspaces
+
+| Method | Endpoint | Access | Confirmation |
+| --- | --- | --- | --- |
+| `GET` | `/workspaces` | authenticated identity | No |
+| `POST` | `/workspaces` | authenticated identity | No |
+| `POST` | `/workspaces/:id/switch` | member | No |
+| `POST` | `/workspaces/:id/onboarding/complete` | admin | No |
+| `GET` | `/invitations/preview?token=...` | Public | No |
+| `GET` | `/invitations/pending` | authenticated identity | No |
+
+Access tokens are scoped to one active workspace. Switching workspaces returns replacement access and refresh tokens after validating the membership.
+
 ## Users
 
 | Method | Endpoint | Access | Confirmation |
@@ -92,8 +105,8 @@ Without confirmation, destructive actions return `409`:
 | `POST` | `/users/:id/reactivate` | all | No |
 | `DELETE` | `/users/:id` | admin | Requires confirmation |
 | `POST` | `/invitations` | admin | No |
-| `POST` | `/invitations/:userId/resend` | admin | No |
-| `DELETE` | `/invitations/:userId` | admin | Requires confirmation |
+| `POST` | `/invitations/:id/resend` | admin | No |
+| `DELETE` | `/invitations/:id` | admin | Requires confirmation |
 
 ## Projects
 

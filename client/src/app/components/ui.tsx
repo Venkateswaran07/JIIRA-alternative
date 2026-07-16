@@ -68,26 +68,30 @@ export function FilterBar({
           </select>
         </label>
       )}
-      <button
-        className="btn"
-        onClick={() =>
-          set("filter", params.get("filter") === "open" ? "" : "open")
-        }
-        aria-pressed={params.get("filter") === "open"}
-        title="Show open items only"
-      >
-        <Icons.SlidersHorizontal />
-        Filter
-      </button>
-      <button
-        className="btn"
-        onClick={() =>
-          set("sort", params.get("sort") === "desc" ? "asc" : "desc")
-        }
-      >
-        <Icons.ArrowUpDown />
-        Sort {params.get("sort") === "desc" ? "newest" : "oldest"}
-      </button>
+      <label className="filter-dropdown">
+        <Icons.SlidersHorizontal aria-hidden="true" />
+        <span className="sr-only">Filter</span>
+        <select
+          value={params.get("filter") || ""}
+          onChange={(event) => set("filter", event.target.value)}
+          aria-label="Filter"
+        >
+          <option value="">Filter: All</option>
+          <option value="open">Filter: Open</option>
+        </select>
+      </label>
+      <label className="filter-dropdown">
+        <Icons.ArrowUpDown aria-hidden="true" />
+        <span className="sr-only">Sort</span>
+        <select
+          value={params.get("sort") || "asc"}
+          onChange={(event) => set("sort", event.target.value)}
+          aria-label="Sort"
+        >
+          <option value="asc">Sort: Oldest</option>
+          <option value="desc">Sort: Newest</option>
+        </select>
+      </label>
       <button
         className="icon-btn"
         onClick={() =>
@@ -273,23 +277,18 @@ export function Progress({
   );
 }
 export function Empty({
-  icon: Icon = Icons.Inbox,
   title,
   body,
   action,
 }: {
-  icon?: any;
   title: string;
-  body: string;
+  body?: string;
   action?: { label: string; to: string };
 }) {
   return (
     <div className="empty">
-      <span>
-        <Icon />
-      </span>
       <h3>{title}</h3>
-      <p>{body}</p>
+      {body && <p>{body}</p>}
       {action && (
         <NavLink className="btn primary" to={action.to}>
           <Icons.ArrowRight />

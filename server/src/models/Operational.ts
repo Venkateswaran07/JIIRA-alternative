@@ -1,10 +1,10 @@
 import mongoose, { Schema } from "mongoose";
 
-const sessionSchema = new Schema({ user: { type: Schema.Types.ObjectId, ref: "User", required: true }, organization: { type: Schema.Types.ObjectId, ref: "Organization", required: true }, tokenHash: { type: String, required: true, unique: true }, expiresAt: { type: Date, required: true }, revokedAt: Date, userAgent: String }, { timestamps: true });
+const sessionSchema = new Schema({ user: { type: Schema.Types.ObjectId, ref: "User", required: true }, organization: { type: Schema.Types.ObjectId, ref: "Organization" }, tokenHash: { type: String, required: true, unique: true }, expiresAt: { type: Date, required: true }, revokedAt: Date, userAgent: String }, { timestamps: true });
 sessionSchema.index({ expiresAt: 1 }, { expireAfterSeconds: 0 });
 export const Session = mongoose.model("Session", sessionSchema);
 
-const actionTokenSchema = new Schema({ user: { type: Schema.Types.ObjectId, ref: "User", required: true }, organization: { type: Schema.Types.ObjectId, ref: "Organization", required: true }, kind: { type: String, enum: ["password-reset", "invite"], required: true }, tokenHash: { type: String, required: true, unique: true }, expiresAt: { type: Date, required: true }, usedAt: Date }, { timestamps: true });
+const actionTokenSchema = new Schema({ user: { type: Schema.Types.ObjectId, ref: "User", required: true }, organization: { type: Schema.Types.ObjectId, ref: "Organization" }, kind: { type: String, enum: ["password-reset", "invite"], required: true }, tokenHash: { type: String, required: true, unique: true }, expiresAt: { type: Date, required: true }, usedAt: Date }, { timestamps: true });
 actionTokenSchema.index({ expiresAt: 1 }, { expireAfterSeconds: 0 });
 export const ActionToken = mongoose.model("ActionToken", actionTokenSchema);
 

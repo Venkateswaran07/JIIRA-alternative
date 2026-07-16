@@ -36,7 +36,7 @@ export function rolesForEndpoint(method: string, path: string): UserRole[] {
 export function enforceApiAccess(req: AuthRequest, res: Response, next: NextFunction) {
   if (!req.user) return res.status(401).json({ error: { code: "UNAUTHENTICATED", message: "Authentication is required" } });
   const roles = rolesForEndpoint(req.method, req.path);
-  if (!roles.includes(req.user.role)) {
+  if (!req.user.role || !roles.includes(req.user.role)) {
     return res.status(403).json({ error: { code: "FORBIDDEN", message: "Your role cannot access this endpoint", allowedRoles: roles } });
   }
   return next();
