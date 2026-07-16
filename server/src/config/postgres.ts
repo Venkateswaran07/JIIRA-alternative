@@ -1,14 +1,10 @@
-import pg from "pg";
-import { env } from "./env.js";
+import type pg from "pg";
+import { connectFirstAvailablePostgres } from "./postgresConnection.js";
 
-const { Pool } = pg;
-
-export const postgres = new Pool({
-  connectionString: env.databaseUrl,
-  ssl: env.databaseUrl?.includes("supabase.com") ? { rejectUnauthorized: false } : undefined,
-});
+export let postgres: pg.Pool;
 
 export async function connectPostgres() {
-  if (!env.databaseUrl) throw new Error("DATABASE_URL is required for PostgreSQL");
-  await postgres.query("select 1");
+  const connected = await connectFirstAvailablePostgres();
+  postgres = connected.pool;
+  console.log(`PostgreSQL connected using ${connected.source}`);
 }

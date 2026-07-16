@@ -16,9 +16,12 @@ Copy-Item server\.env.local.example server\.env
 Copy-Item client\.env.local.example client\.env.local
 ```
 
-Update `server\.env` with a strong `JWT_SECRET`, your Supabase Session Pooler `DATABASE_URL`, and optional OpenAI-compatible provider values:
+Update `server\.env` with a strong `JWT_SECRET`, the local and hosted database URLs, and optional OpenAI-compatible provider values. The server tries `DATABASE_URL` first and automatically uses `SUPABASE_DATABASE_URL` when the primary value is missing or unavailable during startup:
 
 ```env
+DATABASE_URL=postgresql://jiira:jiira_dev_password@127.0.0.1:5433/jiira
+SUPABASE_DATABASE_URL=postgresql://postgres.<project-ref>:<password>@aws-1-ap-south-1.pooler.supabase.com:5432/postgres
+DATABASE_CONNECT_TIMEOUT_MS=5000
 OPENAI_API_KEY=ocz_your_api_key
 OPENAI_BASE_URL=https://opencode.ai/zen/v1
 OPENAI_MODEL=ask-me-before-selecting-a-model
