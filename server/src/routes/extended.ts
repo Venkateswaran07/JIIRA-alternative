@@ -35,6 +35,26 @@ const Resources = WorkspaceResource as any;
 const Integrations = Integration as any;
 const audit = recordAuditEvent;
 
+function slugifyWorkspaceName(value: string) {
+  return value
+    .toLowerCase()
+    .trim()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-|-$/g, "")
+    .slice(0, 48) || "workspace";
+}
+
+async function uniqueWorkspaceSlug(name: string, organizationId: string) {
+  const base = slugifyWorkspaceName(name);
+  let slug = base;
+  let index = 2;
+  while (await Organization.exists({ slug, _id: { $ne: organizationId } })) {
+    const suffix = `-${index++}`;
+    slug = `${base.slice(0, 48 - suffix.length)}${suffix}`;
+  }
+  return slug;
+}
+
 const canAccessProject = (req: AuthRequest, project: any) =>
   req.user!.role === "admin" || req.user!.workspaceAccessSource === "group" || (Array.isArray(project?.members) && project.members.map(String).includes(uid(req)));
 const canManageProject = (req: AuthRequest, project: any) =>
@@ -157,7 +177,22 @@ router.get("/audit-logs/export", requireRole(["admin"]), async (req: AuthRequest
 router.route("/integrations/:kind").get(requireRole(["admin"]), async (req: AuthRequest, res) => res.json({ integrations: await Integrations.find({ organization: oid(req), kind: String(req.params.kind) }).select("-secretHash") })).post(requireRole(["admin"]), async (req: AuthRequest, res) => { const body = parseOr400(z.object({ name: z.string().min(1), url: z.string().url().optional(), events: z.array(z.string()).default([]) }), req.body, res); if (!body) return; const kind = String(req.params.kind); if (!["api-token", "webhook"].includes(kind)) return res.status(404).json({ message: "Integration kind not found" }); const secret = randomBase64UrlToken(); const integration = await Integrations.create({ ...body, organization: oid(req), kind, ...(kind === "api-token" ? { secretHash: hash(secret) } : {}) }); return res.status(201).json({ integration: { ...integration.toObject(), secretHash: undefined }, ...(kind === "api-token" ? { token: secret } : {}) }); });
 router.delete("/integrations/:kind/:id", requireRole(["admin"]), async (req: AuthRequest, res) => { const item = await Integrations.findOneAndDelete({ _id: String(req.params.id), organization: oid(req), kind: String(req.params.kind) }); return item ? res.status(204).send() : res.status(404).json({ message: "Integration not found" }); });
 
-router.patch("/organization", requireRole(["admin"]), async (req: AuthRequest, res) => { const body = parseOr400(z.object({ name: z.string().min(2).optional(), plan: z.enum(["starter", "scale", "enterprise"]).optional() }), req.body, res); if (!body) return; const organization = await Organization.findByIdAndUpdate(oid(req), body, { new: true }); return res.json({ organization }); });
+router.patch("/organization", requireRole(["admin"]), async (req: AuthRequest, res) => {
+  const body = parseOr400(z.object({
+    name: z.string().trim().min(2).optional(),
+    plan: z.enum(["starter", "scale", "enterprise"]).optional(),
+  }), req.body, res);
+  if (!body) return;
+  const organizationId = oid(req)!;
+  const current = await Organization.findById(organizationId);
+  if (!current) return res.status(404).json({ message: "Organization not found" });
+  const update = { ...body } as typeof body & { slug?: string };
+  if (body.name !== undefined && body.name !== current.name) {
+    update.slug = await uniqueWorkspaceSlug(body.name, organizationId);
+  }
+  const organization = await Organization.findByIdAndUpdate(organizationId, update, { new: true });
+  return res.json({ organization });
+});
 router.delete("/organization", requireRole(["admin"]), async (req: AuthRequest, res) => {
   const body = parseOr400(z.object({ confirmationName: z.string().min(1), currentPassword: z.string().min(1) }), req.body, res); if (!body) return;
   const [organization, user] = await Promise.all([Organization.findById(oid(req)), User.findById(uid(req))]);

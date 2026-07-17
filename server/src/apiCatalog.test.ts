@@ -10,7 +10,7 @@ test("API catalog has unique, valid endpoint declarations", () => {
 });
 
 test("API catalog includes every primary product area", () => {
-  for (const group of ["auth", "users", "projects", "planning", "tickets", "resources", "operations", "intelligence"]) {
+  for (const group of ["auth", "workspaces", "organizations", "users", "projects", "planning", "tickets", "resources", "operations", "intelligence"]) {
     assert.ok(group in apiCatalog.groups);
   }
 });
@@ -18,6 +18,13 @@ test("API catalog includes every primary product area", () => {
 test("API catalog includes AI-callable app feature actions", () => {
   const endpoints = new Set(Object.values(apiCatalog.groups).flat());
   for (const endpoint of [
+    "GET /companies",
+    "GET /companies/:companyId/workspaces",
+    "GET /companies/:companyId/members",
+    "GET /companies/:companyId/groups",
+    "POST /companies/:companyId/workspaces",
+    "PUT /companies/:companyId/groups/:id/members",
+    "PUT /companies/:companyId/groups/:id/workspaces",
     "POST /tickets",
     "PATCH /tickets/:id/status",
     "POST /tickets/:id/comments",

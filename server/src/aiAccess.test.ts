@@ -22,6 +22,14 @@ test("AI endpoint discovery only returns endpoints available to the user role", 
 test("AI endpoint discovery exposes primary app actions for admins", () => {
   const adminEndpoints = aiEndpointsForRole("admin").map((endpoint) => `${endpoint.method} ${endpoint.path}`);
   for (const endpoint of [
+    "GET /companies",
+    "GET /companies/:companyId/workspaces",
+    "GET /companies/:companyId/members",
+    "GET /companies/:companyId/groups",
+    "POST /companies/:companyId/workspaces",
+    "POST /companies/:companyId/groups",
+    "PUT /companies/:companyId/groups/:id/members",
+    "PUT /companies/:companyId/groups/:id/workspaces",
     "POST /tickets",
     "PATCH /tickets/:id/status",
     "POST /tickets/:id/comments",
@@ -37,6 +45,14 @@ test("AI endpoint discovery exposes primary app actions for admins", () => {
   ]) {
     assert.ok(adminEndpoints.includes(endpoint), `${endpoint} should be AI-callable for admins`);
   }
+});
+
+test("AI hierarchy mutations remain admin-only while members can discover accessible hierarchy", () => {
+  assert.equal(canRoleAccessAiEndpoint("engineer", "GET", "/companies/example/workspaces").allowed, true);
+  assert.equal(canRoleAccessAiEndpoint("engineer", "GET", "/companies/example/groups").allowed, true);
+  assert.equal(canRoleAccessAiEndpoint("engineer", "POST", "/companies/example/workspaces").allowed, false);
+  assert.equal(canRoleAccessAiEndpoint("manager", "PUT", "/companies/example/groups/group/workspaces").allowed, false);
+  assert.equal(canRoleAccessAiEndpoint("admin", "PUT", "/companies/example/groups/group/workspaces").allowed, true);
 });
 
 test("AI execution requires confirmation for delete and destructive actions", () => {
@@ -71,6 +87,8 @@ test("OpenAPI documents AI execution request and confirmation response", () => {
   assert.deepEqual(execute.requestBody?.content?.["application/json"]?.schema?.required, ["method", "path"]);
   assert.ok(execute.responses?.["409"]);
   assert.ok(endpoints.responses?.["200"]);
+  const endpointSchema = (endpoints.responses?.["200"] as any)?.content?.["application/json"]?.schema;
+  assert.deepEqual(endpointSchema?.required, ["catalogVersion", "endpoints"]);
   assert.ok(openApiDocument.components.schemas.AiExecuteRequest);
   assert.ok(openApiDocument.components.schemas.AiEndpoint);
 });

@@ -36,7 +36,7 @@ function operationOverrides(method: string, path: string) {
       responses: {
         "200": {
           description: "AI-callable endpoints for the current user role",
-          content: { "application/json": { schema: { type: "object", properties: { endpoints: { type: "array", items: aiEndpointSchema } }, required: ["endpoints"] } } },
+          content: { "application/json": { schema: { type: "object", properties: { catalogVersion: { type: "string", example: apiCatalog.version }, endpoints: { type: "array", items: aiEndpointSchema } }, required: ["catalogVersion", "endpoints"] } } },
         },
       },
     };

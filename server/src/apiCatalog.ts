@@ -1,5 +1,5 @@
 export const apiCatalog = {
-  version: "1.0.0",
+  version: "1.1.0",
   basePath: "/api/v1",
   groups: {
     auth: ["POST /auth/register", "POST /auth/login", "POST /auth/refresh", "POST /auth/logout", "GET /auth/me", "POST /auth/forgot-password", "POST /auth/reset-password", "POST /auth/change-password", "PATCH /auth/preferences", "POST /auth/accept-invite", "GET /auth/sessions", "DELETE /auth/sessions/:id"],

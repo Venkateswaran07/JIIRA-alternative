@@ -29,6 +29,12 @@ test("mutation contracts resolve concrete paths and special destructive bodies",
   assert.equal(mutationContractFor("GET", "/tickets"), null);
 });
 
+test("organization hierarchy contracts require discovered tenant resources", () => {
+  assert.match(mutationContractFor("POST", "/companies/company/workspaces")?.prerequisites ?? "", /GET \/companies/);
+  assert.match(mutationContractFor("PUT", "/companies/company/groups/group/members")?.prerequisites ?? "", /replaces the full group membership/i);
+  assert.match(mutationContractFor("PUT", "/companies/company/groups/group/workspaces")?.prerequisites ?? "", /replaces all workspace grants/i);
+});
+
 test("role guidance includes compact write contracts up front", () => {
   const guidance = mutationContractGuidanceForRole("manager");
   assert.match(guidance, /POST \/projects: \{ key: string/);

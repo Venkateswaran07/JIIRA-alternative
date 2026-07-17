@@ -7,6 +7,7 @@ import type {
 import { z } from "zod";
 import { aiEndpointsForRole, canRoleAccessAiEndpoint, isConfirmationRequired, normalizeAiPath } from "../aiAccess.js";
 import { mutationContractFor, mutationContractGuidanceForRole } from "../aiContracts.js";
+import { apiCatalog } from "../apiCatalog.js";
 import { env } from "../config/env.js";
 import { postgres } from "../config/postgres.js";
 import { measureAsync } from "../lib/performance.js";
@@ -142,7 +143,10 @@ export async function executeAiRequest(req: AuthRequest, input: unknown): Promis
 }
 
 router.get("/endpoints", (req: AuthRequest, res) => {
-  return res.json({ endpoints: aiEndpointsForRole(req.user!.role!) });
+  return res.json({
+    catalogVersion: apiCatalog.version,
+    endpoints: aiEndpointsForRole(req.user!.role!),
+  });
 });
 
 router.post("/execute", async (req: AuthRequest, res) => {
@@ -410,6 +414,7 @@ router.post("/chat", async (req, res) => {
     "Feature coverage:",
     "- Tickets: list, create, update details, move status, rank, bulk update, assign, watch, clone, archive, delete, manage comments, work logs, dependencies, and attachments.",
     "- Projects, cycles, and sprints: list, create, update, manage members, archive/restore projects, group sprints into cycles, start/complete/reopen sprints, and summarize sprint risk.",
+    "- Organization hierarchy: list the user's organizations, workspaces, organization members, and groups; create workspaces; switch workspaces; and manage groups, group members, and group workspace grants when the role allows it.",
     "- Team and workspace: list/update users, send invitations, resend/cancel invitations, manage SLA policy, settings, resources, integrations, notifications, sessions, reports, exports, imports, and audit logs when the role allows it.",
     "- For requests that need missing IDs or required fields, first read the relevant list endpoint or ask the user for the missing value.",
     "",
@@ -430,6 +435,9 @@ router.post("/chat", async (req, res) => {
     "- Explain final failures in user-friendly product language without status codes, endpoint paths, or raw backend messages.",
     "- Never retry a failed create, update, or delete request with the same arguments. Explain the failure or ask for corrected information.",
     "- Prefer GET /dashboard when project, sprint, ticket, and user context is needed together; do not fetch those lists separately unless the dashboard lacks a required field.",
+    "- For organization-level requests, use GET /companies first and use the returned company id. Then read that organization's workspaces, members, or groups before making changes.",
+    "- A company is the top-level organization and an organization record is a workspace. Describe both with the user-facing terms organization and workspace; never call a workspace a company.",
+    "- Before changing group members or workspace access, read the organization members, groups, and workspaces and use only ids returned by those endpoints.",
     "- Use get_itrack_api_contract when you need the exact fields or prerequisites for a write. The backend always validates access, confirmation, and request bodies before execution.",
     "- When you need to call an I-TRACK API, use the execute_itrack_api tool.",
     "",

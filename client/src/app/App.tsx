@@ -772,7 +772,10 @@ type AiAgentContextValue = {
 const AiAgentContext = createContext<AiAgentContextValue | null>(null);
 
 const aiActionPrompts = [
-  { label: "Show what you can do", icon: "ListChecks", prompt: "Show what you can do in this workspace. Group actions by tickets, projects, sprints, team, resources, reports, settings, and integrations." },
+  { label: "Show what you can do", icon: "ListChecks", prompt: "Show what you can do across my organization and current workspace. Group actions by organization, groups, workspaces, projects, tickets, planning, team, resources, reports, settings, and integrations." },
+  { label: "Organization overview", icon: "Building2", prompt: "Summarize my organization, its accessible workspaces, groups, and company directory. Do not show internal IDs." },
+  { label: "Create a workspace", icon: "PanelsTopLeft", prompt: "Help me create a workspace in my current organization. Ask for the workspace name before creating it.", adminOnly: true },
+  { label: "Manage access groups", icon: "UsersRound", prompt: "Show the groups in my organization, their members, and workspace access. Ask what I want to change before updating anything.", adminOnly: true },
   { label: "Create a ticket", icon: "FilePlus2", prompt: "Help me create a ticket. Ask for any missing title, project, assignee, sprint, priority, due date, and description before creating it." },
   { label: "Show my tickets", icon: "Ticket", prompt: "Show my tickets and summarize what needs attention first." },
   { label: "Summarize sprint status", icon: "Timer", prompt: "Summarize the current sprint status, risks, blockers, and recommended next actions." },
@@ -787,6 +790,20 @@ function aiActivityLabel(activity: AiToolActivity) {
   const segments = path.split("/").filter(Boolean);
   const action = segments.at(-1) || "";
   const parent = segments.at(-2)?.replace(/[-_]/g, " ") || "item";
+  const isOrganizationRequest = segments[0] === "companies";
+  const isGroupRequest = segments.includes("groups");
+  if (isOrganizationRequest) {
+    if (activity.method === "GET" && segments.length === 1) return "Fetching organizations";
+    if (activity.method === "GET" && action === "workspaces") return "Fetching organization workspaces";
+    if (activity.method === "GET" && action === "members") return "Fetching company directory";
+    if (activity.method === "GET" && action === "groups") return "Fetching access groups";
+    if (activity.method === "POST" && action === "workspaces") return "Creating workspace";
+    if (activity.method === "POST" && action === "groups") return "Creating access group";
+    if (isGroupRequest && action === "members") return "Updating group members";
+    if (isGroupRequest && action === "workspaces") return "Updating group workspace access";
+    if (isGroupRequest && activity.method === "DELETE") return "Removing access group";
+    if (isGroupRequest) return "Updating access group";
+  }
   const actionLabels: Record<string, string> = {
     assign: "Assigning ticket",
     archive: `Archiving ${parent.replace(/s$/, "")}`,
@@ -1034,7 +1051,7 @@ function AiAgentPanel({ open, onClose }: { open: boolean; onClose: () => void })
   const [actionsOpen, setActionsOpen] = useState(false);
   const bodyRef = React.useRef<HTMLDivElement>(null);
   const inputRef = React.useRef<HTMLTextAreaElement>(null);
-  const { user } = useWorkspace();
+  const { user, company, organization, role } = useWorkspace();
 
   useEffect(() => {
     if (open && inputRef.current) inputRef.current.focus();
@@ -1052,7 +1069,13 @@ function AiAgentPanel({ open, onClose }: { open: boolean; onClose: () => void })
     return () => window.removeEventListener("keydown", handler);
   }, [onClose]);
 
-  const quickActions = ["Show my tickets", "Sprint status", "Create a ticket", "Team overview", "Show backlog"];
+  const quickActions = [
+    "Organization overview",
+    "Show my tickets",
+    "Sprint status",
+    ...(role === "admin" ? ["Create a workspace", "Manage access groups"] : []),
+  ];
+  const visibleActions = aiActionPrompts.filter((action) => !action.adminOnly || role === "admin");
 
   const runAction = (prompt: string) => {
     setActionsOpen(false);
@@ -1075,7 +1098,7 @@ function AiAgentPanel({ open, onClose }: { open: boolean; onClose: () => void })
           <div className="ai-panel-icon"><Icons.Bot size={20} /></div>
           <div>
             <b>I-TRACK AI Agent</b>
-            <small>Powered by AI · Ready to help</small>
+            <small>{company?.name || "Organization"} · {organization?.name || "Current workspace"}</small>
           </div>
           <div className="ai-panel-actions">
             <button className="icon-btn" onClick={() => setActionsOpen((value) => !value)} title="AI actions" aria-haspopup="menu" aria-expanded={actionsOpen}>
@@ -1085,7 +1108,7 @@ function AiAgentPanel({ open, onClose }: { open: boolean; onClose: () => void })
             <button className="icon-btn" onClick={onClose} title="Close (Ctrl+J)"><Icons.X size={18} /></button>
             {actionsOpen && (
               <div className="ai-actions-menu" role="menu">
-                {aiActionPrompts.map((action) => {
+                {visibleActions.map((action) => {
                   const Icon = (Icons as any)[action.icon];
                   return (
                     <button key={action.label} role="menuitem" onClick={() => runAction(action.prompt)}>
@@ -1103,7 +1126,7 @@ function AiAgentPanel({ open, onClose }: { open: boolean; onClose: () => void })
             <div className="ai-welcome">
               <div className="ai-welcome-icon"><Icons.Sparkles size={28} /></div>
               <h3>Hey{user?.name ? `, ${user.name.split(" ")[0]}` : ""}!</h3>
-              <p>I can manage your tickets, projects, sprints, and more. Just ask me in natural language.</p>
+              <p>I can work across your organization, access groups, workspaces, projects, and tickets. Just ask in natural language.</p>
               <div className="ai-quick-actions">
                 {quickActions.map((q) => (
                   <button key={q} onClick={() => sendMessage(q)}>{q}</button>
@@ -3812,6 +3835,8 @@ function Reports() {
 }
 
 const aiWorkspacePrompts = [
+  { icon: Icons.Building2, title: "Organization overview", text: "Summarize my organization, accessible workspaces, groups, and company directory." },
+  { icon: Icons.UsersRound, title: "Manage workspace access", text: "Show organization groups, their members, and workspace access before I choose a change.", adminOnly: true },
   { icon: Icons.Ticket, title: "Triage my work", text: "Show my tickets and prioritize what I should work on next." },
   { icon: Icons.Timer, title: "Review the sprint", text: "Summarize the current sprint, blockers, risks, and recommended next steps." },
   { icon: Icons.FilePlus2, title: "Create work", text: "Help me create a ticket. Ask me for any missing details first." },
@@ -3819,7 +3844,7 @@ const aiWorkspacePrompts = [
 ];
 
 function AIPage() {
-  const { user } = useWorkspace();
+  const { user, company, organization, role } = useWorkspace();
   const {
     messages,
     input,
@@ -3839,6 +3864,14 @@ function AIPage() {
   const conversationRef = React.useRef<HTMLDivElement>(null);
   const inputRef = React.useRef<HTMLTextAreaElement>(null);
   const firstName = user?.name?.split(" ")[0] || "there";
+  const visibleWorkspacePrompts = aiWorkspacePrompts.filter((prompt) => !prompt.adminOnly || role === "admin");
+  const suggestedQuestions = [
+    "What needs my attention today?",
+    "Show my organization's workspaces and groups",
+    ...(role === "admin" ? ["Review group workspace access"] : []),
+    "Find blockers in the active sprint",
+    "Show what you can do",
+  ];
 
   useEffect(() => {
     if (conversationRef.current) conversationRef.current.scrollTop = conversationRef.current.scrollHeight;
@@ -3852,16 +3885,16 @@ function AIPage() {
         <div>
           <span className="ai-workspace-kicker"><Icons.Sparkles size={14} /> AI WORKSPACE</span>
           <h1>Your work, one conversation away.</h1>
-          <p>Plan, investigate, and take action across I-TRACK with the same AI Agent available throughout your workspace.</p>
+          <p>Plan, investigate, and take action across your organization and workspaces with the same AI Agent available throughout I-TRACK.</p>
         </div>
-        <div className="ai-agent-status"><i /><span><b>AI Agent</b><small>Online and workspace-aware</small></span></div>
+        <div className="ai-agent-status"><i /><span><b>Organization-aware</b><small>{company?.name || "Organization"} · {organization?.name || "Current workspace"}</small></span></div>
       </div>
 
       <div className="ai-workspace-grid">
         <div className="ai-workspace-main">
           <div className="ai-workspace-chat-head">
             <div className="ai-workspace-avatar"><Icons.Bot size={20} /></div>
-            <span><b>I-TRACK AI Agent</b><small>Ask, review, then approve actions</small></span>
+            <span><b>I-TRACK AI Agent</b><small>Organization context · Ask, review, then approve actions</small></span>
             {messages.length > 0 && <button className="icon-btn" onClick={clearChat} title="Start a new conversation" aria-label="Start a new conversation"><Icons.RotateCcw size={16} /></button>}
           </div>
 
@@ -3871,9 +3904,9 @@ function AIPage() {
                 <span className="ai-workspace-orb"><Icons.Sparkles size={27} /></span>
                 <span className="ai-workspace-overline">READY WHEN YOU ARE</span>
                 <h2>Hi {firstName}, what can I move forward?</h2>
-                <p>Give me an outcome or a question. I can inspect live workspace data, create and update work, and ask before sensitive actions.</p>
+                <p>Give me an outcome or a question. I can inspect organization and workspace data, create and update work, and ask before sensitive actions.</p>
                 <div className="ai-workspace-prompts">
-                  {aiWorkspacePrompts.map(({ icon: Icon, title, text }) => (
+                  {visibleWorkspacePrompts.map(({ icon: Icon, title, text }) => (
                     <button key={title} onClick={() => void sendMessage(text)}>
                       <span><Icon size={17} /></span>
                       <b>{title}</b>
@@ -3960,11 +3993,11 @@ function AIPage() {
             <span className="ai-side-icon purple"><Icons.WandSparkles size={18} /></span>
             <h3>One agent, full context</h3>
             <p>This is the same agent in the header. Your conversation follows you between this page and the side panel.</p>
-            <div><span><Icons.Search size={15} /> Inspect workspace data</span><span><Icons.PencilLine size={15} /> Create and update work</span><span><Icons.ChartNoAxesCombined size={15} /> Summarize delivery signals</span></div>
+            <div><span><Icons.Building2 size={15} /> Understand organization structure</span><span><Icons.Search size={15} /> Inspect workspace data</span><span><Icons.PencilLine size={15} /> Create and update work</span><span><Icons.ChartNoAxesCombined size={15} /> Summarize delivery signals</span></div>
           </div>
           <div className="ai-side-card">
             <span className="ai-side-label">TRY ASKING</span>
-            {["What needs my attention today?", "Find blockers in the active sprint", "Draft a release plan", "Show what you can do"].map((prompt) => (
+            {suggestedQuestions.map((prompt) => (
               <button className="ai-side-prompt" key={prompt} onClick={() => void sendMessage(prompt)}><span>{prompt}</span><Icons.ArrowRight size={14} /></button>
             ))}
           </div>
@@ -5728,6 +5761,14 @@ function OrganizationLive({ toast }: { toast: (s: string) => void }) {
   } = useWorkspace();
   const [name, setName] = useState(org?.name || "");
   const [workspaces, setWorkspaces] = useState<any[]>([]);
+  const slugPreview = name.trim() === String(org?.name || "").trim()
+    ? org?.slug || ""
+    : name
+        .toLowerCase()
+        .trim()
+        .replace(/[^a-z0-9]+/g, "-")
+        .replace(/^-|-$/g, "")
+        .slice(0, 48) || "workspace";
 
   useEffect(() => {
     const companyId = company?.id || company?._id;
@@ -5851,7 +5892,7 @@ function OrganizationLive({ toast }: { toast: (s: string) => void }) {
                 <span>Workspace slug</span>
                 <div className="input-prefix">
                   <span>{window.location.host}/</span>
-                  <input value={org?.slug || ""} readOnly />
+                  <input value={slugPreview} readOnly />
                 </div>
               </label>
             </div>
