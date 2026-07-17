@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import * as Icons from "lucide-react";
-import { api, clearSession, getToken } from "../api";
+import { ApiError, api, clearSession, getToken } from "../api";
 import { resourceKinds } from "../constants/resources";
 import type { Ticket } from "../types/domain";
 
@@ -329,7 +329,7 @@ export function ApiGate({
 
       setLoading(false);
     } catch (e) {
-      if (e instanceof Error && e.message.includes("401")) {
+      if ((e instanceof ApiError && e.status === 401) || (e instanceof Error && e.message.includes("401"))) {
         clearSession();
         navigate("/login", { replace: true });
       } else {

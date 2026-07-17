@@ -332,16 +332,17 @@ router.post("/chat", async (req, res) => {
     "- Respond in clear GitHub-flavored Markdown and lead with the direct answer or outcome.",
     "- Use short headings only when they make a longer response easier to scan.",
     "- Use Markdown tables for comparisons or metric summaries, bullets for related items, and numbered lists for ordered next steps.",
-    "- Use **bold** sparingly for key labels or results, `inline code` for IDs, routes, fields, and commands, and fenced code blocks only for multiline code or payload examples.",
+    "- Use **bold** sparingly for key labels or results and fenced code blocks only for multiline user-facing code.",
     "- Keep paragraphs concise and place a blank line between headings, paragraphs, lists, and tables.",
     "- Do not emit raw HTML, except `<br>` when a table cell needs multiple lines. Never wrap the entire response in a code fence.",
     "- Summarize tool results instead of dumping raw payloads unless the user asks for raw data. Clearly distinguish zero values from missing or unavailable data.",
     "- Never show workspace/organization IDs, membership IDs, tokens, or other internal UUIDs in your reply. Refer to workspaces by their name; internal IDs may be used only inside tool calls.",
+    "- Never expose API endpoints, route paths, HTTP methods, request payloads, tool names, or other transport details in user-facing replies. Describe actions using product language such as creating a project or updating a ticket.",
     "",
     "Rules:",
     "- For destructive or irreversible actions (DELETE, archive, deactivate, etc.), describe what will happen and ask for explicit confirmation before proceeding.",
     "- Never expose credentials, tokens, or internal secrets.",
-    "- Report backend errors accurately — include status codes and messages.",
+    "- Explain final failures in user-friendly product language without status codes, endpoint paths, or raw backend messages.",
     "- Never retry a failed create, update, or delete request with the same arguments. Explain the failure or ask for corrected information.",
     "- Prefer GET /dashboard when project, sprint, ticket, and user context is needed together; do not fetch those lists separately unless the dashboard lacks a required field.",
     "- Use get_itrack_api_contract when you need the exact fields or prerequisites for a write. The backend always validates access, confirmation, and request bodies before execution.",
@@ -395,14 +396,14 @@ router.post("/chat", async (req, res) => {
     },
   ];
 
+  const allToolCalls: { name: string; arguments: unknown; result: unknown; error?: boolean }[] = [];
   try {
     const client = getClient();
     const model = env.openaiChatModel || "grok-3-mini";
-    const allToolCalls: { name: string; arguments: unknown; result: unknown; error?: boolean }[] = [];
     const failedMutationAttempts = new Set<string>();
     const MAX_ITERATIONS = 7;
     const fallbackReply = () => allToolCalls.some((call) => call.error)
-      ? "One or more requests failed. Please review the API error and try again with corrected information."
+      ? "I couldn't complete the request. Please check the information and try again."
       : allToolCalls.length
         ? "I finished the requested API operations."
         : "I couldn't generate a response. Please try again.";
@@ -489,13 +490,13 @@ router.post("/chat", async (req, res) => {
 
         if (isConfirmationRequired(method, path) && parsed.data.confirmed?.action !== actionKey) {
           return finish({
-            reply: `I need your confirmation to perform a destructive action: **${actionKey}**. Please confirm to proceed.`,
+            reply: "I need your confirmation before performing this destructive action. Please confirm to proceed.",
             requiresConfirmation: true,
             pendingAction: {
               method,
               path,
               body: body ?? null,
-              description: actionKey,
+              description: "Confirm destructive action",
             },
           });
         }
@@ -542,7 +543,10 @@ router.post("/chat", async (req, res) => {
     return finish({ reply: finalChoice?.message?.content || fallbackReply(), ...(allToolCalls.length ? { toolCalls: allToolCalls } : {}) });
   } catch (error) {
     if (streamsToolActivity) {
-      sendEvent({ type: "error", message: error instanceof Error ? error.message : "Unknown error" });
+      sendEvent({
+        type: "error",
+        message: error instanceof Error ? error.message : "Unknown error",
+      });
       res.end();
       return;
     }

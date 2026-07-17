@@ -11,6 +11,7 @@ import { Project } from "../models/Project.js";
 import { Session } from "../models/Operational.js";
 import { User } from "../models/User.js";
 import { Invitation, OrganizationMembership } from "../models/WorkspaceAccess.js";
+import { sendInvitationEmail } from "../services/mail.js";
 import { hashToken, membershipsFor, pendingInvitationsFor, publicOrganization, publicUser, sessionResponse } from "../services/sessionAuth.js";
 
 const router = Router();
@@ -21,7 +22,7 @@ const invitationBody = z.object({ name: z.string().min(2), email: z.string().ema
 function slugify(value: string) { return value.toLowerCase().trim().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "").slice(0, 48) || "workspace"; }
 async function uniqueSlug(name: string) { const base = slugify(name); let slug = base; let index = 2; while (await Organization.exists({ slug })) slug = `${base}-${index++}`; return slug; }
 function rawToken() { return crypto.randomBytes(32).toString("base64url"); }
-function inviteUrl(req: any, token: string) { const origin = req.get("origin") || `${req.protocol}://${req.get("host")}`; return `${origin}/accept-invite?token=${encodeURIComponent(token)}`; }
+function inviteUrl(token: string) { return `${env.appUrl.replace(/\/+$/, "")}/accept-invite?token=${encodeURIComponent(token)}`; }
 
 function optionalAuth(req: AuthRequest) {
   const header = req.headers.authorization;
@@ -82,13 +83,20 @@ router.post("/invitations", requireAuth, requireWorkspace, async (req: AuthReque
   if (await Invitation.exists({ email, organization: req.user!.organizationId, status: "pending", expiresAt: { $gt: new Date() } })) return res.status(409).json({ message: "A pending invitation already exists for this email" });
   const token = rawToken();
   const invitation = await Invitation.create({ ...parsed.data, email, organization: req.user!.organizationId, invitedBy: req.user!.userId, tokenHash: hashToken(token), expiresAt: new Date(Date.now() + INVITE_TTL_MS) });
-  return res.status(201).json({ invitation: { id: invitation.id, ...parsed.data, email, status: invitation.status, expiresAt: invitation.expiresAt }, inviteUrl: inviteUrl(req, token) });
+  const [organization, inviter] = await Promise.all([Organization.findById(invitation.organization), User.findById(invitation.invitedBy)]);
+  const invitationUrl = inviteUrl(token);
+  const mailSent = await sendInvitationEmail({ recipient: { name: invitation.name, email: invitation.email }, organizationName: organization?.name || "your I-TRACK workspace", invitedBy: inviter?.name || "A workspace administrator", role: invitation.role, inviteUrl: invitationUrl, expiresAt: invitation.expiresAt });
+  return res.status(201).json({ invitation: { id: invitation.id, ...parsed.data, email, status: invitation.status, expiresAt: invitation.expiresAt }, inviteUrl: invitationUrl, mailSent });
 });
 
 router.post("/invitations/:id/resend", requireAuth, requireWorkspace, async (req: AuthRequest, res) => {
   if (req.user!.role !== "admin") return res.status(403).json({ message: "Only admins can resend invitations" });
   const token = rawToken(); const invitation = await Invitation.findOneAndUpdate({ _id: req.params.id, organization: req.user!.organizationId, status: "pending" }, { tokenHash: hashToken(token), expiresAt: new Date(Date.now() + INVITE_TTL_MS) }, { new: true });
-  return invitation ? res.json({ ok: true, inviteUrl: inviteUrl(req, token) }) : res.status(404).json({ message: "Invitation not found" });
+  if (!invitation) return res.status(404).json({ message: "Invitation not found" });
+  const [organization, inviter] = await Promise.all([Organization.findById(invitation.organization), User.findById(invitation.invitedBy)]);
+  const invitationUrl = inviteUrl(token);
+  const mailSent = await sendInvitationEmail({ recipient: { name: invitation.name, email: invitation.email }, organizationName: organization?.name || "your I-TRACK workspace", invitedBy: inviter?.name || "A workspace administrator", role: invitation.role, inviteUrl: invitationUrl, expiresAt: invitation.expiresAt });
+  return res.json({ ok: true, inviteUrl: invitationUrl, mailSent });
 });
 
 router.delete("/invitations/:id", requireAuth, requireWorkspace, async (req: AuthRequest, res) => { if (req.user!.role !== "admin") return res.status(403).json({ message: "Only admins can cancel invitations" }); const invitation = await Invitation.findOneAndUpdate({ _id: req.params.id, organization: req.user!.organizationId, status: "pending" }, { status: "cancelled" }); return invitation ? res.status(204).send() : res.status(404).json({ message: "Invitation not found" }); });

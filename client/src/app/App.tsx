@@ -25,7 +25,7 @@ import {
   XAxis,
   YAxis,
 } from "recharts";
-import { api, clearSession, getToken, login, saveSession } from "../api";
+import { api, apiFetch, clearSession, getToken, login, saveSession } from "../api";
 import { resourceKinds } from "../constants/resources";
 import type { NotificationPreferences, Role, Ticket, TicketStatus, Toast } from "../types/domain";
 import { ApiGate, useWorkspace } from "./workspace";
@@ -152,11 +152,13 @@ function Shell({
   const [collapsed, setCollapsed] = useState(false),
     [mobile, setMobile] = useState(false),
     [search, setSearch] = useState(false),
-    [workspaceMenu, setWorkspaceMenu] = useState(false);
+    [workspaceMenu, setWorkspaceMenu] = useState(false),
+    [notificationMenu, setNotificationMenu] = useState(false);
   const [aiPanel, setAiPanel] = useState(false);
   const [selectedInvitation, setSelectedInvitation] = useState<any>(null);
   const mobileMenuButton = React.useRef<HTMLButtonElement>(null);
   const searchButton = React.useRef<HTMLButtonElement>(null);
+  const notificationMenuRef = React.useRef<HTMLDivElement>(null);
   const loc = useLocation();
   const navigate = useNavigate();
   const label =
@@ -178,11 +180,13 @@ function Shell({
   };
 
   const unreadCount = notifications.filter((n: any) => !n.readAt).length;
+  const recentNotifications = notifications.slice(0, 5);
 
   const closeOverlays = React.useCallback(() => {
     setMobile(false);
     setSearch(false);
     setWorkspaceMenu(false);
+    setNotificationMenu(false);
     setAiPanel(false);
   }, []);
 
@@ -213,6 +217,37 @@ function Shell({
     document.body.classList.toggle("overlay-open", mobile || search || aiPanel);
     return () => document.body.classList.remove("overlay-open");
   }, [mobile, search, aiPanel]);
+
+  useEffect(() => {
+    if (!notificationMenu) return;
+    const onPointerDown = (event: PointerEvent) => {
+      if (!notificationMenuRef.current?.contains(event.target as Node)) {
+        setNotificationMenu(false);
+      }
+    };
+    document.addEventListener("pointerdown", onPointerDown);
+    return () => document.removeEventListener("pointerdown", onPointerDown);
+  }, [notificationMenu]);
+
+  const markNotificationRead = async (item: any) => {
+    if (item.readAt) return;
+    try {
+      await api(`/notifications/${item._id || item.id}/read`, { method: "PATCH" });
+      await refetch();
+    } catch (err) {
+      toast(err instanceof Error ? err.message : "Failed to mark notification read");
+    }
+  };
+
+  const markAllNotificationsRead = async () => {
+    try {
+      await api("/notifications/read-all", { method: "POST" });
+      await refetch();
+      toast("All notifications marked as read");
+    } catch (err) {
+      toast(err instanceof Error ? err.message : "Failed to mark all read");
+    }
+  };
 
   return (
     <AiAgentProvider toast={toast}>
@@ -397,15 +432,84 @@ function Shell({
           >
             {theme === "dark" ? <Icons.Sun /> : <Icons.Moon />}
           </button>
-          <button
-            className="icon-btn"
-            onClick={() => navigate("/notifications")}
-            aria-label={`Notifications${unreadCount ? `, ${unreadCount} unread` : ""}`}
-            title="Notifications"
-          >
-            <Icons.Bell />
-            {unreadCount > 0 && <i />}
-          </button>
+          <div className="notification-menu-wrap" ref={notificationMenuRef}>
+            <button
+              className="icon-btn"
+              onClick={() => {
+                const next = !notificationMenu;
+                closeOverlays();
+                setNotificationMenu(next);
+              }}
+              aria-label={`Notifications${unreadCount ? `, ${unreadCount} unread` : ""}`}
+              aria-haspopup="dialog"
+              aria-expanded={notificationMenu}
+              aria-controls="notification-dropdown"
+              title="Notifications"
+            >
+              <Icons.Bell />
+              {unreadCount > 0 && <i />}
+            </button>
+            {notificationMenu && (
+              <section
+                className="notification-dropdown"
+                id="notification-dropdown"
+                role="dialog"
+                aria-label="Recent notifications"
+              >
+                <header>
+                  <div>
+                    <b>Notifications</b>
+                    {unreadCount > 0 && <span>{unreadCount} unread</span>}
+                  </div>
+                  {unreadCount > 0 && (
+                    <button onClick={markAllNotificationsRead}>Mark all read</button>
+                  )}
+                </header>
+                <div className="notification-dropdown-list">
+                  {recentNotifications.length ? recentNotifications.map((item: any) => {
+                    const Icon = item.type === "risk"
+                      ? Icons.Activity
+                      : item.type === "mention"
+                        ? Icons.AtSign
+                        : item.type === "webhook"
+                          ? Icons.Webhook
+                          : Icons.Ticket;
+                    return (
+                      <button
+                        className={cx("notification-dropdown-item", !item.readAt && "unread")}
+                        key={item._id || item.id}
+                        onClick={() => markNotificationRead(item)}
+                      >
+                        <span className={`notif-icon ${item.type || ""}`}><Icon /></span>
+                        <span>
+                          <b>{item.title}</b>
+                          <p>{item.body}</p>
+                          <small>{new Date(item.createdAt).toLocaleString()}</small>
+                        </span>
+                        {!item.readAt && <i aria-label="Unread" />}
+                      </button>
+                    );
+                  }) : (
+                    <div className="notification-dropdown-empty">
+                      <Icons.BellOff />
+                      <b>No notifications</b>
+                      <span>You’re all caught up.</span>
+                    </div>
+                  )}
+                </div>
+                <button
+                  className="notification-dropdown-footer"
+                  onClick={() => {
+                    setNotificationMenu(false);
+                    navigate("/notifications");
+                  }}
+                >
+                  View all notifications
+                  <Icons.ArrowRight />
+                </button>
+              </section>
+            )}
+          </div>
         </div>
       </header>
       <main id="main-content" tabIndex={-1}>{children}</main>
@@ -573,8 +677,12 @@ type AiToolActivity = {
 
 // Workspace identifiers are internal implementation details and should never
 // be rendered in the conversational UI, even if a model echoes an API result.
-function redactAiInternalIds(value: string) {
-  return value.replace(/\b[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\b/gi, "[hidden]");
+function redactAiPrivateDetails(value: string) {
+  return value
+    .replace(/\b[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\b/gi, "[hidden]")
+    .replace(/\b[0-9a-f]{24}\b/gi, "[hidden]")
+    .replace(/`?\b(?:GET|POST|PUT|PATCH|DELETE)\s+\/[^\s`,;)]*`?/gi, "the requested action")
+    .replace(/`\/(?:api\/v1\/)?[a-z][a-z0-9_/:?&=.-]*`/gi, "the requested feature");
 }
 
 type AiAgentContextValue = {
@@ -658,17 +766,17 @@ function AiAgentProvider({ children, toast }: { children: React.ReactNode; toast
     setToolActivities([]);
     try {
       const history = messages.filter((m) => !m.requiresConfirmation).map((m) => ({ role: m.role, content: m.content }));
-      const token = getToken();
-      const response = await fetch("/api/v1/ai/chat", {
+      const response = await apiFetch("/ai/chat", {
         method: "POST",
-        credentials: "include",
         headers: {
-          "Content-Type": "application/json",
           Accept: "application/x-ndjson",
-          ...(token ? { Authorization: `Bearer ${token}` } : {}),
         },
         body: JSON.stringify({ message: text, history, ...(confirmed ? { confirmed } : {}) }),
       });
+      if (response.status === 401) {
+        window.location.assign("/login");
+        return;
+      }
       if (!response.ok) {
         const body = await response.json().catch(() => ({}));
         throw new Error(body.message || `Request failed (${response.status})`);
@@ -692,9 +800,11 @@ function AiAgentProvider({ children, toast }: { children: React.ReactNode; toast
             status: "running",
           }]);
         } else if (event.type === "tool_result") {
-          setToolActivities((current) => current.map((activity) => activity.id === event.id
-            ? { ...activity, status: event.ok ? "complete" : "error" }
-            : activity));
+          setToolActivities((current) => event.ok
+            ? current.map((activity) => activity.id === event.id
+              ? { ...activity, status: "complete" }
+              : activity)
+            : current.filter((activity) => activity.id !== event.id));
         } else if (event.type === "done") {
           res = event;
         } else if (event.type === "error") {
@@ -711,16 +821,23 @@ function AiAgentProvider({ children, toast }: { children: React.ReactNode; toast
         if (done) break;
       }
       consumeEvent(buffer);
-      if (streamError) throw new Error(streamError);
+      if (streamError) {
+        setMessages((m) => [...m, {
+          id: Date.now() + 1,
+          role: "assistant",
+          content: redactAiPrivateDetails(`The AI request stopped before it completed: ${streamError}`),
+        }]);
+        return;
+      }
       if (!res) throw new Error("The AI response ended before it was complete.");
 
       const assistantMsg: AiChatMessage = {
         id: Date.now() + 1,
         role: "assistant",
-        content: redactAiInternalIds(res.reply || "I couldn't process that request."),
+        content: redactAiPrivateDetails(res.reply || "I couldn't process that request."),
         requiresConfirmation: res.requiresConfirmation,
         pendingAction: res.pendingAction
-          ? { ...res.pendingAction, description: redactAiInternalIds(res.pendingAction.description) }
+          ? { ...res.pendingAction, description: redactAiPrivateDetails(res.pendingAction.description) }
           : undefined,
       };
       setMessages((m) => [...m, assistantMsg]);
@@ -729,7 +846,7 @@ function AiAgentProvider({ children, toast }: { children: React.ReactNode; toast
       setMessages((m) => [...m, {
         id: Date.now() + 1,
         role: "assistant",
-        content: e instanceof Error ? redactAiInternalIds(`Sorry, something went wrong: ${e.message}`) : "An unexpected error occurred.",
+        content: e instanceof Error ? redactAiPrivateDetails(`Sorry, something went wrong: ${e.message}`) : "An unexpected error occurred.",
       }]);
     } finally {
       setLoading(false);
@@ -740,7 +857,7 @@ function AiAgentProvider({ children, toast }: { children: React.ReactNode; toast
   const handleConfirm = (msg: AiChatMessage) => {
     if (!msg.pendingAction) return;
     const lastUserMsg = [...messages].reverse().find((m) => m.role === "user");
-    sendMessage(lastUserMsg?.content || "confirm", { action: msg.pendingAction.description });
+    sendMessage(lastUserMsg?.content || "confirm", { action: `${msg.pendingAction.method} ${msg.pendingAction.path}` });
   };
 
   const handleDeny = () => {
@@ -1930,12 +2047,10 @@ function Board({
 
       {selectedTickets.length > 0 && (
         <div
-          className="card"
+          className="card bulk-actions"
           style={{
             display: "flex",
-            gap: "10px",
             alignItems: "center",
-            padding: "10px",
             margin: "10px 0",
             background: "#f3f0fc",
             border: "1px solid #dcd3f9",
@@ -2981,10 +3096,9 @@ function Team() {
         method: "POST",
       });
       toast(
-        "Invitation link resent: " +
-          (res.inviteUrl
-            ? res.inviteUrl
-            : "Success"),
+        res.mailSent
+          ? "Invitation email resent"
+          : "Invitation link regenerated; SMTP is not configured",
       );
       await refetch();
     } catch (err) {
@@ -5490,40 +5604,106 @@ function SlaPage({ toast }: { toast: (s: string) => void }) {
   };
 
   return (
-    <>
-      <PageHead title="SLA" desc="Track response and resolution commitments by ticket priority." />
-      <div className="metrics compact">
-        <article className="metric"><div><span>Breached</span><strong>{summary.breached}</strong><small>needs attention</small></div></article>
-        <article className="metric"><div><span>Due soon</span><strong>{summary.dueSoon}</strong><small>inside 4 hours</small></div></article>
-        <article className="metric"><div><span>Healthy</span><strong>{summary.healthy}</strong><small>on target</small></div></article>
-        <article className="metric"><div><span>Resolved</span><strong>{summary.resolved}</strong><small>completed</small></div></article>
+    <div className="sla-page">
+      <header className="sla-page-head">
+        <div>
+          <span className="eyebrow">Service level management</span>
+          <h1>SLA overview</h1>
+          <p>Monitor commitments and set response targets for every priority.</p>
+        </div>
+        <div className="sla-head-note">
+          <Icons.Clock3 />
+          <div>
+            <b>Targets are measured in hours</b>
+            <span>Due-soon tickets are within 4 hours</span>
+          </div>
+        </div>
+      </header>
+      <div className="sla-metrics">
+        {[
+          { label: "Breached", value: summary.breached, note: "Needs attention", tone: "red", icon: Icons.CircleAlert },
+          { label: "Due soon", value: summary.dueSoon, note: "Inside 4 hours", tone: "orange", icon: Icons.Timer },
+          { label: "Healthy", value: summary.healthy, note: "On target", tone: "green", icon: Icons.ShieldCheck },
+          { label: "Resolved", value: summary.resolved, note: "Completed", tone: "purple", icon: Icons.CircleCheckBig },
+        ].map((item) => {
+          const StatusIcon = item.icon;
+          return (
+            <article className={`sla-metric ${item.tone}`} key={item.label}>
+              <div className="sla-metric-icon"><StatusIcon /></div>
+              <div>
+                <span>{item.label}</span>
+                <strong>{item.value}</strong>
+                <small>{item.note}</small>
+              </div>
+            </article>
+          );
+        })}
       </div>
-      <div className="two-col">
-        <section className="card">
-          <CardTitle title="SLA policy" sub="Hours by ticket priority" />
+      <div className="sla-workspace">
+        <section className="card sla-policy-card">
+          <div className="sla-section-head">
+            <div>
+              <span className="sla-section-icon"><Icons.SlidersHorizontal /></span>
+              <div>
+                <h2>SLA policy</h2>
+                <p>Response and resolution targets by priority</p>
+              </div>
+            </div>
+            {!isLeader && <span className="badge">View only</span>}
+          </div>
           <form className="sla-policy-grid" onSubmit={savePolicy}>
             {(["critical", "high", "medium", "low"] as const).map((priority) => (
-              <div className="sla-policy-row" key={priority}>
-                <b>{fmt(priority)}</b>
+              <div className={`sla-policy-row ${priority}`} key={priority}>
+                <div className="sla-priority">
+                  <i />
+                  <div>
+                    <b>{fmt(priority)}</b>
+                    <span>priority</span>
+                  </div>
+                </div>
                 <label className="field">
                   <span>First response</span>
-                  <input name={`${priority}-firstResponseHours`} type="number" min="0.25" step="0.25" defaultValue={policy[priority]?.firstResponseHours} disabled={!isLeader} />
+                  <div className="sla-hour-input">
+                    <input name={`${priority}-firstResponseHours`} type="number" min="0.25" step="0.25" defaultValue={policy[priority]?.firstResponseHours} disabled={!isLeader} />
+                    <span>hrs</span>
+                  </div>
                 </label>
                 <label className="field">
                   <span>Resolution</span>
-                  <input name={`${priority}-resolutionHours`} type="number" min="0.25" step="0.25" defaultValue={policy[priority]?.resolutionHours} disabled={!isLeader} />
+                  <div className="sla-hour-input">
+                    <input name={`${priority}-resolutionHours`} type="number" min="0.25" step="0.25" defaultValue={policy[priority]?.resolutionHours} disabled={!isLeader} />
+                    <span>hrs</span>
+                  </div>
                 </label>
               </div>
             ))}
-            {isLeader && <button className="btn primary" disabled={saving}>{saving ? "Saving..." : "Save policy"}</button>}
+            {isLeader && (
+              <div className="sla-policy-actions">
+                <span>Changes apply to all active tickets.</span>
+                <button className="btn primary" disabled={saving}>
+                  {saving ? "Saving..." : "Save policy"}
+                </button>
+              </div>
+            )}
           </form>
         </section>
-        <section className="card">
-          <CardTitle title="SLA queue" sub="Breached and due-soon tickets appear first" />
-          <TicketTable rows={slaTickets} />
+        <section className="card sla-queue-card">
+          <div className="sla-section-head">
+            <div>
+              <span className="sla-section-icon"><Icons.ListFilter /></span>
+              <div>
+                <h2>SLA queue</h2>
+                <p>Prioritized by urgency</p>
+              </div>
+            </div>
+            <span className="sla-ticket-count">{slaTickets.length} {slaTickets.length === 1 ? "ticket" : "tickets"}</span>
+          </div>
+          <div className="sla-queue-table">
+            <TicketTable rows={slaTickets} />
+          </div>
         </section>
       </div>
-    </>
+    </div>
   );
 }
 
@@ -5533,6 +5713,12 @@ function CyclesLive({ toast }: { toast: (s: string) => void }) {
   const cycles = dashboard?.cycles || [];
   const sprints = dashboard?.sprints || [];
   const isLeader = ["admin", "manager"].includes(role);
+  const activeCycles = cycles.filter((cycle: any) => cycle.status === "active").length;
+  const assignedSprints = cycles.reduce((sum: number, cycle: any) => sum + (cycle.sprints?.length || 0), 0);
+  const totalPlannedPoints = cycles.reduce(
+    (sum: number, cycle: any) => sum + (cycle.sprints || []).reduce((cycleSum: number, sprint: any) => cycleSum + (sprint.plannedPoints || 0), 0),
+    0,
+  );
 
   const createCycle = async (event: React.FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -5573,54 +5759,107 @@ function CyclesLive({ toast }: { toast: (s: string) => void }) {
   };
 
   return (
-    <>
-      <PageHead title="Cycles" desc="Group multiple sprints under a larger planning goal." />
-      <div className="two-col">
-        {isLeader && (
-          <section className="card">
-            <CardTitle title="New cycle" sub="Create a planning container for related sprints" />
-            <form className="form-grid" onSubmit={createCycle}>
-              <label className="field full"><span>Name</span><input name="name" placeholder="Cycle 2026-Q3" required /></label>
-              <label className="field full"><span>Goal</span><textarea name="goal" placeholder="What should this cycle achieve?" /></label>
-              <label className="field"><span>Status</span><select name="status" defaultValue="planned"><option value="planned">Planned</option><option value="active">Active</option><option value="completed">Completed</option></select></label>
-              <label className="field"><span>Start date</span><input name="startDate" type="date" required /></label>
-              <label className="field"><span>End date</span><input name="endDate" type="date" required /></label>
-              <div className="field full">
-                <span>Sprints</span>
-                <div className="check-list">
-                  {sprints.map((sprint: any) => (
-                    <label key={sprint._id}><input type="checkbox" name="sprints" value={sprint._id} /> {sprint.name}</label>
-                  ))}
-                </div>
-              </div>
-              <button className="btn primary" disabled={creating}>{creating ? "Creating..." : "Create cycle"}</button>
-            </form>
-          </section>
-        )}
-        <section className="card">
-          <CardTitle title="Cycle plan" sub={`${cycles.length} cycle${cycles.length === 1 ? "" : "s"} in this workspace`} />
+    <div className="cycles-page">
+      <PageHead title="Cycles" desc="Connect sprints to a shared outcome and track delivery across a longer planning window." />
+
+      <section className="cycle-overview" aria-label="Cycle overview">
+        <div className="cycle-overview-intro">
+          <span className="cycle-overview-icon"><Icons.Repeat2 /></span>
+          <div>
+            <small>PLANNING OVERVIEW</small>
+            <strong>{cycles.length ? `${cycles.length} cycle${cycles.length === 1 ? "" : "s"} mapped` : "Build your first cycle"}</strong>
+            <p>Keep sprint execution aligned with the outcomes that matter.</p>
+          </div>
+        </div>
+        <div className="cycle-stat">
+          <span>Active cycles</span>
+          <strong>{activeCycles}</strong>
+          <small>{activeCycles ? "Currently in delivery" : "None in delivery"}</small>
+        </div>
+        <div className="cycle-stat">
+          <span>Linked sprints</span>
+          <strong>{assignedSprints}</strong>
+          <small>{sprints.length} available in workspace</small>
+        </div>
+        <div className="cycle-stat">
+          <span>Planned scope</span>
+          <strong>{totalPlannedPoints}</strong>
+          <small>Story points across cycles</small>
+        </div>
+      </section>
+
+      <div className={`cycle-workspace${isLeader ? "" : " cycle-workspace-viewer"}`}>
+        <section className="cycle-plan-panel">
+          <div className="cycle-section-head">
+            <div>
+              <h2>Cycle plan</h2>
+              <p>{cycles.length ? "Review outcomes, dates, scope, and delivery progress." : "Your longer-term delivery plan will appear here."}</p>
+            </div>
+            <span className="cycle-count">{cycles.length} total</span>
+          </div>
           <div className="cycle-list">
             {cycles.length ? cycles.map((cycle: any) => {
               const planned = (cycle.sprints || []).reduce((sum: number, sprint: any) => sum + (sprint.plannedPoints || 0), 0);
               const completed = (cycle.sprints || []).reduce((sum: number, sprint: any) => sum + (sprint.completedPoints || 0), 0);
               const progress = planned ? Math.round((completed / planned) * 100) : 0;
               return (
-                <article className="cycle-row" key={cycle._id}>
-                  <div>
-                    <span><b>{cycle.name}</b><Badge tone={cycle.status === "active" ? "lime" : cycle.status === "completed" ? "green" : "neutral"}>{cycle.status}</Badge></span>
-                    <p>{cycle.goal || "No cycle goal set"}</p>
-                    <small>{new Date(cycle.startDate).toLocaleDateString()} - {new Date(cycle.endDate).toLocaleDateString()}</small>
+                <article className="cycle-card" key={cycle._id}>
+                  <div className="cycle-card-head">
+                    <div>
+                      <div className="cycle-title-line">
+                        <h3>{cycle.name}</h3>
+                        <Badge tone={cycle.status === "active" ? "lime" : cycle.status === "completed" ? "green" : "neutral"}>{cycle.status}</Badge>
+                      </div>
+                      <p>{cycle.goal || "Add a goal to give this cycle a clear outcome."}</p>
+                    </div>
+                    {isLeader && <button type="button" className="icon-btn cycle-delete" onClick={() => deleteCycle(cycle._id)} aria-label={`Delete ${cycle.name}`}><Icons.Trash2 /></button>}
                   </div>
-                  <div><small>Sprints</small><strong>{cycle.sprints?.length || 0}</strong></div>
-                  <div><small>Progress</small><strong>{progress}%</strong><Progress value={progress} /></div>
-                  {isLeader && <button className="icon-btn" onClick={() => deleteCycle(cycle._id)} aria-label={`Delete ${cycle.name}`}><Icons.Trash2 /></button>}
+                  <div className="cycle-card-meta">
+                    <span><Icons.CalendarDays /><span><small>Timeline</small><b>{new Date(cycle.startDate).toLocaleDateString(undefined, { month: "short", day: "numeric" })} – {new Date(cycle.endDate).toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" })}</b></span></span>
+                    <span><Icons.Layers3 /><span><small>Sprints</small><b>{cycle.sprints?.length || 0} linked</b></span></span>
+                    <span><Icons.Gauge /><span><small>Scope</small><b>{completed} / {planned} pts</b></span></span>
+                  </div>
+                  <div className="cycle-progress">
+                    <div><span>Delivery progress</span><strong>{progress}%</strong></div>
+                    <Progress value={progress} />
+                  </div>
                 </article>
               );
-            }) : <Empty title="No cycles" body={isLeader ? "Create a cycle to group related sprints." : "No cycles have been created yet."} />}
+            }) : <Empty title="No cycles yet" body={isLeader ? "Use the planning panel to create a cycle and connect related sprints." : "No cycles have been created yet."} />}
           </div>
         </section>
+
+        {isLeader && (
+          <aside className="card cycle-create-panel">
+            <div className="cycle-section-head">
+              <div>
+                <span className="cycle-form-kicker"><Icons.Plus /> NEW CYCLE</span>
+                <h2>Plan an outcome</h2>
+                <p>Group related sprints into one delivery window.</p>
+              </div>
+            </div>
+            <form className="cycle-form" onSubmit={createCycle}>
+              <label className="field"><span>Cycle name</span><input name="name" placeholder="e.g. 2026 Q3 growth" required /></label>
+              <label className="field"><span>Goal <small>Optional</small></span><textarea name="goal" placeholder="What outcome should this cycle achieve?" /></label>
+              <label className="field"><span>Status</span><select name="status" defaultValue="planned"><option value="planned">Planned</option><option value="active">Active</option><option value="completed">Completed</option></select></label>
+              <div className="cycle-date-fields">
+                <label className="field"><span>Starts</span><input name="startDate" type="date" required /></label>
+                <label className="field"><span>Ends</span><input name="endDate" type="date" required /></label>
+              </div>
+              <div className="field">
+                <span>Sprints <small>{sprints.length} available</small></span>
+                <div className="check-list cycle-sprint-list">
+                  {sprints.length ? sprints.map((sprint: any) => (
+                    <label key={sprint._id}><input type="checkbox" name="sprints" value={sprint._id} /><span>{sprint.name}<small>{sprint.status ? fmt(sprint.status) : "Planned sprint"}</small></span></label>
+                  )) : <p>No sprints are available yet.</p>}
+                </div>
+              </div>
+              <button className="btn primary cycle-submit" disabled={creating}><Icons.Plus />{creating ? "Creating cycle..." : "Create cycle"}</button>
+            </form>
+          </aside>
+        )}
       </div>
-    </>
+    </div>
   );
 }
 
@@ -6443,6 +6682,22 @@ function OnboardingFlow({ toast }: { toast: (message: string) => void }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [inviteUrl, setInviteUrl] = useState("");
+  const [projectName, setProjectName] = useState("");
+  const [projectKey, setProjectKey] = useState("");
+  const [keyEdited, setKeyEdited] = useState(false);
+  const [copied, setCopied] = useState(false);
+  const suggestedProjectKey = (value: string) => value
+    .split(/\s+/)
+    .filter(Boolean)
+    .map((word) => word[0])
+    .join("")
+    .replace(/[^a-z0-9]/gi, "")
+    .slice(0, 6)
+    .toUpperCase() || value.replace(/[^a-z0-9]/gi, "").slice(0, 3).toUpperCase();
+  const updateProjectName = (value: string) => {
+    setProjectName(value);
+    if (!keyEdited) setProjectKey(suggestedProjectKey(value));
+  };
   const submit = async (event: React.FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     const form = event.currentTarget;
@@ -6456,12 +6711,22 @@ function OnboardingFlow({ toast }: { toast: (message: string) => void }) {
         nav("/onboarding/invite");
       } else {
         const result = await api<any>("/invitations", { method: "POST", body: JSON.stringify({ name: values.get("name"), email: values.get("email"), role: values.get("role"), capacity: Number(values.get("capacity")) }) });
-        setInviteUrl(result.inviteUrl); toast("Invitation created"); form.reset();
+        setInviteUrl(result.inviteUrl); toast(result.mailSent ? "Invitation email sent" : "Invitation created; SMTP is not configured"); form.reset();
       }
     } catch (requestError) { setError(requestError instanceof Error ? requestError.message : "Unable to continue"); } finally { setBusy(false); }
   };
   const acceptInvitation = async (invitationId: string) => { const session = await api<any>("/auth/accept-invite", { method: "POST", body: JSON.stringify({ invitationId }) }); saveSession(session); window.location.assign("/dashboard"); };
-  const finish = async () => { if (!organization) return; await api(`/workspaces/${organization.id || organization._id}/onboarding/complete`, { method: "POST" }); window.location.assign("/dashboard"); };
+  const finish = async () => {
+    if (!organization || busy) return;
+    setBusy(true); setError("");
+    try {
+      await api(`/workspaces/${organization.id || organization._id}/onboarding/complete`, { method: "POST" });
+      window.location.assign("/dashboard");
+    } catch (requestError) {
+      setError(requestError instanceof Error ? requestError.message : "Unable to finish onboarding");
+      setBusy(false);
+    }
+  };
   const headings: Record<string, [string, string]> = { workspace: ["Create or join a workspace", "A workspace keeps each team’s projects, people, and permissions separate."], project: ["Create your first project", "Give your team a clear place to start planning work."], invite: ["Invite your team", "Create invitation links now, or skip and invite teammates later."] };
   const heading = headings[step] || headings.workspace;
   const currentStep = step === "project" ? 3 : step === "invite" ? 4 : 2;
@@ -6493,7 +6758,22 @@ function OnboardingFlow({ toast }: { toast: (message: string) => void }) {
         <ul>{onboardingDetails.items.map((item) => <li key={item}><Icons.CheckCircle2 />{item}</li>)}</ul>
         <div className="onboarding-tip"><Icons.Sparkles /><span><b>You can change this later</b><small>Workspace settings stay fully editable.</small></span></div>
       </aside>
-      <section className="card onboarding-card"><Badge tone="blue">GET STARTED</Badge><PageHead title={heading[0]} desc={heading[1]} />{step === "workspace" && pendingInvitations.length > 0 && <div className="pending-onboarding"><h3>Pending invitations</h3>{pendingInvitations.map((invitation: any) => <article key={invitation.id}><div><b>{invitation.organization?.name}</b><small>Join as {fmt(invitation.role)}</small></div><button className="btn" onClick={() => acceptInvitation(invitation.id)}>Review and join</button></article>)}<div className="or-divider">or create a new workspace</div></div>}<form onSubmit={submit}>{step === "workspace" && <label className="field"><span>Workspace name</span><input name="name" placeholder="Acme Product" minLength={2} autoFocus required /><small>This is usually your company or team name.</small></label>}{step === "project" && <div className="form-grid"><label className="field full"><span>Project name</span><input name="name" placeholder="Product launch" autoFocus required /></label><label className="field"><span>Project key</span><input name="key" placeholder="PL" minLength={2} maxLength={12} required /></label><label className="field full"><span>Description</span><textarea name="description" placeholder="What will this project deliver?" minLength={5} required /></label></div>}{step === "invite" && <div className="form-grid"><label className="field full"><span>Full name</span><input name="name" required /></label><label className="field full"><span>Email address</span><input name="email" type="email" required /></label><label className="field"><span>Role</span><select name="role" defaultValue="engineer"><option value="engineer">Engineer</option><option value="designer">Designer</option><option value="manager">Manager</option></select></label><label className="field"><span>Weekly capacity</span><input name="capacity" type="number" min="0" defaultValue="32" /></label></div>}{error && <div className="auth-message">{error}</div>}{inviteUrl && <div className="invite-link"><span>Invitation link</span><input readOnly value={inviteUrl} /><button type="button" className="btn" onClick={() => navigator.clipboard.writeText(inviteUrl)}>Copy</button></div>}<div className="form-actions">{step === "invite" && <button type="button" className="btn" onClick={finish}>Skip for now</button>}<button className="btn primary" disabled={busy}>{busy ? "Please wait…" : step === "workspace" ? "Create workspace" : step === "project" ? "Create project" : "Create invitation"}</button>{step === "invite" && inviteUrl && <button type="button" className="btn primary" onClick={finish}>Finish onboarding</button>}</div></form></section>
+      <section className="card onboarding-card">
+        <div className="onboarding-card-head"><Badge tone="blue">STEP {currentStep} OF 4</Badge><span>{step === "invite" ? "Optional" : "About 1 minute"}</span></div>
+        <PageHead title={heading[0]} desc={heading[1]} />
+        {step === "workspace" && pendingInvitations.length > 0 && <div className="pending-onboarding"><h3>Pending invitations</h3>{pendingInvitations.map((invitation: any) => <article key={invitation.id}><div><b>{invitation.organization?.name}</b><small>Join as {fmt(invitation.role)}</small></div><button type="button" className="btn" onClick={() => acceptInvitation(invitation.id)}>Join workspace</button></article>)}<div className="or-divider">or create a new workspace</div></div>}
+        <form onSubmit={submit}>
+          {step === "workspace" && <label className="field"><span>Workspace name</span><input name="name" placeholder="Acme Product" minLength={2} autoComplete="organization" autoFocus required /><small>This is usually your company or team name.</small></label>}
+          {step === "project" && <div className="form-grid onboarding-project-fields"><label className="field full"><span>Project name</span><input name="name" value={projectName} onChange={(event) => updateProjectName(event.target.value)} placeholder="Product launch" autoFocus required /><small>Use a clear name your whole team will recognize.</small></label><label className="field"><span>Project key</span><input name="key" value={projectKey} onChange={(event) => { setKeyEdited(true); setProjectKey(event.target.value.toUpperCase().replace(/[^A-Z0-9]/g, "").slice(0, 12)); }} placeholder="PL" minLength={2} maxLength={12} required /><small>Used in ticket IDs, like {projectKey || "PL"}-101.</small></label><label className="field full"><span>Description</span><textarea name="description" placeholder="What will this project deliver?" minLength={5} required /><small>A short outcome keeps the first tickets focused.</small></label></div>}
+          {step === "invite" && !inviteUrl && <div className="form-grid"><label className="field full"><span>Full name</span><input name="name" autoComplete="name" placeholder="Alex Morgan" required /></label><label className="field full"><span>Work email</span><input name="email" type="email" autoComplete="email" placeholder="alex@company.com" required /></label><label className="field"><span>Role</span><select name="role" defaultValue="engineer"><option value="engineer">Engineer</option><option value="designer">Designer</option><option value="manager">Manager</option></select></label><label className="field"><span>Weekly capacity</span><div className="capacity-input"><input name="capacity" type="number" min="0" max="168" defaultValue="32" /><span>hours</span></div></label></div>}
+          {error && <div className="auth-message" role="alert">{error}</div>}
+          {inviteUrl && <div className="invite-success"><span className="invite-success-icon"><Icons.Check /></span><div><h3>Invitation ready</h3><p>Share this link directly, or invite another teammate after setup.</p></div><div className="invite-link"><input aria-label="Invitation link" readOnly value={inviteUrl} /><button type="button" className="btn" onClick={async () => { await navigator.clipboard.writeText(inviteUrl); setCopied(true); window.setTimeout(() => setCopied(false), 1800); }}>{copied ? <Icons.Check /> : <Icons.Copy />}{copied ? "Copied" : "Copy link"}</button></div></div>}
+          <div className="form-actions onboarding-actions">
+            {step === "invite" && !inviteUrl && <button type="button" className="btn" disabled={busy} onClick={finish}>Skip for now</button>}
+            {step === "invite" && inviteUrl ? <button type="button" className="btn primary" disabled={busy} onClick={finish}>{busy ? "Finishing…" : "Go to dashboard"}<Icons.ArrowRight /></button> : <button className="btn primary" disabled={busy}>{busy ? "Please wait…" : step === "workspace" ? "Create workspace" : step === "project" ? "Create project" : "Send invitation"}<Icons.ArrowRight /></button>}
+          </div>
+        </form>
+      </section>
     </main>
   </div>;
 }
@@ -6571,7 +6851,7 @@ function AuthPageLive({ type }: { type: string }) {
           method: "POST",
           body: JSON.stringify({ email: data.get("email") }),
         });
-        setError("If the account exists, reset instructions were created.");
+        setError("If the account exists, reset instructions have been sent.");
         if (result.resetToken) {
           setResetLink(`${window.location.origin}/reset-password?token=${encodeURIComponent(result.resetToken)}`);
         }

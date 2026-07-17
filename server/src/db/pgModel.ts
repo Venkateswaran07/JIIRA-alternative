@@ -27,6 +27,31 @@ const snake = (value: string) => value.replace(/[A-Z]/g, (letter) => `_${letter.
 const camel = (value: string) => value.replace(/_([a-z])/g, (_match, letter: string) => letter.toUpperCase());
 const own = (object: object, key: string) => Object.prototype.hasOwnProperty.call(object, key);
 
+function cloneValue(value: any): any {
+  if (value instanceof Date) return new Date(value.getTime());
+  if (Array.isArray(value)) return value.map(cloneValue);
+  if (!value || typeof value !== "object") return value;
+  return Object.fromEntries(Object.entries(value).map(([key, item]) => [key, cloneValue(item)]));
+}
+
+function valuesEqual(left: any, right: any): boolean {
+  if (left instanceof Date || right instanceof Date) {
+    return left instanceof Date && right instanceof Date && left.getTime() === right.getTime();
+  }
+  if (Object.is(left, right)) return true;
+  if (Array.isArray(left) || Array.isArray(right)) {
+    return Array.isArray(left)
+      && Array.isArray(right)
+      && left.length === right.length
+      && left.every((item, index) => valuesEqual(item, right[index]));
+  }
+  if (!left || !right || typeof left !== "object" || typeof right !== "object") return false;
+  const leftKeys = Object.keys(left);
+  const rightKeys = Object.keys(right);
+  return leftKeys.length === rightKeys.length
+    && leftKeys.every((key) => own(right, key) && valuesEqual(left[key], right[key]));
+}
+
 function jsonReady(value: any): any {
   if (value instanceof Date) return value.toISOString();
   if (Array.isArray(value)) return value.map(jsonReady);
@@ -64,9 +89,11 @@ function projectObject(value: any, select?: string) {
 export class PgDocument {
   [key: string]: any;
   private readonly __model!: PgModel;
+  private __originalValues!: Row;
 
   constructor(model: PgModel, values: Row) {
     Object.defineProperty(this, "__model", { value: model, enumerable: false });
+    Object.defineProperty(this, "__originalValues", { value: cloneValue(values), writable: true, enumerable: false });
     Object.assign(this, values);
   }
 
@@ -77,6 +104,11 @@ export class PgDocument {
   }
 
   toJSON() { return this.toObject(); }
+
+  isModified(path?: string) {
+    if (path) return !valuesEqual(this[path], this.__originalValues[path]);
+    return !valuesEqual(this.toObject(), this.__originalValues);
+  }
 
   projectFields(select?: string) {
     const parsed = projectionFields(select);
@@ -93,7 +125,11 @@ export class PgDocument {
 
   async save() {
     const updated = await this.__model.replaceById(this._id, this.toObject()) as PgDocument | null;
-    if (updated) Object.assign(this, updated.toObject());
+    if (updated) {
+      const values = updated.toObject();
+      Object.assign(this, values);
+      this.__originalValues = cloneValue(values);
+    }
     return this;
   }
 
@@ -190,8 +226,12 @@ export class PgModel {
     for (const property of writableProperties) {
       if (!own(source, property)) continue;
       let value = source[property];
-      if (value instanceof PgDocument) value = value._id;
-      if (Array.isArray(value)) value = value.map((item) => item instanceof PgDocument ? item._id : item);
+      const relation = this.config.relations?.[property];
+      const relationId = (item: any) => item instanceof PgDocument ? item._id : item?._id ?? item?.id ?? item;
+      if (relation?.many && Array.isArray(value)) value = value.map(relationId);
+      else if (relation) value = relationId(value);
+      else if (value instanceof PgDocument) value = value._id;
+      else if (Array.isArray(value)) value = value.map((item) => item instanceof PgDocument ? item._id : item);
       if (this.jsonProperties.has(property)) value = JSON.stringify(jsonReady(value));
       result.push({ property, column: this.column(property)!, value });
     }

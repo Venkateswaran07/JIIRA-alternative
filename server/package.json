@@ -12,7 +12,8 @@
     "db:local:schema": "tsx scripts/apply-local-postgres-schema.ts",
     "migrate:workspace-memberships": "tsx scripts/migrate-workspace-memberships.ts",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "test": "tsx --test src/**/*.test.ts"
+    "test": "tsx --test src/**/*.test.ts",
+    "test:integration": "tsx --test src/integration.test.ts"
   },
   "keywords": [],
   "author": "",
@@ -27,6 +28,7 @@
     "helmet": "^8.2.0",
     "jsonwebtoken": "^9.0.3",
     "morgan": "^1.11.0",
+    "nodemailer": "^9.0.3",
     "openai": "^6.46.0",
     "pg": "^8.22.0",
     "zod": "^4.4.3"
@@ -38,6 +40,7 @@
     "@types/jsonwebtoken": "^9.0.10",
     "@types/morgan": "^1.9.10",
     "@types/node": "^26.1.1",
+    "@types/nodemailer": "^8.0.1",
     "@types/pg": "^8.20.0",
     "tsx": "^4.23.0",
     "typescript": "^7.0.2"

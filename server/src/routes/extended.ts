@@ -1,8 +1,5 @@
-import bcrypt from "bcryptjs";
-import crypto from "node:crypto";
 import { Router } from "express";
 import { z } from "zod";
-import { env } from "../config/env.js";
 import { withTransaction } from "../db/pgModel.js";
 import { userRoles } from "../constants/workflow.js";
 import { hashSha256, randomBase64UrlToken } from "../lib/crypto.js";
@@ -14,7 +11,7 @@ import { recordAuditEvent } from "../services/audit.js";
 import { Organization } from "../models/Organization.js";
 import { Counter } from "../models/Counter.js";
 import { Cycle } from "../models/Cycle.js";
-import { ActionToken, AuditEvent, Integration, Notification, Session } from "../models/Operational.js";
+import { AuditEvent, Integration, Notification, Session } from "../models/Operational.js";
 import { Project } from "../models/Project.js";
 import { Sprint } from "../models/Sprint.js";
 import { Ticket } from "../models/Ticket.js";
@@ -27,7 +24,6 @@ const router = Router();
 router.use(requireAuth);
 router.use(requireWorkspace);
 router.use(enforceApiAccess);
-const INVITE_TOKEN_TTL_MS = 7 * 86400_000;
 const oid = organizationId;
 const uid = currentUserId;
 const hash = hashSha256;
@@ -68,18 +64,6 @@ router.delete("/users/:id", requireRole(["admin"]), async (req: AuthRequest, res
   if (req.params.id === uid(req)) return res.status(400).json({ message: "You cannot delete yourself" });
   const membership = await OrganizationMembership.findOneAndDelete({ user: req.params.id, organization: oid(req) }); if (!membership) return res.status(404).json({ message: "User not found" }); invalidateWorkspaceMembership(String(req.params.id), String(oid(req))); await Session.updateMany({ user: req.params.id, organization: oid(req) }, { revokedAt: new Date() }); return res.status(204).send();
 });
-router.post("/invitations", requireRole(["admin"]), async (req: AuthRequest, res) => {
-  const body = parseOr400(z.object({ name: z.string().min(2), email: z.string().email(), role: z.enum(userRoles).default("engineer"), capacity: z.number().min(0).optional() }), req.body, res); if (!body) return;
-  if (await User.exists({ email: body.email.toLowerCase() })) return res.status(409).json({ message: "Email already exists" });
-  const user = await User.create({ ...body, email: body.email.toLowerCase(), organization: oid(req), passwordHash: await bcrypt.hash(crypto.randomBytes(32).toString("hex"), 10), inviteStatus: "invited" });
-  const token = randomBase64UrlToken(); await ActionToken.create({ user: user._id, organization: oid(req), kind: "invite", tokenHash: hash(token), expiresAt: new Date(Date.now() + INVITE_TOKEN_TTL_MS) });
-  return res.status(201).json({ user: { ...user.toObject(), passwordHash: undefined }, ...(env.nodeEnv !== "production" ? { inviteToken: token } : {}) });
-});
-router.post("/invitations/:userId/resend", requireRole(["admin"]), async (req: AuthRequest, res) => {
-  const user = await User.findOne({ _id: req.params.userId, organization: oid(req), inviteStatus: "invited" }); if (!user) return res.status(404).json({ message: "Invitation not found" });
-  await ActionToken.deleteMany({ user: user._id, kind: "invite", usedAt: { $exists: false } }); const token = randomBase64UrlToken(); await ActionToken.create({ user: user._id, organization: oid(req), kind: "invite", tokenHash: hash(token), expiresAt: new Date(Date.now() + INVITE_TOKEN_TTL_MS) }); return res.json({ ok: true, ...(env.nodeEnv !== "production" ? { inviteToken: token } : {}) });
-});
-router.delete("/invitations/:userId", requireRole(["admin"]), async (req: AuthRequest, res) => { const user = await User.findOneAndDelete({ _id: req.params.userId, organization: oid(req), inviteStatus: "invited" }); if (!user) return res.status(404).json({ message: "Invitation not found" }); await ActionToken.deleteMany({ user: user._id }); return res.status(204).send(); });
 
 router.get("/projects/:id", async (req: AuthRequest, res) => { const project = await Project.findOne({ _id: req.params.id, organization: oid(req) }).populate("members", "name email role"); return project ? res.json({ project }) : res.status(404).json({ message: "Project not found" }); });
 router.put("/projects/:id/members", requireRole(["admin", "manager"]), async (req: AuthRequest, res) => { const body = parseOr400(z.object({ userIds: z.array(z.string()) }), req.body, res); if (!body) return; const count = await OrganizationMembership.countDocuments({ user: { $in: body.userIds }, organization: oid(req), status: "active" }); if (count !== new Set(body.userIds).size) return res.status(400).json({ message: "Invalid member" }); const project = await Project.findOneAndUpdate({ _id: req.params.id, organization: oid(req) }, { members: body.userIds }, { new: true }).populate("members", "name email"); return project ? res.json({ project }) : res.status(404).json({ message: "Project not found" }); });
