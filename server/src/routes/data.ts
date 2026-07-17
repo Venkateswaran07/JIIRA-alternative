@@ -13,10 +13,12 @@ import { Sprint } from "../models/Sprint.js";
 import { Ticket } from "../models/Ticket.js";
 import { User } from "../models/User.js";
 import { Invitation, OrganizationMembership } from "../models/WorkspaceAccess.js";
+import { WorkspaceRole } from "../models/Role.js";
 import { WorkspaceResource } from "../models/WorkspaceResource.js";
 import { cycleSchema, projectSchema, settingsSchema, sprintSchema, teamSchema, ticketSchema } from "../schemas/workspace.js";
 import { applySlaState, cycleMetricsForTickets, normalizeSlaPolicy, slaFieldsForTicket, statusTransition } from "../services/sla.js";
 import { applyWorkspaceRules } from "../services/rules.js";
+import { ensureWorkspaceRoles, publicRole } from "../services/roles.js";
 
 const router = Router();
 router.use(requireAuth);
@@ -30,7 +32,7 @@ const escapeRegExp = (value: string) => value.replace(/[.*+?^${}()|[\]\\]/g, "\\
 const Resources = WorkspaceResource as any;
 const projectScope = (req: AuthRequest) => req.user!.role === "admin" || req.user!.workspaceAccessSource === "group" ? {} : { members: userId(req) };
 const canManageProject = (req: AuthRequest, project: any) =>
-  req.user!.role === "admin" || req.user!.workspaceAccessSource === "group" || (req.user!.role === "manager" && project?.members?.map(String).includes(userId(req)));
+  req.user!.role === "admin" || req.user!.workspaceAccessSource === "group" || (req.user!.permissions?.includes("projects.manage") && project?.members?.map(String).includes(userId(req)));
 async function canAccessTicket(req: AuthRequest, ticket: any) {
   if (!ticket) return false;
   if (req.user!.role === "admin" || req.user!.workspaceAccessSource === "group") return true;
@@ -70,13 +72,14 @@ router.get("/dashboard", async (req: AuthRequest, res) => {
   const projectFilter = { ...orgFilter(req), ...projectScope(req) };
   const projectIds = (await Project.find(projectFilter).select("_id")).map((project) => project._id);
   const deliveryFilter = req.user!.role === "admin" ? orgFilter(req) : { ...orgFilter(req), project: { $in: projectIds } };
-  const [projects, sprints, cycles, tickets, users, invitations] = await Promise.all([
+  const [projects, sprints, cycles, tickets, users, invitations, roles] = await Promise.all([
     Project.find(projectFilter).populate("members", "name role avatarColor organization"),
     Sprint.find(deliveryFilter).populate("project", "key name organization"),
     Cycle.find(orgFilter(req)).populate({ path: "sprints", select: "name status startDate endDate plannedPoints completedPoints riskScore organization project", populate: { path: "project", select: "key name organization" } }),
     Ticket.find(deliveryFilter).populate(ticketPopulation),
     OrganizationMembership.find({ organization: orgId(req) }).populate("user", "name email avatarColor notificationPreferences"),
     Invitation.find({ organization: orgId(req), status: "pending" }),
+    ensureWorkspaceRoles(orgId(req)!),
   ]);
   const activeSprint = sprints.find((sprint) => sprint.status === "active") ?? sprints[0];
   const blockedTickets = tickets.filter((ticket) => ticket.blocked);
@@ -92,12 +95,13 @@ router.get("/dashboard", async (req: AuthRequest, res) => {
     sprints,
     cycles,
     tickets,
-    users: ["admin", "manager"].includes(req.user!.role!)
+    users: req.user!.permissions?.includes("team.view")
       ? [
           ...users.map((membership: any) => ({ ...(membership.user?.toObject?.() || membership.user || {}), role: membership.role, inviteStatus: membership.status, skills: membership.skills, availability: membership.availability, capacity: membership.capacity })),
           ...invitations.map((invitation: any) => ({ _id: invitation.id, id: invitation.id, name: invitation.name, email: invitation.email, role: invitation.role, inviteStatus: "invited", capacity: invitation.capacity, skills: [] })),
         ]
       : users.map((membership: any) => ({ _id: membership.user?._id, id: membership.user?.id, name: membership.user?.name, avatarColor: membership.user?.avatarColor, role: membership.role })),
+    roles: roles.map((role: any) => publicRole(role)),
     trends: {
       risk: sprints.length
         ? sprints.slice(-5).map((sprint) => ({ name: sprint.name, value: sprint.riskScore }))
@@ -330,7 +334,7 @@ router.patch("/tickets/:id", requireRole(["admin", "manager", "engineer", "desig
   const existing = await Ticket.findOne({ _id: req.params.id, organization: orgId(req) });
   if (!existing) return res.status(404).json({ message: "Ticket not found" });
   if (!(await canAccessTicket(req, existing))) return res.status(403).json({ message: "You do not have access to this project" });
-  if (!["admin", "manager"].includes(req.user!.role!)) {
+  if (!req.user!.permissions?.includes("tickets.manage")) {
     if (![existing.reporter, existing.assignee].filter(Boolean).map(String).includes(userId(req))) return res.status(403).json({ message: "Only the reporter or assignee may edit this ticket" });
     const contributorFields = new Set(["title", "description", "acceptanceCriteria", "acceptanceCriteriaDone", "storyPoints", "epic", "labels", "dueDate"]);
     if (Object.keys(body).some((field) => !contributorFields.has(field))) return res.status(403).json({ message: "Contributors cannot edit ticket governance fields" });
@@ -453,10 +457,11 @@ router.patch("/tickets/:id/dependencies", requireRole(["admin", "manager"]), asy
 });
 
 router.route("/team")
-  .get(async (req: AuthRequest, res) => { const memberships = await OrganizationMembership.find({ organization: orgId(req), status: "active" }).populate("user", "name email avatarColor notificationPreferences"); const privileged = ["admin", "manager"].includes(req.user!.role!); return res.json({ users: memberships.map((membership: any) => privileged ? ({ ...(membership.user?.toObject?.() || {}), role: membership.role, inviteStatus: membership.status, skills: membership.skills, availability: membership.availability, capacity: membership.capacity }) : ({ _id: membership.user?._id, id: membership.user?.id, name: membership.user?.name, avatarColor: membership.user?.avatarColor, role: membership.role })) }); })
+  .get(async (req: AuthRequest, res) => { const memberships = await OrganizationMembership.find({ organization: orgId(req), status: "active" }).populate("user", "name email avatarColor notificationPreferences"); const privileged = Boolean(req.user!.permissions?.includes("team.view")); return res.json({ users: memberships.map((membership: any) => privileged ? ({ ...(membership.user?.toObject?.() || {}), role: membership.role, inviteStatus: membership.status, skills: membership.skills, availability: membership.availability, capacity: membership.capacity }) : ({ _id: membership.user?._id, id: membership.user?.id, name: membership.user?.name, avatarColor: membership.user?.avatarColor, role: membership.role })) }); })
   .post(requireRole(["admin"]), async (req: AuthRequest, res) => {
     const body = parseOr400(teamSchema, req.body, res);
     if (!body) return;
+    if (!(await WorkspaceRole.exists({ organization: orgId(req), slug: body.role }))) return res.status(400).json({ message: "Role does not exist in this workspace" });
     const passwordHash = "invited-user-no-password-yet";
     const user = await User.create({ name: body.name, email: body.email, avatarColor: body.avatarColor, passwordHash });
     const membership = await OrganizationMembership.create({ user: user._id, organization: orgId(req), role: body.role, status: "disabled", skills: body.skills, availability: body.availability, capacity: body.capacity });

@@ -1,5 +1,6 @@
 import type { NextFunction, Response } from "express";
 import { apiCatalog } from "../apiCatalog.js";
+import { permissionForEndpoint } from "../constants/permissions.js";
 import type { UserRole } from "../models/User.js";
 import type { AuthRequest } from "./auth.js";
 
@@ -21,6 +22,9 @@ const publicEndpoints = new Set([
 const adminEndpoints = new Set([
   "POST /workspaces/:id/onboarding/complete",
   "POST /team",
+  "POST /roles",
+  "PATCH /roles/:id",
+  "DELETE /roles/:id",
   "PATCH /users/:id",
   "POST /users/:id/deactivate",
   "POST /users/:id/reactivate",
@@ -99,6 +103,7 @@ const memberEndpoints = new Set([
   "GET /invitations/pending",
   "GET /me",
   "GET /team",
+  "GET /roles",
   "GET /projects",
   "GET /projects/:id",
   "GET /backlog",
@@ -169,6 +174,13 @@ export const catalogEndpointsWithoutAccessPolicy = Object.values(apiCatalog.grou
 
 export function enforceApiAccess(req: AuthRequest, res: Response, next: NextFunction) {
   if (!req.user) return res.status(401).json({ error: { code: "UNAUTHENTICATED", message: "Authentication is required" } });
+  const permission = permissionForEndpoint(req.method, req.path);
+  if (permission) {
+    if (!req.user.permissions?.includes(permission)) {
+      return res.status(403).json({ error: { code: "FORBIDDEN", message: "Your role does not have this permission", permission } });
+    }
+    return next();
+  }
   const roles = rolesForEndpoint(req.method, req.path);
   if (!roles.length) {
     return res.status(403).json({ error: { code: "FORBIDDEN", message: "This endpoint has no authenticated access policy", allowedRoles: [] } });

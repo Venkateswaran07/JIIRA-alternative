@@ -7,6 +7,7 @@ import { Session } from "../models/Operational.js";
 import type { IUser } from "../models/User.js";
 import { Invitation, OrganizationMembership } from "../models/WorkspaceAccess.js";
 import { Company, CompanyGroupMember, CompanyMembership, WorkspaceGroupAccess } from "../models/Company.js";
+import { rolePriority } from "./roles.js";
 
 export const hashToken = (token: string) => crypto.createHash("sha256").update(token).digest("hex");
 
@@ -47,8 +48,11 @@ export async function membershipsFor(userId: string) {
   for (const grant of grants as any[]) {
     const key = String(grant.workspace);
     const existing = results.get(key);
-    const rank: Record<string, number> = { designer: 1, engineer: 2, manager: 3, admin: 4 };
-    if (existing && (rank[existing.role] || 0) >= (rank[grant.role] || 0)) continue;
+    const [existingRank, grantRank] = await Promise.all([
+      rolePriority(key, existing?.role),
+      rolePriority(key, grant.role),
+    ]);
+    if (existing && existingRank >= grantRank) continue;
     const workspace = await Organization.findById(grant.workspace);
     if (workspace) results.set(key, { id: `group:${grant.id}`, organization: publicOrganization(workspace), role: grant.role, status: "active", accessSource: "group" });
   }

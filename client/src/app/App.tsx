@@ -25,7 +25,7 @@ import {
   XAxis,
   YAxis,
 } from "recharts";
-import { api, apiFetch, clearSession, getToken, googleLoginUrl, login, saveSession } from "../api";
+import { api, apiFetch, clearSession, getToken, googleLoginUrl, login, logout, saveSession } from "../api";
 import { resourceKinds } from "../constants/resources";
 import type { NotificationPreferences, Role, Ticket, TicketStatus, Toast } from "../types/domain";
 import { ApiGate, useWorkspace } from "./workspace";
@@ -3525,10 +3525,16 @@ function UserDetail() {
                 onChange={(e) => setUserRole(e.target.value)}
                 disabled={!isAdmin}
               >
-                <option value="admin">Admin</option>
-                <option value="manager">Manager</option>
-                <option value="engineer">Engineer</option>
-                <option value="designer">Designer</option>
+                {(dashboard?.roles || [
+                  { slug: "admin", name: "Administrator" },
+                  { slug: "manager", name: "Manager" },
+                  { slug: "engineer", name: "Engineer" },
+                  { slug: "designer", name: "Designer" },
+                ]).map((availableRole: any) => (
+                  <option key={availableRole.slug} value={availableRole.slug}>
+                    {availableRole.name}
+                  </option>
+                ))}
               </select>
             </label>
             <label className="field">
@@ -4058,6 +4064,7 @@ function AIPage() {
 
 function SettingsNav({ active }: { active: string }) {
   const navigate = useNavigate();
+  const { role } = useWorkspace();
   const routes: Record<string, string> = {
     Profile: "/settings/profile",
     Preferences: "/settings/preferences",
@@ -4065,17 +4072,20 @@ function SettingsNav({ active }: { active: string }) {
     "Workspace defaults": "/settings",
     Security: "/change-password",
     Sessions: "/sessions",
+    "Roles & permissions": "/settings/roles",
   };
+  const items = [
+    "Profile",
+    "Preferences",
+    "Organization",
+    "Workspace defaults",
+    ...(role === "admin" ? ["Roles & permissions"] : []),
+    "Security",
+    "Sessions",
+  ];
   return (
     <aside className="settings-nav">
-      {[
-        "Profile",
-        "Preferences",
-        "Organization",
-        "Workspace defaults",
-        "Security",
-        "Sessions",
-      ].map((x) => (
+      {items.map((x) => (
         <button
           className={x === active ? "active" : ""}
           key={x}
@@ -4087,6 +4097,150 @@ function SettingsNav({ active }: { active: string }) {
     </aside>
   );
 }
+
+const rolePermissionGroups: Array<{ label: string; permissions: Array<[string, string]> }> = [
+  { label: "Workspace", permissions: [["workspace.view", "View workspace data"], ["organization.manage", "Manage organization settings"], ["organization.delete", "Delete the workspace"], ["roles.manage", "Manage roles and permissions"]] },
+  { label: "Team", permissions: [["team.view", "View team members"], ["team.manage", "Invite and manage team members"]] },
+  { label: "Projects", permissions: [["projects.view", "View projects"], ["projects.manage", "Create and manage projects"]] },
+  { label: "Tickets", permissions: [["tickets.view", "View tickets"], ["tickets.create", "Create tickets"], ["tickets.edit", "Edit assigned tickets"], ["tickets.manage", "Bulk and advanced ticket actions"]] },
+  { label: "Planning and resources", permissions: [["planning.view", "View planning"], ["planning.manage", "Manage sprints and cycles"], ["resources.view", "View workspace resources"], ["resources.manage", "Manage workspace resources"]] },
+  { label: "Operations", permissions: [["reports.view", "View reports and risk analysis"], ["settings.manage", "Manage workspace defaults"], ["sla.view", "View SLA policy"], ["sla.manage", "Manage SLA policy"], ["audit.view", "View audit logs"], ["integrations.manage", "Manage integrations"], ["data.export", "Export workspace data"], ["data.import", "Import workspace resources"], ["ai.use", "Use the AI agent"], ["notifications.view", "Manage notifications"]] },
+];
+
+function RolesSettings({ toast }: { toast: (s: string) => void }) {
+  const { role: currentRole } = useWorkspace();
+  const [roles, setRoles] = useState<any[]>([]);
+  const [selectedRoleId, setSelectedRoleId] = useState("");
+  const [draftName, setDraftName] = useState("");
+  const [draftDescription, setDraftDescription] = useState("");
+  const [draftPermissions, setDraftPermissions] = useState<string[]>([]);
+  const [isNew, setIsNew] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [deleteArmed, setDeleteArmed] = useState(false);
+
+  const selectRole = (selected: any) => {
+    setSelectedRoleId(selected.id || selected._id || "");
+    setDraftName(selected.name || "");
+    setDraftDescription(selected.description || "");
+    setDraftPermissions(selected.permissions || []);
+    setIsNew(false);
+    setDeleteArmed(false);
+  };
+
+  const loadRoles = async (preferredId?: string) => {
+    const data = await api<any>("/roles");
+    const nextRoles = data.roles || [];
+    setRoles(nextRoles);
+    const selected = nextRoles.find((item: any) => String(item.id || item._id) === String(preferredId || selectedRoleId)) || nextRoles[0];
+    if (selected) selectRole(selected);
+  };
+
+  useEffect(() => {
+    if (currentRole !== "admin") return;
+    void loadRoles().catch((error) => toast(error instanceof Error ? error.message : "Unable to load roles"));
+  }, [currentRole]);
+
+  const startNewRole = () => {
+    setIsNew(true);
+    setSelectedRoleId("");
+    setDraftName("");
+    setDraftDescription("");
+    setDraftPermissions(["workspace.view", "team.view"]);
+    setDeleteArmed(false);
+  };
+
+  const togglePermission = (permission: string) => {
+    setDraftPermissions((current) => current.includes(permission) ? current.filter((item) => item !== permission) : [...current, permission]);
+  };
+
+  const saveRole = async (event: React.FormEvent) => {
+    event.preventDefault();
+    if (!draftName.trim() || busy) return;
+    setBusy(true);
+    try {
+      const response = await api<any>(isNew ? "/roles" : `/roles/${selectedRoleId}`, {
+        method: isNew ? "POST" : "PATCH",
+        body: JSON.stringify({ name: draftName.trim(), description: draftDescription, permissions: draftPermissions }),
+      });
+      toast(isNew ? "Custom role created" : "Role permissions updated");
+      await loadRoles(response.role?.id || response.role?._id);
+    } catch (error) {
+      toast(error instanceof Error ? error.message : "Unable to save role");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const deleteRole = async () => {
+    if (isNew || !selectedRoleId) return;
+    setBusy(true);
+    try {
+      await api(`/roles/${selectedRoleId}`, { method: "DELETE" });
+      toast("Custom role deleted");
+      await loadRoles();
+    } catch (error) {
+      toast(error instanceof Error ? error.message : "Unable to delete role");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  if (currentRole !== "admin") return <Empty title="Administrator access required" body="Only the workspace administrator can manage roles and permissions." />;
+
+  const selectedRole = roles.find((item) => String(item.id || item._id) === String(selectedRoleId));
+  const isAdministrator = !isNew && selectedRole?.slug === "admin";
+
+  return (
+    <div className="roles-settings-grid">
+      <section className="card roles-list-card">
+        <CardTitle title="Roles" sub="Choose who can access each part of this workspace." />
+        <button className="btn primary roles-new-button" onClick={startNewRole}><Icons.Plus />New custom role</button>
+        <div className="roles-list">
+          {roles.map((item) => (
+            <button key={item.id || item._id} className={String(item.id || item._id) === String(selectedRoleId) && !isNew ? "active" : ""} onClick={() => selectRole(item)}>
+              <span><b>{item.name}</b><small>{item.isSystem ? "Built-in role" : `${item.assignedUsers || 0} assigned users`}</small></span>
+              <Icons.ChevronRight />
+            </button>
+          ))}
+        </div>
+      </section>
+      <section className="card form-card role-editor-card">
+        <CardTitle title={isNew ? "Create custom role" : selectedRole?.name || "Role permissions"} sub="Permissions are enforced by the workspace API." />
+        <form onSubmit={saveRole}>
+          <div className="form-grid">
+            <label className="field">
+              <span>Role name</span>
+              <input value={draftName} onChange={(event) => setDraftName(event.target.value)} disabled={isAdministrator} required />
+            </label>
+            <label className="field">
+              <span>Description</span>
+              <input value={draftDescription} onChange={(event) => setDraftDescription(event.target.value)} disabled={isAdministrator} placeholder="What is this role responsible for?" />
+            </label>
+          </div>
+          <div className="role-permission-groups">
+            {rolePermissionGroups.map((group) => (
+              <div className="role-permission-group" key={group.label}>
+                <h3>{group.label}</h3>
+                {group.permissions.map(([permission, label]) => (
+                  <label className="role-permission-row" key={permission}>
+                    <input type="checkbox" checked={isAdministrator || draftPermissions.includes(permission)} onChange={() => togglePermission(permission)} disabled={isAdministrator} />
+                    <span><b>{label}</b><small>{permission}</small></span>
+                  </label>
+                ))}
+              </div>
+            ))}
+          </div>
+          {isAdministrator && <div className="auth-message success">The Administrator role always retains full access.</div>}
+          <div className="form-actions">
+            {!isNew && !selectedRole?.isSystem && (deleteArmed ? <><button className="btn danger" type="button" onClick={() => void deleteRole()} disabled={busy}>Confirm delete</button><button className="btn" type="button" onClick={() => setDeleteArmed(false)} disabled={busy}>Cancel</button></> : <button className="btn danger" type="button" onClick={() => setDeleteArmed(true)} disabled={busy}>Delete role</button>)}
+            <button className="btn primary" type="submit" disabled={busy || isAdministrator || !draftName.trim()}>{busy ? "Saving…" : isNew ? "Create role" : "Save permissions"}</button>
+          </div>
+        </form>
+      </section>
+    </div>
+  );
+}
+
 function Settings({
   density,
   setDensity,
@@ -4110,6 +4264,8 @@ function Settings({
     ? "Profile"
     : loc.pathname.endsWith("/preferences")
       ? "Preferences"
+      : loc.pathname.endsWith("/roles")
+        ? "Roles & permissions"
       : "Workspace defaults";
 
   const [theme, setTheme] = useState(localStorage.getItem("theme") || "light");
@@ -4127,6 +4283,7 @@ function Settings({
     ...defaultNotificationPreferences,
     ...(currentUser?.notificationPreferences || {}),
   });
+  const [signingOut, setSigningOut] = useState(false);
 
   // Workspace settings defaults state
   const [riskThreshold, setRiskThreshold] = useState(
@@ -4194,6 +4351,18 @@ function Settings({
     }
   };
 
+  const signOut = async () => {
+    if (signingOut) return;
+    setSigningOut(true);
+    try {
+      await logout();
+    } catch {
+      clearSession();
+    } finally {
+      nav("/login", { replace: true });
+    }
+  };
+
   const saveWorkspaceSettings = async (e: React.FormEvent) => {
     e.preventDefault();
     try {
@@ -4240,6 +4409,7 @@ function Settings({
       <div className="settings-layout">
         <SettingsNav active={tab} />
         <div>
+          {tab === "Roles & permissions" && <RolesSettings toast={toast} />}
           {tab === "Profile" && (
             <section className="card form-card">
               <CardTitle
@@ -4285,6 +4455,21 @@ function Settings({
                   Save profile
                 </button>
               </form>
+              <div className="settings-sign-out">
+                <div>
+                  <strong>Sign out</strong>
+                  <small>End your current session on this device.</small>
+                </div>
+                <button
+                  className="btn danger"
+                  type="button"
+                  onClick={() => void signOut()}
+                  disabled={signingOut}
+                >
+                  <Icons.LogOut size={16} />
+                  {signingOut ? "Signing out…" : "Sign out"}
+                </button>
+              </div>
             </section>
           )}
 
@@ -4545,6 +4730,8 @@ function FormPage({
   const [busy, setBusy] = useState(false);
   const [formError, setFormError] = useState("");
   const [ticketLabels, setTicketLabels] = useState<string[]>([]);
+  const [inviteUrl, setInviteUrl] = useState("");
+  const [inviteCopied, setInviteCopied] = useState(false);
   const canCreate =
     type === "invite"
       ? role === "admin"
@@ -4562,6 +4749,28 @@ function FormPage({
       "Add someone to the workspace.",
     ],
   }[type];
+
+  const finishInvite = async () => {
+    setInviteUrl("");
+    setInviteCopied(false);
+    try {
+      toast("Invitation created");
+      await refetch();
+      nav("/team");
+    } catch (error) {
+      setFormError(error instanceof Error ? error.message : "Unable to refresh the team");
+    }
+  };
+
+  const copyInviteLink = async () => {
+    try {
+      await navigator.clipboard.writeText(inviteUrl);
+      setInviteCopied(true);
+      window.setTimeout(() => setInviteCopied(false), 1800);
+    } catch {
+      setFormError("Copy failed. Select the invitation link and copy it manually.");
+    }
+  };
 
   const submit = async (event: React.FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -4630,10 +4839,9 @@ function FormPage({
           }),
         });
         if (res.inviteUrl) {
-          window.prompt(
-            "Send this invitation link to the user:",
-            res.inviteUrl
-          );
+          setInviteUrl(res.inviteUrl);
+          setInviteCopied(false);
+          return;
         }
       }
       toast(`${fmt(type)} saved`);
@@ -4824,9 +5032,14 @@ function FormPage({
             <label className="field">
               <span>Role</span>
               <select name="role" defaultValue="engineer">
-                <option value="engineer">Engineer</option>
-                <option value="designer">Designer</option>
-                <option value="manager">Manager</option>
+                {(dashboard?.roles || [
+                  { slug: "engineer", name: "Engineer" },
+                  { slug: "designer", name: "Designer" },
+                  { slug: "manager", name: "Manager" },
+                  { slug: "admin", name: "Administrator" },
+                ]).map((availableRole: any) => (
+                  <option key={availableRole.slug} value={availableRole.slug}>{availableRole.name}</option>
+                ))}
               </select>
             </label>
             <label className="field">
@@ -4845,6 +5058,48 @@ function FormPage({
           </button>
         </div>
       </form>
+      {inviteUrl && (
+        <div
+          className="modal-wrap"
+          role="presentation"
+          onMouseDown={(event) => event.target === event.currentTarget && void finishInvite()}
+        >
+          <section
+            className="card invite-review invite-link-dialog"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="invite-link-title"
+          >
+            <button
+              className="icon-btn modal-close"
+              onClick={() => void finishInvite()}
+              aria-label="Close invitation link dialog"
+            >
+              <Icons.X />
+            </button>
+            <Badge tone="green">INVITATION READY</Badge>
+            <h2 id="invite-link-title">Share this invitation</h2>
+            <p>Send this secure link to the teammate you invited.</p>
+            <div className="invite-link">
+              <input
+                aria-label="Invitation link"
+                readOnly
+                value={inviteUrl}
+                onFocus={(event) => event.currentTarget.select()}
+              />
+              <button type="button" className="btn" onClick={() => void copyInviteLink()}>
+                {inviteCopied ? <Icons.Check /> : <Icons.Copy />}
+                {inviteCopied ? "Copied" : "Copy link"}
+              </button>
+            </div>
+            <div className="form-actions">
+              <button className="btn primary" type="button" onClick={() => void finishInvite()}>
+                Done
+              </button>
+            </div>
+          </section>
+        </div>
+      )}
     </CenteredForm>
   );
 }
@@ -5806,6 +6061,9 @@ function OrganizationLive({ toast }: { toast: (s: string) => void }) {
   } = useWorkspace();
   const [name, setName] = useState(org?.name || "");
   const [workspaces, setWorkspaces] = useState<any[]>([]);
+  const [createWorkspaceOpen, setCreateWorkspaceOpen] = useState(false);
+  const [workspaceName, setWorkspaceName] = useState("");
+  const [creatingWorkspace, setCreatingWorkspace] = useState(false);
   const slugPreview = name.trim() === String(org?.name || "").trim()
     ? org?.slug || ""
     : name
@@ -5866,16 +6124,27 @@ function OrganizationLive({ toast }: { toast: (s: string) => void }) {
 
   const isAdmin = role === "admin";
 
-  const createWorkspace = async () => {
+  const openCreateWorkspace = () => {
+    setWorkspaceName("");
+    setCreateWorkspaceOpen(true);
+  };
+
+  const createWorkspace = async (event: React.FormEvent) => {
+    event.preventDefault();
     const companyId = company?.id || company?._id;
-    const workspaceName = window.prompt("Workspace name");
-    if (!companyId || !workspaceName) return;
+    const trimmedName = workspaceName.trim();
+    if (!companyId || trimmedName.length < 2 || creatingWorkspace) return;
+    setCreatingWorkspace(true);
     try {
-      const result = await api<any>(`/companies/${companyId}/workspaces`, { method: "POST", body: JSON.stringify({ name: workspaceName }) });
+      const result = await api<any>(`/companies/${companyId}/workspaces`, { method: "POST", body: JSON.stringify({ name: trimmedName }) });
+      setCreateWorkspaceOpen(false);
+      setWorkspaceName("");
       toast("Workspace created");
       await switchToCreatedWorkspace(result.workspace);
     } catch (error) {
       toast(error instanceof Error ? error.message : "Workspace creation failed");
+    } finally {
+      setCreatingWorkspace(false);
     }
   };
 
@@ -5917,7 +6186,7 @@ function OrganizationLive({ toast }: { toast: (s: string) => void }) {
                 </button>
               ))}
             </div>
-            {isAdmin && <button className="btn primary" onClick={createWorkspace}><Icons.Plus />New workspace</button>}
+            {isAdmin && <button className="btn primary" onClick={openCreateWorkspace}><Icons.Plus />New workspace</button>}
           </section>
           <section className="card form-card">
             <CardTitle
@@ -5977,6 +6246,57 @@ function OrganizationLive({ toast }: { toast: (s: string) => void }) {
           )}
         </div>
       </div>
+      {createWorkspaceOpen && (
+        <div
+          className="modal-wrap"
+          role="presentation"
+          onMouseDown={(event) => {
+            if (event.target === event.currentTarget && !creatingWorkspace) setCreateWorkspaceOpen(false);
+          }}
+        >
+          <section
+            className="card invite-review workspace-create-dialog"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="create-workspace-title"
+          >
+            <button
+              className="icon-btn modal-close"
+              onClick={() => setCreateWorkspaceOpen(false)}
+              disabled={creatingWorkspace}
+              aria-label="Close create workspace dialog"
+            >
+              <Icons.X />
+            </button>
+            <Badge tone="purple">NEW WORKSPACE</Badge>
+            <h2 id="create-workspace-title">Create a workspace</h2>
+            <p>Give your team a clear space for projects, tickets, and delivery work.</p>
+            <form onSubmit={createWorkspace}>
+              <label className="field">
+                <span>Workspace name</span>
+                <input
+                  value={workspaceName}
+                  onChange={(event) => setWorkspaceName(event.target.value)}
+                  placeholder="For example, Product team"
+                  minLength={2}
+                  autoComplete="organization"
+                  autoFocus
+                  required
+                  disabled={creatingWorkspace}
+                />
+              </label>
+              <div className="form-actions">
+                <button className="btn" type="button" onClick={() => setCreateWorkspaceOpen(false)} disabled={creatingWorkspace}>
+                  Cancel
+                </button>
+                <button className="btn primary" type="submit" disabled={creatingWorkspace || workspaceName.trim().length < 2}>
+                  {creatingWorkspace ? "Creating…" : "Create workspace"}
+                </button>
+              </div>
+            </form>
+          </section>
+        </div>
+      )}
     </>
   );
 }

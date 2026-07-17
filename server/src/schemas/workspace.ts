@@ -1,12 +1,5 @@
 import { z } from "zod";
-import {
-  priorityLevels,
-  cycleStatuses,
-  projectStatuses,
-  sprintStatuses,
-  ticketStatuses,
-  userRoles,
-} from "../constants/workflow.js";
+import { priorityLevels, cycleStatuses, projectStatuses, sprintStatuses, ticketStatuses } from "../constants/workflow.js";
 
 export const projectSchema = z.object({
   key: z.string().min(2).max(12).transform((value) => value.toUpperCase()),
@@ -62,7 +55,7 @@ export const ticketSchema = z.object({
 export const teamSchema = z.object({
   name: z.string().min(2),
   email: z.string().email(),
-  role: z.enum(userRoles).default("engineer"),
+  role: z.string().min(1).default("engineer"),
   skills: z.array(z.string()).default(["Planning"]),
   availability: z.number().min(0).max(1).default(1),
   capacity: z.number().min(0).default(30),

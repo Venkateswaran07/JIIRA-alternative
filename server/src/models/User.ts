@@ -1,7 +1,7 @@
 import { createPgModel } from "../db/pgModel.js";
 import { Organization } from "./Organization.js";
 
-export type UserRole = "admin" | "manager" | "engineer" | "designer";
+export type UserRole = string;
 export type InviteStatus = "active" | "invited" | "disabled";
 export type NotificationPreferences = { ticketAssignments: boolean; mentionsAndComments: boolean; sprintRiskAlerts: boolean; weeklySummary: boolean };
 export interface IUser { id?: string; _id?: string; name: string; email: string; passwordHash: string; lastActiveOrganization?: string; avatarColor: string; notificationPreferences: NotificationPreferences }

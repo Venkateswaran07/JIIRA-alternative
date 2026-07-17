@@ -3,12 +3,12 @@ import bcrypt from "bcryptjs";
 import { randomUUID } from "node:crypto";
 import { z } from "zod";
 import { withTransaction } from "../db/pgModel.js";
-import { userRoles } from "../constants/workflow.js";
+import { isPermission } from "../constants/permissions.js";
 import { hashSha256, randomBase64UrlToken } from "../lib/crypto.js";
 import { parseOr400 } from "../lib/http.js";
 import { currentUserId, organizationId } from "../lib/routeContext.js";
 import { invalidateWorkspaceMembership, requireAuth, requireRole, requireWorkspace, type AuthRequest } from "../middleware/auth.js";
-import { enforceApiAccess, leaders } from "../middleware/access.js";
+import { enforceApiAccess } from "../middleware/access.js";
 import { recordAuditEvent } from "../services/audit.js";
 import { Organization } from "../models/Organization.js";
 import { Counter } from "../models/Counter.js";
@@ -19,9 +19,12 @@ import { Sprint } from "../models/Sprint.js";
 import { Ticket } from "../models/Ticket.js";
 import { User } from "../models/User.js";
 import { Invitation, OrganizationMembership } from "../models/WorkspaceAccess.js";
+import { WorkspaceGroupAccess } from "../models/Company.js";
+import { WorkspaceRole } from "../models/Role.js";
 import { resourceKinds, WorkspaceResource } from "../models/WorkspaceResource.js";
 import { applySlaState, statusTransition } from "../services/sla.js";
 import { applyWorkspaceRules } from "../services/rules.js";
+import { ensureWorkspaceRoles, publicRole, roleSlug, uniquePermissions } from "../services/roles.js";
 
 const router = Router();
 router.use(requireAuth);
@@ -58,7 +61,7 @@ async function uniqueWorkspaceSlug(name: string, organizationId: string) {
 const canAccessProject = (req: AuthRequest, project: any) =>
   req.user!.role === "admin" || req.user!.workspaceAccessSource === "group" || (Array.isArray(project?.members) && project.members.map(String).includes(uid(req)));
 const canManageProject = (req: AuthRequest, project: any) =>
-  req.user!.role === "admin" || (req.user!.role === "manager" && canAccessProject(req, project));
+  req.user!.role === "admin" || (req.user!.permissions?.includes("projects.manage") && canAccessProject(req, project));
 async function projectForTicket(req: AuthRequest, ticket: any) {
   return ticket ? Project.findOne({ _id: ticket.project, organization: oid(req) }) : null;
 }
@@ -72,7 +75,76 @@ function ownedBy(entry: any, req: AuthRequest, user?: any) {
     || (!entry?.authorId && (entry?.author === user?.name || entry?.author === req.user!.email));
 }
 
-const userPatch = z.object({ name: z.string().min(2).optional(), role: z.enum(userRoles).optional(), skills: z.array(z.string()).optional(), availability: z.number().min(0).max(1).optional(), capacity: z.number().min(0).optional(), avatarColor: z.string().optional() });
+const userPatch = z.object({ name: z.string().min(2).optional(), role: z.string().min(1).optional(), skills: z.array(z.string()).optional(), availability: z.number().min(0).max(1).optional(), capacity: z.number().min(0).optional(), avatarColor: z.string().optional() });
+const rolePatch = z.object({ name: z.string().min(2).optional(), description: z.string().max(240).optional(), permissions: z.array(z.string()).optional(), rank: z.number().min(1).max(99).optional() });
+
+function requireAdmin(req: AuthRequest, res: any) {
+  if (req.user!.role !== "admin") {
+    res.status(403).json({ message: "Only the workspace administrator can manage roles" });
+    return false;
+  }
+  return true;
+}
+
+router.get("/roles", async (req: AuthRequest, res) => {
+  const roles = await ensureWorkspaceRoles(oid(req)!);
+  const users = await OrganizationMembership.find({ organization: oid(req), status: "active" });
+  const assigned = new Map<string, number>();
+  for (const user of users as any[]) assigned.set(String(user.role), (assigned.get(String(user.role)) || 0) + 1);
+  return res.json({ roles: roles.map((role: any) => ({ ...publicRole(role), assignedUsers: assigned.get(role.slug) || 0 })) });
+});
+
+router.post("/roles", async (req: AuthRequest, res) => {
+  if (!requireAdmin(req, res)) return;
+  const body = parseOr400(rolePatch.extend({ name: z.string().min(2), permissions: z.array(z.string()).default([]) }), req.body, res);
+  if (!body) return;
+  if (body.permissions.some((permission) => !isPermission(permission))) return res.status(400).json({ message: "Role contains an unknown permission" });
+  const slug = roleSlug(body.name);
+  if (await WorkspaceRole.exists({ organization: oid(req), slug })) return res.status(409).json({ message: "A role with this name already exists" });
+  const role = await WorkspaceRole.create({ organization: oid(req), name: body.name.trim(), slug, description: body.description || "", permissions: uniquePermissions(body.permissions), rank: body.rank ?? 20, isSystem: false });
+  return res.status(201).json({ role: publicRole(role) });
+});
+
+router.patch("/roles/:id", async (req: AuthRequest, res) => {
+  if (!requireAdmin(req, res)) return;
+  const body = parseOr400(rolePatch, req.body, res);
+  if (!body) return;
+  if (body.permissions?.some((permission) => !isPermission(permission))) return res.status(400).json({ message: "Role contains an unknown permission" });
+  const role: any = await WorkspaceRole.findOne({ _id: req.params.id, organization: oid(req) });
+  if (!role) return res.status(404).json({ message: "Role not found" });
+  if (role.slug === "admin") return res.status(400).json({ message: "The Administrator role always retains full permissions" });
+  const nextName = body.name?.trim() || role.name;
+  const nextSlug = role.isSystem ? role.slug : roleSlug(nextName);
+  const collision = await WorkspaceRole.findOne({ organization: oid(req), slug: nextSlug });
+  if (collision && String(collision._id) !== String(role._id)) return res.status(409).json({ message: "A role with this name already exists" });
+  const update: any = { ...body, name: nextName, slug: nextSlug };
+  if (body.permissions) update.permissions = uniquePermissions(body.permissions);
+  const updated: any = await WorkspaceRole.findOneAndUpdate({ _id: role._id, organization: oid(req) }, update, { new: true });
+  if (nextSlug !== role.slug) {
+    await Promise.all([
+      OrganizationMembership.updateMany({ organization: oid(req), role: role.slug }, { role: nextSlug }),
+      Invitation.updateMany({ organization: oid(req), role: role.slug }, { role: nextSlug }),
+      WorkspaceGroupAccess.updateMany({ workspace: oid(req), role: role.slug }, { role: nextSlug }),
+    ]);
+  }
+  return res.json({ role: publicRole(updated) });
+});
+
+router.delete("/roles/:id", async (req: AuthRequest, res) => {
+  if (!requireAdmin(req, res)) return;
+  const role: any = await WorkspaceRole.findOne({ _id: req.params.id, organization: oid(req) });
+  if (!role) return res.status(404).json({ message: "Role not found" });
+  if (role.isSystem) return res.status(400).json({ message: "Built-in roles cannot be deleted" });
+  const [members, invitations, groupGrants] = await Promise.all([
+    OrganizationMembership.countDocuments({ organization: oid(req), role: role.slug }),
+    Invitation.countDocuments({ organization: oid(req), role: role.slug, status: "pending" }),
+    WorkspaceGroupAccess.countDocuments({ workspace: oid(req), role: role.slug }),
+  ]);
+  if (members || invitations || groupGrants) return res.status(409).json({ message: "Reassign users, invitations, and group access before deleting this role" });
+  await WorkspaceRole.findOneAndDelete({ _id: role._id, organization: oid(req) });
+  return res.status(204).send();
+});
+
 router.get("/users", async (req: AuthRequest, res) => { const memberships = await OrganizationMembership.find({ organization: oid(req) }).populate("user", "name email avatarColor notificationPreferences"); return res.json({ users: memberships.map((m: any) => ({ ...(m.user?.toObject?.() || {}), role: m.role, inviteStatus: m.status, skills: m.skills, availability: m.availability, capacity: m.capacity })) }); });
 router.get("/users/:id", async (req: AuthRequest, res) => {
   const membership: any = await OrganizationMembership.findOne({ user: req.params.id, organization: oid(req) }).populate("user", "name email avatarColor notificationPreferences");
@@ -84,6 +156,7 @@ router.patch("/users/:id", async (req: AuthRequest, res) => {
   const isSelf = req.params.id === uid(req);
   if (!isAdmin && !isSelf) return res.status(403).json({ message: "You do not have permission to update this user" });
   if (!isAdmin && body.role !== undefined) return res.status(403).json({ message: "Only admins can change user roles" });
+  if (body.role && !(await WorkspaceRole.exists({ organization: oid(req), slug: body.role }))) return res.status(400).json({ message: "Role does not exist in this workspace" });
   const membershipFields = Object.fromEntries(Object.entries(body).filter(([key]) => ["role", "skills", "availability", "capacity"].includes(key)));
   const profileFields = Object.fromEntries(Object.entries(body).filter(([key]) => ["name", "avatarColor"].includes(key)));
   const membership: any = await OrganizationMembership.findOneAndUpdate({ user: req.params.id, organization: oid(req) }, membershipFields, { new: true }).populate("user", "name email avatarColor notificationPreferences");
@@ -116,7 +189,7 @@ router.post("/sprints/:id/complete", requireRole(["admin", "manager"]), async (r
 router.post("/sprints/:id/reopen", requireRole(["admin", "manager"]), async (req: AuthRequest, res) => { const sprint = await Sprint.findOneAndUpdate({ _id: req.params.id, organization: oid(req) }, { status: "active" }, { new: true }); return sprint ? res.json({ sprint }) : res.status(404).json({ message: "Sprint not found" }); });
 
 router.post("/tickets/bulk", requireRole(["admin", "manager"]), async (req: AuthRequest, res) => { const body = parseOr400(z.object({ ids: z.array(z.string()).min(1), update: z.object({ status: z.enum(["Backlog", "To Do", "In Progress", "In Review", "Done"]).optional(), priority: z.enum(["low", "medium", "high", "critical"]).optional(), assignee: z.string().optional(), sprint: z.string().optional(), blocked: z.boolean().optional() }) }), req.body, res); if (!body) return; if (body.update.status) { const items = await Ticket.find({ _id: { $in: body.ids }, organization: oid(req) }); await Promise.all(items.map(async (ticket) => { const fromStatus = ticket.status; Object.assign(ticket, body.update); ticket.history.push({ event: `Moved to ${body.update.status}`, createdAt: new Date() }); ticket.statusTransitions.push(statusTransition(fromStatus, body.update.status!, new Date(), uid(req))); if (body.update.status === "Done" && !ticket.resolvedAt) ticket.resolvedAt = new Date(); applySlaState(ticket); await ticket.save(); })); return res.json({ matched: items.length, modified: items.length }); } const result = await Ticket.updateMany({ _id: { $in: body.ids }, organization: oid(req) }, body.update); return res.json({ matched: result.matchedCount, modified: result.modifiedCount }); });
-router.post("/tickets/:id/assign", async (req: AuthRequest, res) => { const body = parseOr400(z.object({ assignee: z.string().nullable() }), req.body, res); if (!body) return; const existing = await Ticket.findOne({ _id: req.params.id, organization: oid(req) }); if (!(await requireTicketAccess(req, res, existing))) return; if (!["admin", "manager"].includes(req.user!.role!) && body.assignee !== uid(req)) return res.status(403).json({ message: "Contributors may only assign tickets to themselves" }); if (body.assignee && !(await OrganizationMembership.exists({ user: body.assignee, organization: oid(req), status: "active" }))) return res.status(404).json({ message: "Assignee not found" }); const ticket = await Ticket.findOneAndUpdate({ _id: req.params.id, organization: oid(req) }, body.assignee ? { assignee: body.assignee } : { $unset: { assignee: 1 } }, { new: true }); if (ticket) await applyWorkspaceRules(oid(req)!, "ticket.assigned", ticket); return res.json({ ticket }); });
+router.post("/tickets/:id/assign", async (req: AuthRequest, res) => { const body = parseOr400(z.object({ assignee: z.string().nullable() }), req.body, res); if (!body) return; const existing = await Ticket.findOne({ _id: req.params.id, organization: oid(req) }); if (!(await requireTicketAccess(req, res, existing))) return; if (!req.user!.permissions?.includes("tickets.manage") && body.assignee !== uid(req)) return res.status(403).json({ message: "Contributors may only assign tickets to themselves" }); if (body.assignee && !(await OrganizationMembership.exists({ user: body.assignee, organization: oid(req), status: "active" }))) return res.status(404).json({ message: "Assignee not found" }); const ticket = await Ticket.findOneAndUpdate({ _id: req.params.id, organization: oid(req) }, body.assignee ? { assignee: body.assignee } : { $unset: { assignee: 1 } }, { new: true }); if (ticket) await applyWorkspaceRules(oid(req)!, "ticket.assigned", ticket); return res.json({ ticket }); });
 router.post("/tickets/:id/archive", requireRole(["admin", "manager"]), async (req: AuthRequest, res) => { const ticket = await Ticket.findOneAndUpdate({ _id: req.params.id, organization: oid(req) }, { archivedAt: new Date() }, { new: true }); return ticket ? res.json({ ticket }) : res.status(404).json({ message: "Ticket not found" }); });
 router.post("/tickets/:id/restore", requireRole(["admin", "manager"]), async (req: AuthRequest, res) => { const ticket = await Ticket.findOneAndUpdate({ _id: req.params.id, organization: oid(req) }, { $unset: { archivedAt: 1 } }, { new: true }); return ticket ? res.json({ ticket }) : res.status(404).json({ message: "Ticket not found" }); });
 router.patch("/tickets/:id/rank", async (req: AuthRequest, res) => { const body = parseOr400(z.object({ rank: z.number(), sprint: z.string().nullable().optional(), status: z.enum(["Backlog", "To Do", "In Progress", "In Review", "Done"]).optional() }), req.body, res); if (!body) return; const ticket = await Ticket.findOne({ _id: req.params.id, organization: oid(req) }); if (!ticket) return res.status(404).json({ message: "Ticket not found" }); const fromStatus = ticket.status; ticket.rank = body.rank; if (body.status) { ticket.status = body.status; ticket.history.push({ event: `Moved to ${body.status}`, createdAt: new Date() }); ticket.statusTransitions.push(statusTransition(fromStatus, body.status, new Date(), uid(req))); if (body.status === "Done" && !ticket.resolvedAt) ticket.resolvedAt = new Date(); } if (body.sprint === null) ticket.sprint = null; else if (body.sprint) ticket.sprint = body.sprint; applySlaState(ticket); await ticket.save(); return res.json({ ticket }); });
@@ -141,10 +214,10 @@ router.post("/tickets/:id/links", async (req: AuthRequest, res) => {
 router.post("/tickets/:id/watch", async (req: AuthRequest, res) => { const ticket = await Ticket.findOneAndUpdate({ _id: req.params.id, organization: oid(req) }, { $addToSet: { watchers: uid(req) } }, { new: true }); return ticket ? res.json({ ticket }) : res.status(404).json({ message: "Ticket not found" }); });
 router.delete("/tickets/:id/watch", async (req: AuthRequest, res) => { const ticket = await Ticket.findOneAndUpdate({ _id: req.params.id, organization: oid(req) }, { $pull: { watchers: uid(req) } }, { new: true }); return ticket ? res.json({ ticket }) : res.status(404).json({ message: "Ticket not found" }); });
 router.get("/tickets/:id/history", async (req: AuthRequest, res) => { const ticket = await Ticket.findOne({ _id: req.params.id, organization: oid(req) }).select("history"); return ticket ? res.json({ history: ticket.history }) : res.status(404).json({ message: "Ticket not found" }); });
-router.patch("/tickets/:id/comments/:commentId", async (req: AuthRequest, res) => { const body = parseOr400(z.object({ body: z.string().min(1) }), req.body, res); if (!body) return; const [ticket, user] = await Promise.all([Ticket.findOne({ _id: req.params.id, organization: oid(req) }), User.findById(uid(req))]); if (!(await requireTicketAccess(req, res, ticket)) || !ticket) return; const comment = ticket.comments.find((item: any) => String(item._id ?? item.id) === req.params.commentId); if (!comment) return res.status(404).json({ message: "Comment not found" }); if (!leaders.includes(req.user!.role as any) && !ownedBy(comment, req, user)) return res.status(403).json({ message: "You may only edit your own comments" }); comment.body = body.body; await ticket.save(); return res.json({ ticket }); });
-router.delete("/tickets/:id/comments/:commentId", async (req: AuthRequest, res) => { const [ticket, user] = await Promise.all([Ticket.findOne({ _id: req.params.id, organization: oid(req) }), User.findById(uid(req))]); if (!(await requireTicketAccess(req, res, ticket)) || !ticket) return; const comment = ticket.comments.find((item: any) => String(item._id ?? item.id) === req.params.commentId); if (!comment) return res.status(404).json({ message: "Comment not found" }); if (!leaders.includes(req.user!.role as any) && !ownedBy(comment, req, user)) return res.status(403).json({ message: "You may only delete your own comments" }); ticket.comments = ticket.comments.filter((item: any) => String(item._id ?? item.id) !== req.params.commentId); await ticket.save(); return res.json({ ticket }); });
-router.patch("/tickets/:id/work-logs/:logId", async (req: AuthRequest, res) => { const body = parseOr400(z.object({ hours: z.number().min(.25).max(24).optional(), note: z.string().min(1).optional() }), req.body, res); if (!body) return; const [ticket, user] = await Promise.all([Ticket.findOne({ _id: req.params.id, organization: oid(req) }), User.findById(uid(req))]); if (!(await requireTicketAccess(req, res, ticket)) || !ticket) return; const log = ticket.workLogs.find((item: any) => String(item._id ?? item.id) === req.params.logId); if (!log) return res.status(404).json({ message: "Work log not found" }); if (!leaders.includes(req.user!.role as any) && !ownedBy(log, req, user)) return res.status(403).json({ message: "You may only edit your own work logs" }); Object.assign(log, body); await ticket.save(); return res.json({ ticket }); });
-router.delete("/tickets/:id/work-logs/:logId", async (req: AuthRequest, res) => { const [ticket, user] = await Promise.all([Ticket.findOne({ _id: req.params.id, organization: oid(req) }), User.findById(uid(req))]); if (!(await requireTicketAccess(req, res, ticket)) || !ticket) return; const log = ticket.workLogs.find((item: any) => String(item._id ?? item.id) === req.params.logId); if (!log) return res.status(404).json({ message: "Work log not found" }); if (!leaders.includes(req.user!.role as any) && !ownedBy(log, req, user)) return res.status(403).json({ message: "You may only delete your own work logs" }); ticket.workLogs = ticket.workLogs.filter((item: any) => String(item._id ?? item.id) !== req.params.logId); await ticket.save(); return res.json({ ticket }); });
+router.patch("/tickets/:id/comments/:commentId", async (req: AuthRequest, res) => { const body = parseOr400(z.object({ body: z.string().min(1) }), req.body, res); if (!body) return; const [ticket, user] = await Promise.all([Ticket.findOne({ _id: req.params.id, organization: oid(req) }), User.findById(uid(req))]); if (!(await requireTicketAccess(req, res, ticket)) || !ticket) return; const comment = ticket.comments.find((item: any) => String(item._id ?? item.id) === req.params.commentId); if (!comment) return res.status(404).json({ message: "Comment not found" }); if (!req.user!.permissions?.includes("tickets.manage") && !ownedBy(comment, req, user)) return res.status(403).json({ message: "You may only edit your own comments" }); comment.body = body.body; await ticket.save(); return res.json({ ticket }); });
+router.delete("/tickets/:id/comments/:commentId", async (req: AuthRequest, res) => { const [ticket, user] = await Promise.all([Ticket.findOne({ _id: req.params.id, organization: oid(req) }), User.findById(uid(req))]); if (!(await requireTicketAccess(req, res, ticket)) || !ticket) return; const comment = ticket.comments.find((item: any) => String(item._id ?? item.id) === req.params.commentId); if (!comment) return res.status(404).json({ message: "Comment not found" }); if (!req.user!.permissions?.includes("tickets.manage") && !ownedBy(comment, req, user)) return res.status(403).json({ message: "You may only delete your own comments" }); ticket.comments = ticket.comments.filter((item: any) => String(item._id ?? item.id) !== req.params.commentId); await ticket.save(); return res.json({ ticket }); });
+router.patch("/tickets/:id/work-logs/:logId", async (req: AuthRequest, res) => { const body = parseOr400(z.object({ hours: z.number().min(.25).max(24).optional(), note: z.string().min(1).optional() }), req.body, res); if (!body) return; const [ticket, user] = await Promise.all([Ticket.findOne({ _id: req.params.id, organization: oid(req) }), User.findById(uid(req))]); if (!(await requireTicketAccess(req, res, ticket)) || !ticket) return; const log = ticket.workLogs.find((item: any) => String(item._id ?? item.id) === req.params.logId); if (!log) return res.status(404).json({ message: "Work log not found" }); if (!req.user!.permissions?.includes("tickets.manage") && !ownedBy(log, req, user)) return res.status(403).json({ message: "You may only edit your own work logs" }); Object.assign(log, body); await ticket.save(); return res.json({ ticket }); });
+router.delete("/tickets/:id/work-logs/:logId", async (req: AuthRequest, res) => { const [ticket, user] = await Promise.all([Ticket.findOne({ _id: req.params.id, organization: oid(req) }), User.findById(uid(req))]); if (!(await requireTicketAccess(req, res, ticket)) || !ticket) return; const log = ticket.workLogs.find((item: any) => String(item._id ?? item.id) === req.params.logId); if (!log) return res.status(404).json({ message: "Work log not found" }); if (!req.user!.permissions?.includes("tickets.manage") && !ownedBy(log, req, user)) return res.status(403).json({ message: "You may only delete your own work logs" }); ticket.workLogs = ticket.workLogs.filter((item: any) => String(item._id ?? item.id) !== req.params.logId); await ticket.save(); return res.json({ ticket }); });
 router.post("/tickets/:id/attachments", async (req: AuthRequest, res) => {
   const body = parseOr400(z.object({
     name: z.string().min(1).max(255),
@@ -161,7 +234,7 @@ router.post("/tickets/:id/attachments", async (req: AuthRequest, res) => {
   await audit(req, "ticket.attachment.added", "ticket", ticket._id, { name: body.name, size: body.size, storage: body.dataUrl ? "database" : "external" });
   return res.status(201).json({ ticket });
 });
-router.delete("/tickets/:id/attachments/:attachmentId", async (req: AuthRequest, res) => { const ticket = await Ticket.findOne({ _id: req.params.id, organization: oid(req) }); if (!(await requireTicketAccess(req, res, ticket)) || !ticket) return; const attachment = ticket.attachments.find((item: any) => String(item._id ?? item.id) === req.params.attachmentId); if (!attachment) return res.status(404).json({ message: "Attachment not found" }); if (!leaders.includes(req.user!.role as any) && !ownedBy(attachment, req)) return res.status(403).json({ message: "You may only delete your own attachments" }); ticket.attachments = ticket.attachments.filter((item: any) => String(item._id ?? item.id) !== req.params.attachmentId); await ticket.save(); return res.json({ ticket }); });
+router.delete("/tickets/:id/attachments/:attachmentId", async (req: AuthRequest, res) => { const ticket = await Ticket.findOne({ _id: req.params.id, organization: oid(req) }); if (!(await requireTicketAccess(req, res, ticket)) || !ticket) return; const attachment = ticket.attachments.find((item: any) => String(item._id ?? item.id) === req.params.attachmentId); if (!attachment) return res.status(404).json({ message: "Attachment not found" }); if (!req.user!.permissions?.includes("tickets.manage") && !ownedBy(attachment, req)) return res.status(403).json({ message: "You may only delete your own attachments" }); ticket.attachments = ticket.attachments.filter((item: any) => String(item._id ?? item.id) !== req.params.attachmentId); await ticket.save(); return res.json({ ticket }); });
 router.delete("/tickets/:id", requireRole(["admin", "manager"]), async (req: AuthRequest, res) => { const ticket = await Ticket.findOneAndDelete({ _id: req.params.id, organization: oid(req) }); return ticket ? res.status(204).send() : res.status(404).json({ message: "Ticket not found" }); });
 router.post("/tickets/:id/clone", requireRole(["admin", "manager"]), async (req: AuthRequest, res) => { const source = await Ticket.findOne({ _id: req.params.id, organization: oid(req) }).lean(); if (!source) return res.status(404).json({ message: "Ticket not found" }); const project = await Project.findById(source.project); const counter = await Counter.findOneAndUpdate({ organization: oid(req), scope: `ticket:${source.project}` }, { $inc: { value: 1 } }, { upsert: true, new: true, setDefaultsOnInsert: true }); const { _id, createdAt, updatedAt, ...copy } = source as typeof source & { createdAt?: Date; updatedAt?: Date }; const ticket = await Ticket.create({ ...copy, title: `${source.title} (copy)`, ticketId: `${project?.key}-${counter!.value}`, history: [{ event: "Cloned", createdAt: new Date() }] }); return res.status(201).json({ ticket }); });
 

@@ -1,4 +1,5 @@
 import { apiCatalog } from "./apiCatalog.js";
+import { permissionForEndpoint, type Permission } from "./constants/permissions.js";
 import { rolesForEndpoint } from "./middleware/access.js";
 import type { UserRole } from "./models/User.js";
 
@@ -76,7 +77,7 @@ export function catalogEndpointFor(method: string, path: string) {
   return null;
 }
 
-export function aiEndpointsForRole(role: UserRole): AiEndpoint[] {
+export function aiEndpointsForRole(role: UserRole, permissions: Permission[] = []): AiEndpoint[] {
   return Object.entries(apiCatalog.groups).flatMap(([group, endpoints]) =>
     endpoints.filter((endpoint) => !internalToolEndpoints.has(endpoint)).map((endpoint) => {
       const [method, path] = endpoint.split(" ") as [string, string];
@@ -88,15 +89,16 @@ export function aiEndpointsForRole(role: UserRole): AiEndpoint[] {
         roles,
         requiresConfirmation: method === "DELETE" || destructiveKeys.has(endpoint),
       };
-    }).filter((endpoint) => endpoint.roles.includes(role)),
+    }).filter((endpoint) => endpoint.roles.includes(role) || Boolean(permissionForEndpoint(endpoint.method, endpoint.path) && permissions.includes(permissionForEndpoint(endpoint.method, endpoint.path)!))),
   );
 }
 
-export function canRoleAccessAiEndpoint(role: UserRole, method: string, path: string) {
+export function canRoleAccessAiEndpoint(role: UserRole, method: string, path: string, permissions: Permission[] = []) {
   const normalizedPath = normalizeAiPath(path).split("?")[0] ?? "/";
   const catalogEndpoint = catalogEndpointFor(method, normalizedPath);
   if (!catalogEndpoint) return { allowed: false, roles: [] as UserRole[], endpoint: null };
   const [catalogMethod, catalogPath] = catalogEndpoint.endpoint.split(" ") as [string, string];
   const roles = rolesForEndpoint(catalogMethod, catalogPath);
-  return { allowed: roles.includes(role), roles, endpoint: catalogEndpoint.endpoint };
+  const permission = permissionForEndpoint(catalogMethod, catalogPath);
+  return { allowed: roles.includes(role) || Boolean(permission && permissions.includes(permission)), roles, endpoint: catalogEndpoint.endpoint };
 }

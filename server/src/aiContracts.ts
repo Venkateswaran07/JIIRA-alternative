@@ -1,4 +1,5 @@
 import { aiEndpointsForRole, catalogEndpointFor } from "./aiAccess.js";
+import type { Permission } from "./constants/permissions.js";
 import type { UserRole } from "./models/User.js";
 
 export type AiMutationContract = {
@@ -25,10 +26,12 @@ const contracts: Record<string, Omit<AiMutationContract, "endpoint">> = {
   "POST /companies/:companyId/groups": { body: "{ name: string (min 2), description?: string }", prerequisites: "Use a company id returned by GET /companies." },
   "PATCH /companies/:companyId/groups/:id": { body: "Any subset of { name?: string (min 2), description?: string }", prerequisites: "Use the company id and group id returned by GET /companies/:companyId/groups." },
   "PUT /companies/:companyId/groups/:id/members": { body: "{ userIds: string[] }", prerequisites: "Read GET /companies/:companyId/members and GET /companies/:companyId/groups first. Every user id must belong to the organization; the supplied array replaces the full group membership." },
-  "PUT /companies/:companyId/groups/:id/workspaces": { body: "{ grants: Array<{ workspace: string, role: admin|manager|engineer|designer }> }", prerequisites: "Read the organization's groups and workspaces first. Every workspace id must belong to the organization; the supplied array replaces all workspace grants for the group." },
-  "POST /team": { body: "{ name: string (min 2), email: valid email, role: admin|manager|engineer|designer, skills: string[], availability: number 0..1, capacity: number >= 0, avatarColor: string }" },
-  "PATCH /users/:id": { body: "Any subset of { name: string (min 2), role: admin|manager|engineer|designer, skills: string[], availability: number 0..1, capacity: number >= 0, avatarColor: string }", prerequisites: "Use a user id returned by GET /users." },
-  "POST /invitations": { body: "{ name: string (min 2), email: valid email, role?: admin|manager|engineer|designer (default engineer), capacity?: number >= 0 (default 32) }" },
+  "PUT /companies/:companyId/groups/:id/workspaces": { body: "{ grants: Array<{ workspace: string, role: workspace role slug }> }", prerequisites: "Read the organization's groups and workspaces first. Every workspace id and role slug must belong to the organization; the supplied array replaces all workspace grants for the group." },
+  "POST /roles": { body: "{ name: string (min 2), description?: string, permissions: permission keys[] }", prerequisites: "Read GET /roles first. The role is created for the current workspace." },
+  "PATCH /roles/:id": { body: "Any subset of { name?: string (min 2), description?: string, permissions?: permission keys[], rank?: number 1..99 }", prerequisites: "Use a role id returned by GET /roles. The Administrator role cannot be reduced." },
+  "POST /team": { body: "{ name: string (min 2), email: valid email, role: workspace role slug, skills: string[], availability: number 0..1, capacity: number >= 0, avatarColor: string }" },
+  "PATCH /users/:id": { body: "Any subset of { name: string (min 2), role: workspace role slug, skills: string[], availability: number 0..1, capacity: number >= 0, avatarColor: string }", prerequisites: "Use a user id returned by GET /users and a role slug returned by GET /roles." },
+  "POST /invitations": { body: "{ name: string (min 2), email: valid email, role?: workspace role slug (default engineer), capacity?: number >= 0 (default 32) }", prerequisites: "Use a role slug returned by GET /roles." },
   "POST /projects": { body: "{ key: string (2..12), name: string (min 2), description: string (min 5), status?: planning|active|paused|done, progress?: number 0..100, riskLevel?: low|medium|high|critical, activeSprint?: string, members?: string[] }" },
   "PATCH /projects/:id": { body: "Any subset of POST /projects fields.", prerequisites: "Use a project id returned by GET /projects. Member ids must belong to the workspace." },
   "PUT /projects/:id/members": { body: "{ userIds: string[] }", prerequisites: "Use a project id from GET /projects and active user ids from GET /users." },
@@ -92,6 +95,7 @@ const noBodyEndpoints = new Set([
   "POST /notifications/read-all",
   "DELETE /integrations/:kind/:id",
   "DELETE /companies/:companyId/groups/:id",
+  "DELETE /roles/:id",
 ]);
 
 export function mutationContractFor(method: string, path: string): AiMutationContract | null {
@@ -103,9 +107,9 @@ export function mutationContractFor(method: string, path: string): AiMutationCon
   return null;
 }
 
-export function mutationContractGuidanceForRole(role: UserRole) {
+export function mutationContractGuidanceForRole(role: UserRole, permissions: Permission[] = []) {
   const seen = new Set<string>();
-  return aiEndpointsForRole(role)
+  return aiEndpointsForRole(role, permissions)
     .filter((endpoint) => endpoint.method !== "GET")
     .flatMap((endpoint) => {
       const contract = mutationContractFor(endpoint.method, endpoint.path);

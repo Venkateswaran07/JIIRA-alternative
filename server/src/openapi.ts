@@ -23,7 +23,7 @@ const aiEndpointSchema = {
     method: { type: "string", example: "DELETE" },
     path: { type: "string", example: "/tickets/:id" },
     group: { type: "string", example: "tickets" },
-    roles: { type: "array", items: { type: "string", enum: ["admin", "manager", "engineer", "designer"] } },
+    roles: { type: "array", items: { type: "string" }, description: "Built-in or custom workspace role slugs allowed for this endpoint." },
     requiresConfirmation: { type: "boolean", description: "True when AI must ask for explicit user confirmation before execution." },
   },
 };

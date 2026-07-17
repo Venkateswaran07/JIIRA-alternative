@@ -89,7 +89,7 @@ export async function executeAiRequest(req: AuthRequest, input: unknown): Promis
   const path = normalizeAiPath(parsed.data.path);
   if (path.startsWith("/ai/execute")) return { status: 400, payload: { message: "AI execution cannot call itself" } };
 
-  const access = canRoleAccessAiEndpoint(req.user!.role!, method, path);
+  const access = canRoleAccessAiEndpoint(req.user!.role!, method, path, req.user!.permissions || []);
   if (!access.allowed) {
     return {
       status: 403,
@@ -145,7 +145,7 @@ export async function executeAiRequest(req: AuthRequest, input: unknown): Promis
 router.get("/endpoints", (req: AuthRequest, res) => {
   return res.json({
     catalogVersion: apiCatalog.version,
-    endpoints: aiEndpointsForRole(req.user!.role!),
+    endpoints: aiEndpointsForRole(req.user!.role!, req.user!.permissions || []),
   });
 });
 
@@ -402,9 +402,9 @@ router.post("/chat", async (req, res) => {
   };
 
   const userRole = authReq.user!.role!;
-  const endpoints = aiEndpointsForRole(userRole);
+  const endpoints = aiEndpointsForRole(userRole, authReq.user!.permissions || []);
   const endpointList = endpoints.map((ep) => `${ep.method} ${ep.path}${ep.requiresConfirmation ? " [requires confirmation]" : ""}`).join("\n");
-  const writeContracts = mutationContractGuidanceForRole(userRole);
+  const writeContracts = mutationContractGuidanceForRole(userRole, authReq.user!.permissions || []);
 
   const systemPrompt = [
     "You are the I-TRACK project-management assistant. You operate as the authenticated user.",

@@ -12,13 +12,14 @@ import { Project } from "../models/Project.js";
 import { Session } from "../models/Operational.js";
 import { User } from "../models/User.js";
 import { Invitation, OrganizationMembership } from "../models/WorkspaceAccess.js";
+import { WorkspaceRole } from "../models/Role.js";
 import { sendInvitationEmail } from "../services/mail.js";
+import { ensureWorkspaceRoles } from "../services/roles.js";
 import { hashToken, membershipsFor, pendingInvitationsFor, publicOrganization, publicUser, sessionResponse } from "../services/sessionAuth.js";
 
 const router = Router();
 const INVITE_TTL_MS = 7 * 86400_000;
-const roles = ["admin", "manager", "engineer", "designer"] as const;
-const invitationBody = z.object({ name: z.string().min(2), email: z.string().email(), role: z.enum(roles).default("engineer"), capacity: z.number().min(0).default(32) });
+const invitationBody = z.object({ name: z.string().min(2), email: z.string().email(), role: z.string().min(1).default("engineer"), capacity: z.number().min(0).default(32) });
 
 function slugify(value: string) { return value.toLowerCase().trim().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "").slice(0, 48) || "workspace"; }
 async function uniqueSlug(name: string) { const base = slugify(name); let slug = base; let index = 2; while (await Organization.exists({ slug })) slug = `${base}-${index++}`; return slug; }
@@ -89,6 +90,8 @@ router.get("/invitations/pending", requireAuth, async (req: AuthRequest, res) =>
 router.post("/invitations", requireAuth, requireWorkspace, async (req: AuthRequest, res) => {
   if (req.user!.role !== "admin") return res.status(403).json({ message: "Only admins can invite teammates" });
   const parsed = invitationBody.safeParse(req.body); if (!parsed.success) return res.status(400).json({ message: "Name, valid email, role, and capacity are required" });
+  await ensureWorkspaceRoles(req.user!.organizationId!);
+  if (!(await WorkspaceRole.exists({ organization: req.user!.organizationId, slug: parsed.data.role }))) return res.status(400).json({ message: "Role does not exist in this workspace" });
   const email = parsed.data.email.toLowerCase();
   const existingUser = await User.findOne({ email });
   if (existingUser && await OrganizationMembership.exists({ user: existingUser._id, organization: req.user!.organizationId })) return res.status(409).json({ message: "This user already belongs to the workspace" });

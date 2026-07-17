@@ -5,13 +5,14 @@ import { invalidateWorkspaceMembership, requireAuth, type AuthRequest } from "..
 import { Company, CompanyGroup, CompanyGroupMember, CompanyMembership, WorkspaceGroupAccess } from "../models/Company.js";
 import { Organization } from "../models/Organization.js";
 import { OrganizationMembership } from "../models/WorkspaceAccess.js";
+import { WorkspaceRole } from "../models/Role.js";
+import { ensureWorkspaceRoles } from "../services/roles.js";
 
 const router = Router();
 router.use(requireAuth);
 
 const companyId = (req: AuthRequest) => String(req.params.companyId);
 const userId = (req: AuthRequest) => req.user!.userId;
-const roles = ["admin", "manager", "engineer", "designer"] as const;
 
 async function companyMembership(req: AuthRequest) {
   return CompanyMembership.findOne({ company: companyId(req), user: userId(req), status: "active" });
@@ -143,7 +144,7 @@ router.put("/companies/:companyId/groups/:id/members", async (req: AuthRequest, 
 
 router.put("/companies/:companyId/groups/:id/workspaces", async (req: AuthRequest, res) => {
   if (!(await requireCompany(req, res, true))) return;
-  const body = parseOr400(z.object({ grants: z.array(z.object({ workspace: z.string(), role: z.enum(roles) })) }), req.body, res);
+  const body = parseOr400(z.object({ grants: z.array(z.object({ workspace: z.string(), role: z.string().min(1) })) }), req.body, res);
   if (!body) return;
   const [group, workspaceCount] = await Promise.all([
     CompanyGroup.findOne({ _id: req.params.id, company: companyId(req) }),
@@ -151,6 +152,9 @@ router.put("/companies/:companyId/groups/:id/workspaces", async (req: AuthReques
   ]);
   if (!group) return res.status(404).json({ message: "Group not found" });
   if (workspaceCount !== new Set(body.grants.map((grant) => grant.workspace)).size) return res.status(400).json({ message: "Every workspace must belong to the organization" });
+  await Promise.all([...new Set(body.grants.map((grant) => grant.workspace))].map((workspace) => ensureWorkspaceRoles(workspace)));
+  const validRoles = await Promise.all(body.grants.map((grant) => WorkspaceRole.exists({ organization: grant.workspace, slug: grant.role })));
+  if (validRoles.some((valid) => !valid)) return res.status(400).json({ message: "Every workspace access grant must use a role defined in that workspace" });
   const [previousGrants, members] = await Promise.all([WorkspaceGroupAccess.find({ group: group._id }), CompanyGroupMember.find({ group: group._id })]);
   await WorkspaceGroupAccess.deleteMany({ group: group._id });
   if (body.grants.length) await WorkspaceGroupAccess.insertMany(body.grants.map((grant) => ({ ...grant, group: group._id })));

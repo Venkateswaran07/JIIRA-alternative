@@ -25,6 +25,10 @@ Roles:
 - `engineer`
 - `designer`
 
+Each workspace also supports custom role slugs. Workspace administrators can create
+custom roles and edit the permission set assigned to built-in or custom roles. The
+built-in role names above are seeded automatically when a workspace is first used.
+
 Role groups:
 
 - `all`: `admin`, `manager`, `engineer`, `designer`
@@ -117,6 +121,21 @@ Access tokens are scoped to one active workspace. Switching workspaces returns r
 | `POST` | `/invitations` | admin | No |
 | `POST` | `/invitations/:id/resend` | admin | No |
 | `DELETE` | `/invitations/:id` | admin | Requires confirmation |
+
+## Roles and permissions
+
+| Method | Endpoint | Access | Confirmation |
+| --- | --- | --- | --- |
+| `GET` | `/roles` | all | No |
+| `POST` | `/roles` | admin | No |
+| `PATCH` | `/roles/:id` | admin | No |
+| `DELETE` | `/roles/:id` | admin | Requires confirmation |
+
+`POST /roles` accepts `name`, optional `description`, and a `permissions` array.
+`PATCH /roles/:id` updates the role name, description, and permissions. Built-in
+roles cannot be deleted; the Administrator role always retains full access. A
+custom role cannot be deleted while it is assigned to users, invitations, or
+organization-group workspace grants.
 
 ## Projects
 

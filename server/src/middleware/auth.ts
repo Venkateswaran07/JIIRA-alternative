@@ -7,8 +7,10 @@ import type { UserRole } from "../models/User.js";
 import { OrganizationMembership } from "../models/WorkspaceAccess.js";
 import { CompanyGroupMember, CompanyMembership, WorkspaceGroupAccess } from "../models/Company.js";
 import { Organization } from "../models/Organization.js";
+import { permissionsForRole, rolePriority } from "../services/roles.js";
+import { permissionForEndpoint, type Permission } from "../constants/permissions.js";
 
-export type AuthUser = { userId: string; companyId?: string; workspaceId?: string; organizationId?: string; membershipId?: string; workspaceAccessSource?: "direct" | "group" | "organization"; role?: UserRole; email: string };
+export type AuthUser = { userId: string; companyId?: string; workspaceId?: string; organizationId?: string; membershipId?: string; workspaceAccessSource?: "direct" | "group" | "organization"; role?: UserRole; permissions?: Permission[]; email: string };
 export type AuthRequest = Request & { user?: AuthUser };
 
 type CachedMembership = { id: string; role: UserRole; accessSource: "direct" | "group" | "organization"; expiresAt: number };
@@ -24,8 +26,6 @@ function membershipCacheKey(userId: string, organizationId: string) {
   return `${userId}:${organizationId}`;
 }
 
-const roleRank: Record<UserRole, number> = { designer: 1, engineer: 2, manager: 3, admin: 4 };
-
 export async function effectiveWorkspaceMembership(userId: string, workspaceId: string) {
   const direct = await OrganizationMembership.findOne({ user: userId, organization: workspaceId, status: "active" });
   if (direct) return { id: direct.id, role: direct.role as UserRole, organization: workspaceId, accessSource: "direct" as const };
@@ -38,7 +38,8 @@ export async function effectiveWorkspaceMembership(userId: string, workspaceId: 
   const groupIds = groupMemberships.map((item: any) => String(item.group));
   if (!groupIds.length) return null;
   const grants = await WorkspaceGroupAccess.find({ workspace: workspaceId, group: { $in: groupIds } });
-  const best = grants.sort((left: any, right: any) => (roleRank[right.role as UserRole] || 0) - (roleRank[left.role as UserRole] || 0))[0];
+  const ranked = await Promise.all(grants.map(async (grant: any) => ({ grant, rank: await rolePriority(workspaceId, grant.role) })));
+  const best = ranked.sort((left, right) => right.rank - left.rank)[0]?.grant;
   return best ? { id: `group:${best.id}`, role: best.role as UserRole, organization: workspaceId, accessSource: "group" as const } : null;
 }
 
@@ -70,6 +71,7 @@ export async function requireWorkspace(req: AuthRequest, res: Response, next: Ne
     req.user.membershipId = cached.id;
     req.user.role = cached.role;
     req.user.workspaceAccessSource = cached.accessSource;
+    req.user.permissions = await permissionsForRole(req.user.organizationId, cached.role);
     return next();
   }
   if (cached) workspaceMembershipCache.delete(cacheKey);
@@ -89,6 +91,7 @@ export async function requireWorkspace(req: AuthRequest, res: Response, next: Ne
   req.user.membershipId = membership.id;
   req.user.role = membership.role;
   req.user.workspaceAccessSource = membership.accessSource;
+  req.user.permissions = await permissionsForRole(req.user.organizationId, membership.role);
   const ttlMs = membershipCacheTtlMs();
   if (ttlMs > 0) workspaceMembershipCache.set(cacheKey, { id: membership.id, role: membership.role, accessSource: membership.accessSource, expiresAt: Date.now() + ttlMs });
   return next();
@@ -97,7 +100,24 @@ export async function requireWorkspace(req: AuthRequest, res: Response, next: Ne
 export function requireRole(roles: UserRole[]) {
   return (req: AuthRequest, res: Response, next: NextFunction) => {
     if (!req.user) return res.status(401).json({ message: "Missing authenticated user" });
+    const permission = permissionForEndpoint(req.method, req.path);
+    if (permission) {
+      if (!req.user.permissions?.includes(permission)) return res.status(403).json({ message: "You do not have permission to perform this action", permission });
+      return next();
+    }
     if (!req.user.role || !roles.includes(req.user.role)) return res.status(403).json({ message: "You do not have permission to perform this action" });
+    return next();
+  };
+}
+
+export function hasPermission(user: AuthUser | undefined, permission: Permission) {
+  return Boolean(user?.permissions?.includes(permission));
+}
+
+export function requirePermission(permission: Permission) {
+  return (req: AuthRequest, res: Response, next: NextFunction) => {
+    if (!req.user) return res.status(401).json({ message: "Missing authenticated user" });
+    if (!hasPermission(req.user, permission)) return res.status(403).json({ message: "You do not have permission to perform this action", permission });
     return next();
   };
 }
