@@ -1,5 +1,9 @@
 import { Router, type Request } from "express";
-import OpenAI from "openai";
+import { OpenAI } from "openai";
+import type {
+  ChatCompletionMessageParam,
+  ChatCompletionTool,
+} from "openai/resources/chat/completions";
 import { z } from "zod";
 import { aiEndpointsForRole, canRoleAccessAiEndpoint, isConfirmationRequired, normalizeAiPath } from "../aiAccess.js";
 import { mutationContractFor, mutationContractGuidanceForRole } from "../aiContracts.js";
@@ -356,13 +360,13 @@ router.post("/chat", async (req, res) => {
     "- If POST /projects returns PROJECT_KEY_EXISTS or 409, ask for another key or generate a different key. Do not retry the same body.",
   ].join("\n");
 
-  const messages: OpenAI.Chat.Completions.ChatCompletionMessageParam[] = [
+  const messages: ChatCompletionMessageParam[] = [
     { role: "system", content: systemPrompt },
     ...(parsed.data.history ?? []).map((m) => ({ role: m.role as "user" | "assistant", content: m.content })),
     { role: "user", content: parsed.data.message },
   ];
 
-  const tools: OpenAI.Chat.Completions.ChatCompletionTool[] = [
+  const tools: ChatCompletionTool[] = [
     {
       type: "function",
       function: {
