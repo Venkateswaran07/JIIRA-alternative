@@ -4,5 +4,6 @@ dist/
 .env.*
 !.env.local.example
 !.env.example
+!client/.env.production
 client/dist/
 server/dist/

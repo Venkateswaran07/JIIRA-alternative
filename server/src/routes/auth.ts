@@ -1,5 +1,6 @@
 import bcrypt from "bcryptjs";
 import crypto from "node:crypto";
+import jwt from "jsonwebtoken";
 import { Router } from "express";
 import { z } from "zod";
 import { env } from "../config/env.js";
@@ -15,6 +16,12 @@ const router = Router();
 const credentials = z.object({ email: z.string().email(), password: z.string().min(8) });
 const registerSchema = credentials.extend({ name: z.string().min(2) });
 const notificationPreferencesSchema = z.object({ ticketAssignments: z.boolean(), mentionsAndComments: z.boolean(), sprintRiskAlerts: z.boolean(), weeklySummary: z.boolean() });
+const googleProfileSchema = z.object({
+  sub: z.string(),
+  email: z.string().email(),
+  email_verified: z.boolean(),
+  name: z.string().min(1),
+});
 
 async function preferredMembership(user: any, organizationId?: unknown) {
   if (organizationId) {
@@ -53,6 +60,78 @@ router.post("/login", async (req, res) => {
   const session = await sessionResponse(user, membership, req.get("user-agent"), res);
   void sendLoginEmail({ name: user.name, email: user.email }, { ipAddress: req.ip, userAgent: req.get("user-agent") });
   return res.json(session);
+});
+
+router.get("/google", (_req, res) => {
+  if (!env.googleClientId || !env.googleClientSecret) {
+    return res.status(503).json({ message: "Google sign-in is not configured" });
+  }
+  const state = jwt.sign({ purpose: "google-oauth" }, env.jwtSecret, { expiresIn: "10m" });
+  const query = new URLSearchParams({
+    client_id: env.googleClientId,
+    redirect_uri: env.googleRedirectUri,
+    response_type: "code",
+    scope: "openid email profile",
+    access_type: "online",
+    prompt: "select_account",
+    state,
+  });
+  return res.redirect(`https://accounts.google.com/o/oauth2/v2/auth?${query}`);
+});
+
+router.get("/google/callback", async (req, res) => {
+  const code = typeof req.query.code === "string" ? req.query.code : "";
+  const state = typeof req.query.state === "string" ? req.query.state : "";
+  const errorUrl = (message: string) => `${env.appUrl.replace(/\/+$/, "")}/login?error=${encodeURIComponent(message)}`;
+  if (!env.googleClientId || !env.googleClientSecret || !code || !state) {
+    return res.redirect(errorUrl("Google sign-in could not be completed"));
+  }
+  try {
+    const claims = jwt.verify(state, env.jwtSecret) as { purpose?: string };
+    if (claims.purpose !== "google-oauth") throw new Error("Invalid OAuth state");
+    const tokenResponse = await fetch("https://oauth2.googleapis.com/token", {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams({
+        code,
+        client_id: env.googleClientId,
+        client_secret: env.googleClientSecret,
+        redirect_uri: env.googleRedirectUri,
+        grant_type: "authorization_code",
+      }),
+    });
+    if (!tokenResponse.ok) throw new Error("Google token exchange failed");
+    const googleTokens = await tokenResponse.json() as { access_token?: string };
+    if (!googleTokens.access_token) throw new Error("Google access token is missing");
+    const profileResponse = await fetch("https://openidconnect.googleapis.com/v1/userinfo", {
+      headers: { Authorization: `Bearer ${googleTokens.access_token}` },
+    });
+    const profile = googleProfileSchema.parse(await profileResponse.json());
+    if (!profileResponse.ok || !profile.email_verified) throw new Error("Google email is not verified");
+
+    const email = profile.email.toLowerCase();
+    let user = await User.findOne({ email });
+    if (!user) {
+      user = await User.create({
+        name: profile.name,
+        email,
+        passwordHash: await bcrypt.hash(crypto.randomBytes(32).toString("base64url"), 10),
+        avatarColor: "#4285F4",
+      });
+      void sendRegistrationEmail({ name: user.name, email: user.email });
+    }
+    const membership = await preferredMembership(user);
+    const session = await sessionResponse(user, membership, req.get("user-agent"), res);
+    const fragment = new URLSearchParams({
+      token: session.token,
+      refreshToken: session.refreshToken,
+      next: session.next,
+    });
+    return res.redirect(`${env.appUrl.replace(/\/+$/, "")}/auth/google/callback#${fragment}`);
+  } catch (error) {
+    console.error("Google OAuth callback failed", error);
+    return res.redirect(errorUrl("Google sign-in failed. Please try again."));
+  }
 });
 
 router.post("/refresh", async (req, res) => {

@@ -25,7 +25,7 @@ import {
   XAxis,
   YAxis,
 } from "recharts";
-import { api, apiFetch, clearSession, getToken, login, saveSession } from "../api";
+import { api, apiFetch, clearSession, getToken, googleLoginUrl, login, saveSession } from "../api";
 import { resourceKinds } from "../constants/resources";
 import type { NotificationPreferences, Role, Ticket, TicketStatus, Toast } from "../types/domain";
 import { ApiGate, useWorkspace } from "./workspace";
@@ -81,6 +81,7 @@ export function App() {
         <Routes>
           <Route path="/" element={<LandingPage />} />
           <Route path="/login" element={<AuthPageLive type="login" />} />
+          <Route path="/auth/google/callback" element={<GoogleAuthCallback />} />
           <Route path="/register" element={<AuthPageLive type="register" />} />
           <Route
             path="/forgot-password"
@@ -6812,6 +6813,10 @@ function AuthPageLive({ type }: { type: string }) {
   const [busy, setBusy] = useState(false);
   const token = searchParams.get("token") || "";
   const tokenFlow = type === "reset-password" || type === "accept-invite";
+  useEffect(() => {
+    const oauthError = searchParams.get("error");
+    if (oauthError) setError(oauthError);
+  }, [searchParams]);
   const titles: Record<string, string> = {
     login: "Welcome back",
     register: "Create your account",
@@ -6997,6 +7002,15 @@ function AuthPageLive({ type }: { type: string }) {
                       ? "Accept invitation"
                   : "Continue"}
           </button>
+          {(type === "login" || type === "register") && (
+            <>
+              <div className="auth-divider"><span>or</span></div>
+              <a className="btn wide google-auth-button" href={googleLoginUrl()}>
+                <span className="google-mark" aria-hidden="true">G</span>
+                Continue with Google
+              </a>
+            </>
+          )}
           {type === "login" && (
             <p className="auth-switch">
               <NavLink to="/forgot-password">Forgot password?</NavLink> ·{" "}
@@ -7005,6 +7019,30 @@ function AuthPageLive({ type }: { type: string }) {
           )}
         </form>
       </section>
+    </div>
+  );
+}
+
+function GoogleAuthCallback() {
+  const nav = useNavigate();
+  const [error, setError] = useState("");
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.hash.slice(1));
+    const token = params.get("token");
+    const refreshToken = params.get("refreshToken");
+    const next = params.get("next") || "/dashboard";
+    if (!token || !refreshToken) {
+      setError("Google sign-in did not return a valid session.");
+      return;
+    }
+    saveSession({ token, refreshToken });
+    window.history.replaceState(null, "", "/auth/google/callback");
+    nav(next, { replace: true });
+    window.location.reload();
+  }, [nav]);
+  return (
+    <div className="app-loading">
+      {error ? <><Icons.CircleAlert /><p>{error}</p><NavLink className="btn" to="/login">Back to sign in</NavLink></> : <><Icons.LoaderCircle className="spin" /><p>Finishing Google sign-in…</p></>}
     </div>
   );
 }

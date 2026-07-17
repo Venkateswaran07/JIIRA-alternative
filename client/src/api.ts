@@ -33,6 +33,10 @@ export function saveSession(session: { token: string; refreshToken: string }) {
   localStorage.setItem(REFRESH_TOKEN_KEY, session.refreshToken);
 }
 
+export function googleLoginUrl() {
+  return `${API_BASE}/auth/google`;
+}
+
 function isPublicAuthPath(path: string) {
   const normalized = path.split("?", 1)[0];
   return /^\/auth\/(login|register|refresh|logout|forgot-password|reset-password|accept-invite)$/.test(normalized);

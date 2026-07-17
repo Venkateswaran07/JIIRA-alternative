@@ -112,6 +112,7 @@ export function ApiGate({
   const publicPath = [
     "/",
     "/login",
+    "/auth/google/callback",
     "/register",
     "/forgot-password",
     "/reset-password",
