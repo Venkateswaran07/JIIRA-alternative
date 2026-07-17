@@ -4,6 +4,7 @@ import { z } from "zod";
 import { aiEndpointsForRole, canRoleAccessAiEndpoint, isConfirmationRequired, normalizeAiPath } from "../aiAccess.js";
 import { mutationContractFor } from "../aiContracts.js";
 import { env } from "../config/env.js";
+import { measureAsync } from "../lib/performance.js";
 import { requireAuth, requireRole, requireWorkspace, type AuthRequest } from "../middleware/auth.js";
 import { enforceApiAccess } from "../middleware/access.js";
 import { AuditEvent } from "../models/Operational.js";
@@ -53,54 +54,62 @@ function parseJsonPayload(raw: string) {
   }
 }
 
-router.get("/endpoints", (req: AuthRequest, res) => {
-  return res.json({ endpoints: aiEndpointsForRole(req.user!.role!) });
+const aiExecuteSchema = z.object({
+  method: z.enum(["GET", "POST", "PUT", "PATCH", "DELETE"]),
+  path: z.string().min(1),
+  body: z.unknown().optional(),
+  confirmed: z.boolean().default(false),
 });
 
-router.post("/execute", async (req: AuthRequest, res) => {
-  const parsed = z.object({
-    method: z.enum(["GET", "POST", "PUT", "PATCH", "DELETE"]),
-    path: z.string().min(1),
-    body: z.unknown().optional(),
-    confirmed: z.boolean().default(false),
-  }).safeParse(req.body);
-  if (!parsed.success) return res.status(400).json({ message: "Invalid AI endpoint execution request", issues: parsed.error.issues });
+type AiExecutionResult = { status: number; payload: unknown };
+
+export async function executeAiRequest(req: AuthRequest, input: unknown): Promise<AiExecutionResult> {
+  const parsed = aiExecuteSchema.safeParse(input);
+  if (!parsed.success) {
+    return { status: 400, payload: { message: "Invalid AI endpoint execution request", issues: parsed.error.issues } };
+  }
 
   const method = parsed.data.method;
   const path = normalizeAiPath(parsed.data.path);
-  if (path.startsWith("/ai/execute")) return res.status(400).json({ message: "AI execution cannot call itself" });
+  if (path.startsWith("/ai/execute")) return { status: 400, payload: { message: "AI execution cannot call itself" } };
 
   const access = canRoleAccessAiEndpoint(req.user!.role!, method, path);
   if (!access.allowed) {
-    return res.status(403).json({
-      message: "Your role cannot access this endpoint through AI",
-      allowedRoles: access.roles,
-    });
+    return {
+      status: 403,
+      payload: {
+        message: "Your role cannot access this endpoint through AI",
+        allowedRoles: access.roles,
+      },
+    };
   }
 
   if (isConfirmationRequired(method, path) && !parsed.data.confirmed) {
-    return res.status(409).json({
-      requiresConfirmation: true,
-      action: `${method} ${path}`,
-      message: "Confirm this destructive action before AI performs it.",
-    });
+    return {
+      status: 409,
+      payload: {
+        requiresConfirmation: true,
+        action: `${method} ${path}`,
+        message: "Confirm this destructive action before AI performs it.",
+      },
+    };
   }
 
   const url = new URL(`/api/v1${path}`, requestOrigin(req));
-  const response = await fetch(url, {
+  const response = await measureAsync("ai.execute.target_api", () => fetch(url, {
     method,
     headers: {
       authorization: req.headers.authorization ?? "",
       ...(method === "GET" || method === "DELETE" ? {} : { "content-type": "application/json" }),
     },
     body: method === "GET" || method === "DELETE" ? undefined : JSON.stringify(parsed.data.body ?? {}),
-  });
+  }), { method });
   const text = await response.text();
   const contentType = response.headers.get("content-type") ?? "application/json";
   const payload = contentType.includes("application/json") && text ? JSON.parse(text) : text;
 
   if (method !== "GET") {
-    await AuditEvent.create({
+    await measureAsync("ai.execute.audit", () => AuditEvent.create({
       organization: req.user!.organizationId,
       actor: req.user!.userId,
       action: "ai.endpoint_executed",
@@ -111,10 +120,19 @@ router.post("/execute", async (req: AuthRequest, res) => {
         confirmed: parsed.data.confirmed,
         status: response.status,
       },
-    });
+    }), { method });
   }
 
-  return res.status(response.status).json(payload);
+  return { status: response.status, payload };
+}
+
+router.get("/endpoints", (req: AuthRequest, res) => {
+  return res.json({ endpoints: aiEndpointsForRole(req.user!.role!) });
+});
+
+router.post("/execute", async (req: AuthRequest, res) => {
+  const result = await executeAiRequest(req, req.body);
+  return res.status(result.status).json(result.payload);
 });
 
 router.get("/models", async (_req, res) => {
@@ -314,7 +332,8 @@ router.post("/chat", async (req, res) => {
     "- Never expose credentials, tokens, or internal secrets.",
     "- Report backend errors accurately — include status codes and messages.",
     "- Never retry a failed create, update, or delete request with the same arguments. Explain the failure or ask for corrected information.",
-    "- Before every POST, PUT, PATCH, or DELETE operation, call get_itrack_api_contract with the concrete method and path, follow its body contract and prerequisites exactly, then call execute_itrack_api.",
+    "- Prefer GET /dashboard when project, sprint, ticket, and user context is needed together; do not fetch those lists separately unless the dashboard lacks a required field.",
+    "- Use get_itrack_api_contract when you need the exact fields or prerequisites for a write. The backend always validates access, confirmation, and request bodies before execution.",
     "- When you need to call an I-TRACK API, use the execute_itrack_api tool.",
   ].join("\n");
 
@@ -329,7 +348,7 @@ router.post("/chat", async (req, res) => {
       type: "function",
       function: {
         name: "get_itrack_api_contract",
-        description: "Get the exact request-body contract and prerequisites for an I-TRACK write operation. Required before POST, PUT, PATCH, or DELETE.",
+        description: "Get the exact request-body contract and prerequisites for an I-TRACK write operation when the required fields are unclear.",
         parameters: {
           type: "object",
           required: ["method", "path"],
@@ -344,7 +363,7 @@ router.post("/chat", async (req, res) => {
       type: "function",
       function: {
         name: "execute_itrack_api",
-        description: "Execute an allowed I-TRACK backend operation as the signed-in user. Before any write operation, inspect its contract with get_itrack_api_contract.",
+        description: "Execute an allowed I-TRACK backend operation as the signed-in user. Access, destructive-action confirmation, and request bodies are validated by the backend.",
         parameters: {
           type: "object",
           required: ["method", "path"],
@@ -360,9 +379,8 @@ router.post("/chat", async (req, res) => {
 
   try {
     const client = getClient();
-    const model = env.openaiModel || "grok-3-mini";
+    const model = env.openaiChatModel || "grok-3-mini";
     const allToolCalls: { name: string; arguments: unknown; result: unknown; error?: boolean }[] = [];
-    const inspectedContracts = new Set<string>();
     const MAX_ITERATIONS = 7;
     const fallbackReply = () => allToolCalls.some((call) => call.error)
       ? "One or more requests failed. Please review the API error and try again with corrected information."
@@ -370,12 +388,12 @@ router.post("/chat", async (req, res) => {
         ? "I finished the requested API operations."
         : "I couldn't generate a response. Please try again.";
 
-    let response = await client.chat.completions.create({
+    let response = await measureAsync("ai.provider.initial", () => client.chat.completions.create({
       model,
       temperature: 0.3,
       messages,
       tools,
-    });
+    }));
 
     for (let iteration = 0; iteration < MAX_ITERATIONS; iteration++) {
       const choice = response.choices[0];
@@ -386,6 +404,22 @@ router.post("/chat", async (req, res) => {
 
       if (choice.finish_reason !== "tool_calls" || !assistantMessage.tool_calls?.length) {
         return finish({ reply: assistantMessage.content || fallbackReply(), ...(allToolCalls.length ? { toolCalls: allToolCalls } : {}) });
+      }
+
+      const parallelReads = new Map<string, Promise<AiExecutionResult>>();
+      for (const toolCall of assistantMessage.tool_calls) {
+        if (toolCall.type !== "function" || toolCall.function.name !== "execute_itrack_api") continue;
+        try {
+          const args = JSON.parse(toolCall.function.arguments) as { method?: string; path?: string; body?: Record<string, unknown> };
+          if (args.method !== "GET" || typeof args.path !== "string") continue;
+          sendEvent({ type: "tool_start", id: toolCall.id, name: toolCall.function.name, arguments: args });
+          parallelReads.set(toolCall.id, executeAiRequest(authReq, { ...args, confirmed: true }).catch((error) => ({
+            status: 500,
+            payload: { message: error instanceof Error ? error.message : "AI read execution failed" },
+          })));
+        } catch {
+          // The normal tool-processing path below reports malformed arguments.
+        }
       }
 
       for (const toolCall of assistantMessage.tool_calls) {
@@ -409,7 +443,6 @@ router.post("/chat", async (req, res) => {
           const result = contract
             ? { endpoint: contract.endpoint, body: contract.body, ...(contract.prerequisites ? { prerequisites: contract.prerequisites } : {}) }
             : { error: true, message: "No write contract exists for this method and path" };
-          if (contract) inspectedContracts.add(contract.endpoint);
           allToolCalls.push({ name: toolCall.function.name, arguments: contractArgs, result, ...(!contract ? { error: true } : {}) });
           sendEvent({ type: "tool_result", id: toolCall.id, ok: Boolean(contract), status: contract ? 200 : 404 });
           messages.push({ role: "tool", tool_call_id: toolCall.id, content: JSON.stringify(result) });
@@ -434,21 +467,6 @@ router.post("/chat", async (req, res) => {
         const { method, path, body } = args;
         const actionKey = `${method} ${path}`;
 
-        if (method !== "GET") {
-          const contract = mutationContractFor(method, path);
-          if (!contract || !inspectedContracts.has(contract.endpoint)) {
-            const result = {
-              error: true,
-              message: contract
-                ? `Inspect ${contract.endpoint} with get_itrack_api_contract before executing it.`
-                : "This write operation has no registered AI request contract.",
-            };
-            allToolCalls.push({ name: toolCall.function.name, arguments: args, result, error: true });
-            messages.push({ role: "tool", tool_call_id: toolCall.id, content: JSON.stringify(result) });
-            continue;
-          }
-        }
-
         if (isConfirmationRequired(method, path) && parsed.data.confirmed?.action !== actionKey) {
           return finish({
             reply: `I need your confirmation to perform a destructive action: **${actionKey}**. Please confirm to proceed.`,
@@ -462,42 +480,29 @@ router.post("/chat", async (req, res) => {
           });
         }
 
-        sendEvent({ type: "tool_start", id: toolCall.id, name: toolCall.function.name, arguments: args });
+        const pendingRead = parallelReads.get(toolCall.id);
+        if (!pendingRead) sendEvent({ type: "tool_start", id: toolCall.id, name: toolCall.function.name, arguments: args });
 
-        const executeUrl = new URL("/api/v1/ai/execute", requestOrigin(req));
-        const executeRes = await fetch(executeUrl, {
-          method: "POST",
-          headers: {
-            authorization: req.headers.authorization ?? "",
-            "content-type": "application/json",
-          },
-          body: JSON.stringify({ method, path, body, confirmed: true }),
-        });
+        const execution = pendingRead
+          ? await pendingRead
+          : await executeAiRequest(authReq, { method, path, body, confirmed: true });
+        const executionOk = execution.status >= 200 && execution.status < 300;
+        const result = executionOk
+          ? execution.payload
+          : { error: true, status: execution.status, details: execution.payload };
 
-        const resultText = await executeRes.text();
-        let payload: unknown;
-        try {
-          payload = JSON.parse(resultText);
-        } catch {
-          payload = resultText;
-        }
-
-        const result = executeRes.ok
-          ? payload
-          : { error: true, status: executeRes.status, details: payload };
-
-        allToolCalls.push({ name: toolCall.function.name, arguments: args, result, ...(!executeRes.ok ? { error: true } : {}) });
-        sendEvent({ type: "tool_result", id: toolCall.id, ok: executeRes.ok, status: executeRes.status });
+        allToolCalls.push({ name: toolCall.function.name, arguments: args, result, ...(!executionOk ? { error: true } : {}) });
+        sendEvent({ type: "tool_result", id: toolCall.id, ok: executionOk, status: execution.status });
         messages.push({ role: "tool", tool_call_id: toolCall.id, content: typeof result === "string" ? result : JSON.stringify(result) });
       }
 
 
-      response = await client.chat.completions.create({
+      response = await measureAsync("ai.provider.followup", () => client.chat.completions.create({
         model,
         temperature: 0.3,
         messages,
         tools,
-      });
+      }));
     }
 
     const finalChoice = response.choices[0];

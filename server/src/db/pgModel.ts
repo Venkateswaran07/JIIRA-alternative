@@ -1,6 +1,7 @@
 import crypto from "node:crypto";
 import type { PoolClient, QueryResult } from "pg";
 import { postgres } from "../config/postgres.js";
+import { measureAsync } from "../lib/performance.js";
 
 type Row = Record<string, any>;
 type Filter = Record<string, any>;
@@ -133,7 +134,7 @@ class PgQuery<T> implements PromiseLike<T> {
     else result = await this.model.findRows(this.filter, this.kind === "one", this.sortValue, this.skipValue, this.limitValue);
     if (result == null) return result as T;
     const documents = Array.isArray(result) ? result : [result];
-    for (const population of this.populateValues) await this.model.populateDocuments(documents, population.spec, population.select);
+    await Promise.all(this.populateValues.map((population) => this.model.populateDocuments(documents, population.spec, population.select)));
     const projected = this.selectValue ? documents.map((document) => projectObject(document, this.selectValue)) : documents;
     const finalValue = this.leanValue ? projected.map((document) => typeof document.toObject === "function" ? document.toObject() : document) : projected;
     return (Array.isArray(result) ? finalValue : finalValue[0] ?? null) as T;
@@ -166,6 +167,10 @@ export class PgModel {
   private property(column: string) {
     const mapped = Object.entries(this.config.columnMap || {}).find(([, value]) => value === column)?.[0];
     return mapped || camel(column);
+  }
+
+  private query(operation: string, sql: string, values: any[] = []) {
+    return measureAsync(`db.${operation}`, () => postgres.query(sql, values), { table: this.config.table });
   }
 
   private hydrate(row: Row) {
@@ -265,7 +270,7 @@ export class PgModel {
     const where = this.where(filter);
     const max = one ? 1 : limit;
     const pagination = `${max != null ? ` LIMIT ${Math.max(0, max)}` : ""}${skip ? ` OFFSET ${Math.max(0, skip)}` : ""}`;
-    const result = await postgres.query(`SELECT * FROM "${this.config.table}" WHERE ${where.sql}${this.order(sort)}${pagination}`, where.values);
+    const result = await this.query("find", `SELECT * FROM "${this.config.table}" WHERE ${where.sql}${this.order(sort)}${pagination}`, where.values);
     const documents = result.rows.map((row) => this.hydrate(row));
     return one ? documents[0] ?? null : documents;
   }
@@ -278,7 +283,7 @@ export class PgModel {
     const values = this.writableValues(input, true);
     const columns = values.map((item) => `"${item.column}"`);
     const placeholders = values.map((_item, index) => `$${index + 1}`);
-    const result = await postgres.query(`INSERT INTO "${this.config.table}" (${columns.join(", ")}) VALUES (${placeholders.join(", ")}) RETURNING *`, values.map((item) => item.value));
+    const result = await this.query("create", `INSERT INTO "${this.config.table}" (${columns.join(", ")}) VALUES (${placeholders.join(", ")}) RETURNING *`, values.map((item) => item.value));
     return this.hydrate(result.rows[0]);
   }
 
@@ -302,8 +307,8 @@ export class PgModel {
     return this.hydrate((result as QueryResult).rows[0]);
   }
 
-  async countDocuments(filter: Filter = {}) { const where = this.where(filter); const result = await postgres.query(`SELECT count(*)::int AS count FROM "${this.config.table}" WHERE ${where.sql}`, where.values); return result.rows[0].count; }
-  async exists(filter: Filter) { const where = this.where(filter); const result = await postgres.query(`SELECT id FROM "${this.config.table}" WHERE ${where.sql} LIMIT 1`, where.values); return result.rows[0] ? { _id: result.rows[0].id } : null; }
+  async countDocuments(filter: Filter = {}) { const where = this.where(filter); const result = await this.query("count", `SELECT count(*)::int AS count FROM "${this.config.table}" WHERE ${where.sql}`, where.values); return result.rows[0].count; }
+  async exists(filter: Filter) { const where = this.where(filter); const result = await this.query("exists", `SELECT id FROM "${this.config.table}" WHERE ${where.sql} LIMIT 1`, where.values); return result.rows[0] ? { _id: result.rows[0].id } : null; }
 
   findOneAndUpdate(filter: Filter, update: Update, options: Row = {}) { return new PgQuery<PgDocument | null>(this, "one", "update", filter, update, options); }
   findByIdAndUpdate(id: unknown, update: Update, options: Row = {}) { return this.findOneAndUpdate({ _id: id }, update, options); }
@@ -328,7 +333,7 @@ export class PgModel {
     if (!values.length) return this.findRows({ _id: id }, true);
     const set = values.map((item, index) => `"${item.column}" = $${index + 1}`);
     if (this.config.timestamps !== false) set.push(`updated_at = now()`);
-    const result = await postgres.query(`UPDATE "${this.config.table}" SET ${set.join(", ")} WHERE id = $${values.length + 1} RETURNING *`, [...values.map((item) => item.value), id]);
+    const result = await this.query("update", `UPDATE "${this.config.table}" SET ${set.join(", ")} WHERE id = $${values.length + 1} RETURNING *`, [...values.map((item) => item.value), id]);
     return result.rows[0] ? this.hydrate(result.rows[0]) : null;
   }
 
@@ -340,9 +345,9 @@ export class PgModel {
     return { matchedCount: documents.length, modifiedCount: documents.length };
   }
 
-  async deleteReturning(filter: Filter) { const where = this.where(filter); const result = await postgres.query(`DELETE FROM "${this.config.table}" WHERE id IN (SELECT id FROM "${this.config.table}" WHERE ${where.sql} LIMIT 1) RETURNING *`, where.values); return result.rows[0] ? this.hydrate(result.rows[0]) : null; }
+  async deleteReturning(filter: Filter) { const where = this.where(filter); const result = await this.query("delete", `DELETE FROM "${this.config.table}" WHERE id IN (SELECT id FROM "${this.config.table}" WHERE ${where.sql} LIMIT 1) RETURNING *`, where.values); return result.rows[0] ? this.hydrate(result.rows[0]) : null; }
   async deleteOne(filter: Filter) { const row = await this.deleteReturning(filter); return { deletedCount: row ? 1 : 0 }; }
-  async deleteMany(filter: Filter) { const where = this.where(filter); const result = await postgres.query(`DELETE FROM "${this.config.table}" WHERE ${where.sql}`, where.values); return { deletedCount: result.rowCount || 0 }; }
+  async deleteMany(filter: Filter) { const where = this.where(filter); const result = await this.query("delete_many", `DELETE FROM "${this.config.table}" WHERE ${where.sql}`, where.values); return { deletedCount: result.rowCount || 0 }; }
 
   async populateDocuments(documents: PgDocument[], spec: any, select?: string) {
     const specs = Array.isArray(spec) ? spec : [typeof spec === "string" ? { path: spec, select } : spec];

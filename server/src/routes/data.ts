@@ -1,11 +1,12 @@
 import { Router } from "express";
 import { z } from "zod";
 import { priorityLevels, ticketPopulation, ticketStatuses } from "../constants/workflow.js";
+import { postgres } from "../config/postgres.js";
 import { listQuerySchema, pageMeta, parseOr400 } from "../lib/http.js";
+import { measureAsync } from "../lib/performance.js";
 import { requireAuth, requireRole, requireWorkspace, type AuthRequest } from "../middleware/auth.js";
 import { enforceApiAccess } from "../middleware/access.js";
 import { Organization } from "../models/Organization.js";
-import { Counter } from "../models/Counter.js";
 import { Cycle } from "../models/Cycle.js";
 import { Project } from "../models/Project.js";
 import { Sprint } from "../models/Sprint.js";
@@ -25,15 +26,16 @@ const userId = (req: AuthRequest) => req.user!.userId;
 const orgFilter = (req: AuthRequest) => ({ organization: orgId(req) });
 const escapeRegExp = (value: string) => value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
-async function nextTicketId(req: AuthRequest, projectId: string) {
-  const project = await Project.findOne({ _id: projectId, organization: orgId(req) });
-  if (!project) throw new Error("Project not found");
-  const counter = await Counter.findOneAndUpdate(
-    { organization: orgId(req), scope: `ticket:${project._id}` },
-    { $inc: { value: 1 } },
-    { upsert: true, new: true, setDefaultsOnInsert: true },
+async function nextTicketId(req: AuthRequest, project: { _id: string; key: string }) {
+  const result = await postgres.query<{ value: string }>(
+    `INSERT INTO counters (organization, scope, value)
+     VALUES ($1, $2, 101)
+     ON CONFLICT (organization, scope)
+     DO UPDATE SET value = counters.value + 1
+     RETURNING value`,
+    [orgId(req), `ticket:${project._id}`],
   );
-  return `${project.key}-${String(counter!.value).padStart(3, "0")}`;
+  return `${project.key}-${String(result.rows[0].value).padStart(3, "0")}`;
 }
 
 router.get("/me", async (req: AuthRequest, res) => {
@@ -258,16 +260,18 @@ router.route("/tickets")
   .post(requireRole(["admin", "manager"]), async (req: AuthRequest, res) => {
     const body = parseOr400(ticketSchema, req.body, res);
     if (!body) return;
-    const [assignee, project, sprint, organization] = await Promise.all([
+    const [assignee, project, sprint, organization] = await measureAsync("tickets.create.validate", () => Promise.all([
       OrganizationMembership.exists({ user: body.assignee, organization: orgId(req), status: "active" }),
-      Project.exists({ _id: body.project, organization: orgId(req) }),
+      Project.findOne({ _id: body.project, organization: orgId(req) }),
       Sprint.exists({ _id: body.sprint, organization: orgId(req) }),
       Organization.findById(orgId(req)),
-    ]);
+    ]));
     if (!assignee || !project || !sprint) return res.status(404).json({ message: "Assignee, project, or sprint not found" });
     const now = new Date();
-    const ticket = await Ticket.create({ ...body, ...slaFieldsForTicket(body.priority, now, organization?.settings?.slaPolicy), slaStatus: "healthy", organization: orgId(req), reporter: userId(req), ticketId: await nextTicketId(req, body.project), history: [{ event: "Created", createdAt: now }], statusTransitions: [statusTransition(undefined, body.status, now, userId(req))] });
-    return res.status(201).json({ ticket: await ticket.populate(ticketPopulation) });
+    const ticketId = await measureAsync("tickets.create.allocate_id", () => nextTicketId(req, { _id: String(project._id), key: project.key }));
+    const ticket = await measureAsync("tickets.create.insert", () => Ticket.create({ ...body, ...slaFieldsForTicket(body.priority, now, organization?.settings?.slaPolicy), slaStatus: "healthy", organization: orgId(req), reporter: userId(req), ticketId, history: [{ event: "Created", createdAt: now }], statusTransitions: [statusTransition(undefined, body.status, now, userId(req))] }));
+    const populatedTicket = await measureAsync("tickets.create.populate", () => ticket.populate(ticketPopulation));
+    return res.status(201).json({ ticket: populatedTicket });
   });
 
 router.get("/tickets/:ticketId", async (req: AuthRequest, res) => {

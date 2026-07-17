@@ -4,7 +4,7 @@ import { Router } from "express";
 import jwt from "jsonwebtoken";
 import { z } from "zod";
 import { env } from "../config/env.js";
-import { requireAuth, requireWorkspace, type AuthRequest } from "../middleware/auth.js";
+import { invalidateWorkspaceMembership, requireAuth, requireWorkspace, type AuthRequest } from "../middleware/auth.js";
 import { Organization } from "../models/Organization.js";
 import { Project } from "../models/Project.js";
 import { Session } from "../models/Operational.js";
@@ -41,6 +41,7 @@ router.post("/workspaces", requireAuth, async (req: AuthRequest, res) => {
   if (!user) return res.status(404).json({ message: "User not found" });
   const organization = await Organization.create({ name: parsed.data.name, slug: await uniqueSlug(parsed.data.name), plan: "starter", owner: user._id });
   const membership = await OrganizationMembership.create({ user: user._id, organization: organization._id, role: "admin", status: "active", skills: ["Planning"], availability: 1, capacity: 32 });
+  invalidateWorkspaceMembership(String(user._id), String(organization._id));
   user.lastActiveOrganization = organization._id; await user.save();
   return res.status(201).json(await sessionResponse(user, membership, req.get("user-agent")));
 });
@@ -108,6 +109,7 @@ router.post("/auth/accept-invite", async (req: AuthRequest, res) => {
   let membership = await OrganizationMembership.findOne({ user: user._id, organization: invitation.organization });
   if (!membership) membership = await OrganizationMembership.create({ user: user._id, organization: invitation.organization, role: invitation.role, status: "active", capacity: invitation.capacity, availability: 1, skills: [] });
   else if (membership.status !== "active") { membership.status = "active"; membership.role = invitation.role; await membership.save(); }
+  invalidateWorkspaceMembership(String(user._id), String(invitation.organization));
   invitation.status = "accepted"; invitation.acceptedBy = user._id; invitation.acceptedAt = new Date(); await invitation.save();
   user.lastActiveOrganization = invitation.organization; await user.save();
   return res.json(await sessionResponse(user, membership, req.get("user-agent")));

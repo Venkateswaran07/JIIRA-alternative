@@ -85,6 +85,41 @@ textarea {
   font: inherit;
   color: inherit;
 }
+select {
+  appearance: none;
+  min-height: 34px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background-color: var(--surface-2);
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='14' height='14' viewBox='0 0 24 24' fill='none' stroke='%236f7077' stroke-width='2.25' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 10px center;
+  background-size: 14px;
+  padding: 0 34px 0 11px;
+  line-height: 1.2;
+  cursor: pointer;
+  outline: none;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease, background-color 0.15s ease;
+}
+select:hover:not(:disabled) {
+  border-color: color-mix(in srgb, var(--purple) 45%, var(--border));
+}
+select:focus-visible {
+  outline: none;
+  border-color: var(--purple);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--purple) 22%, transparent);
+}
+select:disabled {
+  cursor: not-allowed;
+  opacity: 0.6;
+}
+select option {
+  background: var(--surface);
+  color: var(--text);
+}
+[data-theme="dark"] select {
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='14' height='14' viewBox='0 0 24 24' fill='none' stroke='%23aaaaaa' stroke-width='2.25' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
+}
 button {
   cursor: pointer;
 }
@@ -620,7 +655,7 @@ main:focus {
   min-width: 105px;
   border: 0;
   outline: 0;
-  background: transparent;
+  background-color: transparent;
   color: var(--text);
   font-size: 11px;
   cursor: pointer;
@@ -648,7 +683,7 @@ main:focus {
 .filterbar .filter-select select {
   border: 0;
   outline: 0;
-  background: transparent;
+  background-color: transparent;
   color: var(--text);
   font-size: 12px;
   width: 100%;
@@ -1262,10 +1297,10 @@ td:first-child small {
   width: 100%;
   border: 1px solid var(--border);
   border-radius: 6px;
-  background: var(--surface-2);
+  background-color: var(--surface-2);
   font-size: 10px;
   margin-top: 9px;
-  padding: 5px;
+  padding: 5px 30px 5px 9px;
 }
 .add-card {
   width: 100%;
@@ -1537,7 +1572,7 @@ td:first-child small {
 .comment {
   border: 1px solid var(--border);
   border-radius: 8px;
-  background: var(--surface-2);
+  background-color: var(--surface-2);
   padding: 10px 11px;
   outline: none;
 }
@@ -1987,9 +2022,9 @@ td:first-child small {
 }
 .report-filters select {
   border: 1px solid var(--border);
-  background: var(--surface);
+  background-color: var(--surface);
   border-radius: 8px;
-  padding: 0 11px;
+  padding: 0 34px 0 11px;
   font-size: 11px;
 }
 .positive {
@@ -2392,9 +2427,11 @@ td:first-child small {
 }
 .model-select select {
   width: 100%;
+  min-height: 0;
   border: 0;
-  background: transparent;
-  padding: 0;
+  background-color: transparent;
+  background-position: right center;
+  padding: 0 22px 0 0;
   font-size: 11px;
   font-weight: 700;
   outline: none;
@@ -3259,8 +3296,12 @@ td:first-child small {
   opacity: 1;
 }
 .dev-role select {
+  min-height: 0;
   border: 0;
-  background: transparent;
+  background-color: transparent;
+  background-position: right center;
+  background-size: 11px;
+  padding: 0 16px 0 0;
   font-size: 9px;
 }
 [data-density="compact"] .card {

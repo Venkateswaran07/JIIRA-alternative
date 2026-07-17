@@ -8,7 +8,7 @@ import { userRoles } from "../constants/workflow.js";
 import { hashSha256, randomBase64UrlToken } from "../lib/crypto.js";
 import { parseOr400 } from "../lib/http.js";
 import { currentUserId, organizationId } from "../lib/routeContext.js";
-import { requireAuth, requireRole, requireWorkspace, type AuthRequest } from "../middleware/auth.js";
+import { invalidateWorkspaceMembership, requireAuth, requireRole, requireWorkspace, type AuthRequest } from "../middleware/auth.js";
 import { enforceApiAccess } from "../middleware/access.js";
 import { recordAuditEvent } from "../services/audit.js";
 import { Organization } from "../models/Organization.js";
@@ -52,20 +52,21 @@ router.patch("/users/:id", async (req: AuthRequest, res) => {
   const profileFields = Object.fromEntries(Object.entries(body).filter(([key]) => ["name", "avatarColor"].includes(key)));
   const membership: any = await OrganizationMembership.findOneAndUpdate({ user: req.params.id, organization: oid(req) }, membershipFields, { new: true }).populate("user", "name email avatarColor notificationPreferences");
   if (!membership) return res.status(404).json({ message: "User not found" });
+  invalidateWorkspaceMembership(String(req.params.id), String(oid(req)));
   if (Object.keys(profileFields).length) await User.updateOne({ _id: req.params.id }, profileFields);
   await membership.populate("user", "name email avatarColor notificationPreferences"); await audit(req, "user.updated", "user", req.params.id); return res.json({ user: { ...(membership.user?.toObject?.() || {}), role: membership.role, inviteStatus: membership.status, skills: membership.skills, availability: membership.availability, capacity: membership.capacity } });
 });
 router.post("/users/:id/deactivate", requireRole(["admin"]), async (req: AuthRequest, res) => {
   if (req.params.id === uid(req)) return res.status(400).json({ message: "You cannot deactivate yourself" });
   const membership = await OrganizationMembership.findOneAndUpdate({ user: req.params.id, organization: oid(req) }, { status: "disabled" }, { new: true });
-  if (!membership) return res.status(404).json({ message: "User not found" }); await Session.updateMany({ user: req.params.id, organization: oid(req) }, { revokedAt: new Date() }); return res.json({ membership });
+  if (!membership) return res.status(404).json({ message: "User not found" }); invalidateWorkspaceMembership(String(req.params.id), String(oid(req))); await Session.updateMany({ user: req.params.id, organization: oid(req) }, { revokedAt: new Date() }); return res.json({ membership });
 });
 router.post("/users/:id/reactivate", requireRole(["admin"]), async (req: AuthRequest, res) => {
-  const membership = await OrganizationMembership.findOneAndUpdate({ user: req.params.id, organization: oid(req) }, { status: "active" }, { new: true }); return membership ? res.json({ membership }) : res.status(404).json({ message: "User not found" });
+  const membership = await OrganizationMembership.findOneAndUpdate({ user: req.params.id, organization: oid(req) }, { status: "active" }, { new: true }); if (membership) invalidateWorkspaceMembership(String(req.params.id), String(oid(req))); return membership ? res.json({ membership }) : res.status(404).json({ message: "User not found" });
 });
 router.delete("/users/:id", requireRole(["admin"]), async (req: AuthRequest, res) => {
   if (req.params.id === uid(req)) return res.status(400).json({ message: "You cannot delete yourself" });
-  const membership = await OrganizationMembership.findOneAndDelete({ user: req.params.id, organization: oid(req) }); if (!membership) return res.status(404).json({ message: "User not found" }); await Session.updateMany({ user: req.params.id, organization: oid(req) }, { revokedAt: new Date() }); return res.status(204).send();
+  const membership = await OrganizationMembership.findOneAndDelete({ user: req.params.id, organization: oid(req) }); if (!membership) return res.status(404).json({ message: "User not found" }); invalidateWorkspaceMembership(String(req.params.id), String(oid(req))); await Session.updateMany({ user: req.params.id, organization: oid(req) }, { revokedAt: new Date() }); return res.status(204).send();
 });
 router.post("/invitations", requireRole(["admin"]), async (req: AuthRequest, res) => {
   const body = parseOr400(z.object({ name: z.string().min(2), email: z.string().email(), role: z.enum(userRoles).default("engineer"), capacity: z.number().min(0).optional() }), req.body, res); if (!body) return;

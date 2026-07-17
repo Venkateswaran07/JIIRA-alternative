@@ -31,11 +31,18 @@ function poolMax(environment: NodeJS.ProcessEnv = process.env) {
   return Number.isFinite(configured) && configured > 0 ? configured : 5;
 }
 
+function idleTimeoutMillis(environment: NodeJS.ProcessEnv = process.env) {
+  const configured = Number(environment.DATABASE_IDLE_TIMEOUT_MS ?? 30000);
+  return Number.isFinite(configured) && configured >= 0 ? configured : 30000;
+}
+
 function createPool(connectionString: string, environment: NodeJS.ProcessEnv = process.env) {
   return new Pool({
     connectionString,
     max: poolMax(environment),
     connectionTimeoutMillis: connectionTimeoutMillis(environment),
+    idleTimeoutMillis: idleTimeoutMillis(environment),
+    keepAlive: true,
     ssl: connectionString.includes("supabase.com") ? { rejectUnauthorized: false } : undefined,
   });
 }

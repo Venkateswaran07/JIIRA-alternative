@@ -12,4 +12,5 @@ export const env = {
   openaiApiKey: process.env.OPENAI_API_KEY,
   openaiBaseUrl: process.env.OPENAI_BASE_URL ?? "https://opencode.ai/zen/v1",
   openaiModel: process.env.OPENAI_MODEL,
+  openaiChatModel: process.env.OPENAI_CHAT_MODEL ?? process.env.OPENAI_MODEL,
 };
