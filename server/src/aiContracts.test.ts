@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { aiEndpointsForRole } from "./aiAccess.js";
-import { mutationContractFor, ticketCreateAiGuidance } from "./aiContracts.js";
+import { mutationContractFor, mutationContractGuidanceForRole, ticketCreateAiGuidance } from "./aiContracts.js";
 
 test("ticket creation guidance includes every required request field", () => {
   for (const field of ["title", "description", "storyPoints", "project", "sprint", "assignee", "dueDate"]) {
@@ -27,4 +27,11 @@ test("mutation contracts resolve concrete paths and special destructive bodies",
   assert.match(mutationContractFor("POST", "/projects")?.body ?? "", /planning\|active\|paused\|done/);
   assert.match(mutationContractFor("POST", "/resources/label")?.body ?? "", /automation-rule/);
   assert.equal(mutationContractFor("GET", "/tickets"), null);
+});
+
+test("role guidance includes compact write contracts up front", () => {
+  const guidance = mutationContractGuidanceForRole("manager");
+  assert.match(guidance, /POST \/projects: \{ key: string/);
+  assert.match(guidance, /POST \/tickets: \{ title: string/);
+  assert.doesNotMatch(guidance, /^- GET /m);
 });

@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import type { AuthRequest } from "../middleware/auth.js";
-import { executeAiRequest } from "./ai.js";
+import { executeAiRequest, mutationAttemptKey } from "./ai.js";
 
 function requestFor(role: "admin" | "manager" | "engineer" | "designer") {
   return {
@@ -24,4 +24,11 @@ test("AI executor cannot recursively dispatch itself", async () => {
 test("AI executor preserves role access checks before dispatching", async () => {
   const result = await executeAiRequest(requestFor("engineer"), { method: "POST", path: "/projects", body: {} });
   assert.equal(result.status, 403);
+});
+
+test("mutation attempt keys are stable for equivalent JSON bodies", () => {
+  assert.equal(
+    mutationAttemptKey("post", "/api/v1/projects", { name: "Alpha", key: "ALP", nested: { b: 2, a: 1 } }),
+    mutationAttemptKey("POST", "/projects", { key: "ALP", nested: { a: 1, b: 2 }, name: "Alpha" }),
+  );
 });

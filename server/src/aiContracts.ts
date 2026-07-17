@@ -1,4 +1,5 @@
-import { catalogEndpointFor } from "./aiAccess.js";
+import { aiEndpointsForRole, catalogEndpointFor } from "./aiAccess.js";
+import type { UserRole } from "./models/User.js";
 
 export type AiMutationContract = {
   endpoint: string;
@@ -93,6 +94,19 @@ export function mutationContractFor(method: string, path: string): AiMutationCon
   if (contract) return { endpoint: catalog.endpoint, ...contract };
   if (noBodyEndpoints.has(catalog.endpoint)) return { endpoint: catalog.endpoint, body: noBody };
   return null;
+}
+
+export function mutationContractGuidanceForRole(role: UserRole) {
+  const seen = new Set<string>();
+  return aiEndpointsForRole(role)
+    .filter((endpoint) => endpoint.method !== "GET")
+    .flatMap((endpoint) => {
+      const contract = mutationContractFor(endpoint.method, endpoint.path);
+      if (!contract || seen.has(contract.endpoint)) return [];
+      seen.add(contract.endpoint);
+      return [`- ${contract.endpoint}: ${contract.body}${contract.prerequisites ? ` Prerequisite: ${contract.prerequisites}` : ""}`];
+    })
+    .join("\n");
 }
 
 const ticketCreateContract = contracts["POST /tickets"]!;

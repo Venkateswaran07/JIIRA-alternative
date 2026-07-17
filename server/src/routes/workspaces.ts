@@ -43,7 +43,7 @@ router.post("/workspaces", requireAuth, async (req: AuthRequest, res) => {
   const membership = await OrganizationMembership.create({ user: user._id, organization: organization._id, role: "admin", status: "active", skills: ["Planning"], availability: 1, capacity: 32 });
   invalidateWorkspaceMembership(String(user._id), String(organization._id));
   user.lastActiveOrganization = organization._id; await user.save();
-  return res.status(201).json(await sessionResponse(user, membership, req.get("user-agent")));
+  return res.status(201).json(await sessionResponse(user, membership, req.get("user-agent"), res));
 });
 
 router.post("/workspaces/:id/switch", requireAuth, async (req: AuthRequest, res) => {
@@ -51,7 +51,7 @@ router.post("/workspaces/:id/switch", requireAuth, async (req: AuthRequest, res)
   if (!user || !membership) return res.status(404).json({ message: "Workspace membership not found" });
   if (typeof req.body?.refreshToken === "string") await Session.updateOne({ tokenHash: hashToken(req.body.refreshToken), user: user._id }, { revokedAt: new Date() });
   user.lastActiveOrganization = membership.organization; await user.save();
-  return res.json(await sessionResponse(user, membership, req.get("user-agent")));
+  return res.json(await sessionResponse(user, membership, req.get("user-agent"), res));
 });
 
 router.post("/workspaces/:id/onboarding/complete", requireAuth, requireWorkspace, async (req: AuthRequest, res) => {
@@ -112,7 +112,7 @@ router.post("/auth/accept-invite", async (req: AuthRequest, res) => {
   invalidateWorkspaceMembership(String(user._id), String(invitation.organization));
   invitation.status = "accepted"; invitation.acceptedBy = user._id; invitation.acceptedAt = new Date(); await invitation.save();
   user.lastActiveOrganization = invitation.organization; await user.save();
-  return res.json(await sessionResponse(user, membership, req.get("user-agent")));
+  return res.json(await sessionResponse(user, membership, req.get("user-agent"), res));
 });
 
 export default router;

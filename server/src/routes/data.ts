@@ -26,6 +26,15 @@ const userId = (req: AuthRequest) => req.user!.userId;
 const orgFilter = (req: AuthRequest) => ({ organization: orgId(req) });
 const escapeRegExp = (value: string) => value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
+function isDuplicateProjectKeyError(error: unknown) {
+  return typeof error === "object"
+    && error !== null
+    && "code" in error
+    && (error as { code?: string }).code === "23505"
+    && "constraint" in error
+    && (error as { constraint?: string }).constraint === "projects_organization_key_key";
+}
+
 async function nextTicketId(req: AuthRequest, project: { _id: string; key: string }) {
   const result = await postgres.query<{ value: string }>(
     `INSERT INTO counters (organization, scope, value)
@@ -143,8 +152,15 @@ router.route("/projects")
   .post(requireRole(["admin", "manager"]), async (req: AuthRequest, res) => {
     const body = parseOr400(projectSchema, req.body, res);
     if (!body) return;
-    const project = await Project.create({ ...body, organization: orgId(req) });
-    return res.status(201).json({ project: await project.populate("members", "name role avatarColor organization") });
+    try {
+      const project = await Project.create({ ...body, organization: orgId(req) });
+      return res.status(201).json({ project: await project.populate("members", "name role avatarColor organization") });
+    } catch (error) {
+      if (isDuplicateProjectKeyError(error)) {
+        return res.status(409).json({ error: { code: "PROJECT_KEY_EXISTS", message: `Project key ${body.key} already exists in this workspace` } });
+      }
+      throw error;
+    }
   });
 
 router.route("/projects/:id")

@@ -1,6 +1,7 @@
 import type { NextFunction, Request, Response } from "express";
 import jwt from "jsonwebtoken";
 import { env } from "../config/env.js";
+import { ACCESS_COOKIE, readCookie } from "../lib/authCookies.js";
 import { measureAsync } from "../lib/performance.js";
 import type { UserRole } from "../models/User.js";
 import { OrganizationMembership } from "../models/WorkspaceAccess.js";
@@ -29,7 +30,7 @@ export function invalidateWorkspaceMembership(userId: string, organizationId: st
 
 export function requireAuth(req: AuthRequest, res: Response, next: NextFunction) {
   const header = req.headers.authorization;
-  const token = header?.startsWith("Bearer ") ? header.slice(7) : undefined;
+  const token = header?.startsWith("Bearer ") ? header.slice(7) : readCookie(req.headers.cookie, ACCESS_COOKIE);
   if (!token) {
     return res.status(401).json({ message: "Missing bearer token" });
   }

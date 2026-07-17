@@ -1,6 +1,7 @@
 import crypto from "node:crypto";
 import jwt from "jsonwebtoken";
 import { env } from "../config/env.js";
+import { ACCESS_TOKEN_TTL_SECONDS, REFRESH_TOKEN_TTL_SECONDS, setSessionCookies } from "../lib/authCookies.js";
 import { Organization } from "../models/Organization.js";
 import { Session } from "../models/Operational.js";
 import type { IUser } from "../models/User.js";
@@ -31,14 +32,15 @@ export async function pendingInvitationsFor(email: string) {
 export async function issueTokens(user: any, membership?: any, userAgent?: string) {
   const organizationId = membership ? String(membership.organization?._id || membership.organization) : undefined;
   const claims = { userId: user.id, email: user.email, ...(organizationId ? { organizationId, membershipId: membership.id, role: membership.role } : {}) };
-  const token = jwt.sign(claims, env.jwtSecret, { expiresIn: "8h" });
+  const token = jwt.sign(claims, env.jwtSecret, { expiresIn: ACCESS_TOKEN_TTL_SECONDS });
   const refreshToken = crypto.randomBytes(48).toString("base64url");
-  await Session.create({ user: user.id, ...(organizationId ? { organization: organizationId } : {}), tokenHash: hashToken(refreshToken), expiresAt: new Date(Date.now() + 30 * 86400_000), userAgent });
+  await Session.create({ user: user.id, ...(organizationId ? { organization: organizationId } : {}), tokenHash: hashToken(refreshToken), expiresAt: new Date(Date.now() + REFRESH_TOKEN_TTL_SECONDS * 1000), userAgent });
   return { token, refreshToken };
 }
 
-export async function sessionResponse(user: any, membership?: any, userAgent?: string) {
+export async function sessionResponse(user: any, membership?: any, userAgent?: string, response?: import("express").Response) {
   const [tokens, memberships, pendingInvitations] = await Promise.all([issueTokens(user, membership, userAgent), membershipsFor(user.id), pendingInvitationsFor(user.email)]);
   const organization = membership ? await Organization.findById(membership.organization) : null;
+  if (response) setSessionCookies(response, tokens.token, tokens.refreshToken);
   return { ...tokens, user: publicUser(user), organization: publicOrganization(organization), activeMembership: membership ? { id: membership.id, role: membership.role, status: membership.status } : null, memberships, pendingInvitations, next: membership ? (membership.role !== "admin" || organization?.onboardingCompletedAt ? "/dashboard" : "/onboarding/project") : "/onboarding/workspace" };
 }

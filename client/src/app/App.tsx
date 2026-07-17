@@ -661,6 +661,7 @@ function AiAgentProvider({ children, toast }: { children: React.ReactNode; toast
       const token = getToken();
       const response = await fetch("/api/v1/ai/chat", {
         method: "POST",
+        credentials: "include",
         headers: {
           "Content-Type": "application/json",
           Accept: "application/x-ndjson",

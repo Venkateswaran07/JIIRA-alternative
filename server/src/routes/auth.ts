@@ -3,6 +3,7 @@ import crypto from "node:crypto";
 import { Router } from "express";
 import { z } from "zod";
 import { requireAuth, type AuthRequest } from "../middleware/auth.js";
+import { clearSessionCookies, REFRESH_COOKIE, readCookie, setSessionCookies } from "../lib/authCookies.js";
 import { ActionToken, Session } from "../models/Operational.js";
 import { User } from "../models/User.js";
 import { OrganizationMembership } from "../models/WorkspaceAccess.js";
@@ -37,7 +38,7 @@ router.post("/register", async (req, res) => {
   const email = parsed.data.email.toLowerCase();
   if (await User.exists({ email })) return res.status(409).json({ message: "An account with this email already exists" });
   const user = await User.create({ name: parsed.data.name, email, passwordHash: await bcrypt.hash(parsed.data.password, 10), avatarColor: "#00AEEF" });
-  return res.status(201).json(await sessionResponse(user, undefined, req.get("user-agent")));
+  return res.status(201).json(await sessionResponse(user, undefined, req.get("user-agent"), res));
 });
 
 router.post("/login", async (req, res) => {
@@ -46,23 +47,25 @@ router.post("/login", async (req, res) => {
   const user = await User.findOne({ email: parsed.data.email.toLowerCase() });
   if (!user || !(await bcrypt.compare(parsed.data.password, user.passwordHash))) return res.status(401).json({ message: "Invalid credentials" });
   const membership = await preferredMembership(user, req.body?.organizationId);
-  return res.json(await sessionResponse(user, membership, req.get("user-agent")));
+  return res.json(await sessionResponse(user, membership, req.get("user-agent"), res));
 });
 
 router.post("/refresh", async (req, res) => {
-  const parsed = z.object({ refreshToken: z.string().min(20) }).safeParse(req.body);
+  const refreshToken = typeof req.body?.refreshToken === "string" ? req.body.refreshToken : readCookie(req.headers.cookie, REFRESH_COOKIE);
+  const parsed = z.object({ refreshToken: z.string().min(20) }).safeParse({ refreshToken });
   if (!parsed.success) return res.status(400).json({ message: "Refresh token is required" });
-  const session = await Session.findOne({ tokenHash: hashToken(parsed.data.refreshToken), revokedAt: { $exists: false }, expiresAt: { $gt: new Date() } });
+  const session = await Session.findOneAndUpdate({ tokenHash: hashToken(parsed.data.refreshToken), revokedAt: { $exists: false }, expiresAt: { $gt: new Date() } }, { revokedAt: new Date() }, { new: true });
   if (!session) return res.status(401).json({ message: "Invalid or expired refresh token" });
   const user = await User.findById(session.user);
   if (!user) return res.status(401).json({ message: "Account is unavailable" });
   const membership = session.organization ? await preferredMembership(user, session.organization) : undefined;
   if (session.organization && !membership) return res.status(401).json({ message: "Workspace membership is unavailable" });
-  session.revokedAt = new Date(); await session.save();
-  return res.json(await issueTokens(user, membership, req.get("user-agent")));
+  const tokens = await issueTokens(user, membership, req.get("user-agent"));
+  setSessionCookies(res, tokens.token, tokens.refreshToken);
+  return res.json(tokens);
 });
 
-router.post("/logout", async (req, res) => { const token = typeof req.body?.refreshToken === "string" ? req.body.refreshToken : ""; if (token) await Session.updateOne({ tokenHash: hashToken(token) }, { revokedAt: new Date() }); return res.status(204).send(); });
+router.post("/logout", async (req, res) => { const token = typeof req.body?.refreshToken === "string" ? req.body.refreshToken : readCookie(req.headers.cookie, REFRESH_COOKIE) || ""; if (token) await Session.updateOne({ tokenHash: hashToken(token), revokedAt: { $exists: false } }, { revokedAt: new Date() }); clearSessionCookies(res); return res.status(204).send(); });
 
 router.get("/me", requireAuth, async (req: AuthRequest, res) => {
   const user = await User.findById(req.user!.userId);

@@ -2,7 +2,7 @@ import { Router, type Request } from "express";
 import OpenAI from "openai";
 import { z } from "zod";
 import { aiEndpointsForRole, canRoleAccessAiEndpoint, isConfirmationRequired, normalizeAiPath } from "../aiAccess.js";
-import { mutationContractFor } from "../aiContracts.js";
+import { mutationContractFor, mutationContractGuidanceForRole } from "../aiContracts.js";
 import { env } from "../config/env.js";
 import { measureAsync } from "../lib/performance.js";
 import { requireAuth, requireRole, requireWorkspace, type AuthRequest } from "../middleware/auth.js";
@@ -62,6 +62,16 @@ const aiExecuteSchema = z.object({
 });
 
 type AiExecutionResult = { status: number; payload: unknown };
+
+export function stableJson(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map((item) => stableJson(item)).join(",")}]`;
+  if (!value || typeof value !== "object") return JSON.stringify(value);
+  return `{${Object.keys(value as Record<string, unknown>).sort().map((key) => `${JSON.stringify(key)}:${stableJson((value as Record<string, unknown>)[key])}`).join(",")}}`;
+}
+
+export function mutationAttemptKey(method: string, path: string, body: unknown) {
+  return `${method.toUpperCase()} ${normalizeAiPath(path)} ${stableJson(body ?? {})}`;
+}
 
 export async function executeAiRequest(req: AuthRequest, input: unknown): Promise<AiExecutionResult> {
   const parsed = aiExecuteSchema.safeParse(input);
@@ -305,6 +315,7 @@ router.post("/chat", async (req, res) => {
   const userRole = authReq.user!.role!;
   const endpoints = aiEndpointsForRole(userRole);
   const endpointList = endpoints.map((ep) => `${ep.method} ${ep.path}${ep.requiresConfirmation ? " [requires confirmation]" : ""}`).join("\n");
+  const writeContracts = mutationContractGuidanceForRole(userRole);
 
   const systemPrompt = [
     "You are the I-TRACK project-management assistant. You operate as the authenticated user.",
@@ -335,6 +346,13 @@ router.post("/chat", async (req, res) => {
     "- Prefer GET /dashboard when project, sprint, ticket, and user context is needed together; do not fetch those lists separately unless the dashboard lacks a required field.",
     "- Use get_itrack_api_contract when you need the exact fields or prerequisites for a write. The backend always validates access, confirmation, and request bodies before execution.",
     "- When you need to call an I-TRACK API, use the execute_itrack_api tool.",
+    "",
+    "Write request contracts:",
+    writeContracts,
+    "",
+    "Project creation rules:",
+    "- POST /projects requires key, name, and description. Use a short unique key. If key uniqueness is unclear, read GET /projects first.",
+    "- If POST /projects returns PROJECT_KEY_EXISTS or 409, ask for another key or generate a different key. Do not retry the same body.",
   ].join("\n");
 
   const messages: OpenAI.Chat.Completions.ChatCompletionMessageParam[] = [
@@ -381,6 +399,7 @@ router.post("/chat", async (req, res) => {
     const client = getClient();
     const model = env.openaiChatModel || "grok-3-mini";
     const allToolCalls: { name: string; arguments: unknown; result: unknown; error?: boolean }[] = [];
+    const failedMutationAttempts = new Set<string>();
     const MAX_ITERATIONS = 7;
     const fallbackReply = () => allToolCalls.some((call) => call.error)
       ? "One or more requests failed. Please review the API error and try again with corrected information."
@@ -466,6 +485,7 @@ router.post("/chat", async (req, res) => {
 
         const { method, path, body } = args;
         const actionKey = `${method} ${path}`;
+        const mutationKey = method === "GET" ? null : mutationAttemptKey(method, path, body);
 
         if (isConfirmationRequired(method, path) && parsed.data.confirmed?.action !== actionKey) {
           return finish({
@@ -480,6 +500,18 @@ router.post("/chat", async (req, res) => {
           });
         }
 
+        if (mutationKey && failedMutationAttempts.has(mutationKey)) {
+          const blocked = {
+            error: true,
+            status: 409,
+            details: { message: "Repeated mutation blocked after the same request body already failed. Correct the payload or ask the user for clarification." },
+          };
+          allToolCalls.push({ name: toolCall.function.name, arguments: args, result: blocked, error: true });
+          sendEvent({ type: "tool_result", id: toolCall.id, ok: false, status: 409 });
+          messages.push({ role: "tool", tool_call_id: toolCall.id, content: JSON.stringify(blocked) });
+          continue;
+        }
+
         const pendingRead = parallelReads.get(toolCall.id);
         if (!pendingRead) sendEvent({ type: "tool_start", id: toolCall.id, name: toolCall.function.name, arguments: args });
 
@@ -490,6 +522,7 @@ router.post("/chat", async (req, res) => {
         const result = executionOk
           ? execution.payload
           : { error: true, status: execution.status, details: execution.payload };
+        if (!executionOk && mutationKey) failedMutationAttempts.add(mutationKey);
 
         allToolCalls.push({ name: toolCall.function.name, arguments: args, result, ...(!executionOk ? { error: true } : {}) });
         sendEvent({ type: "tool_result", id: toolCall.id, ok: executionOk, status: execution.status });

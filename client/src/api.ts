@@ -20,7 +20,7 @@ export async function api<T>(
   headers.set("Content-Type", "application/json");
   const token = getToken();
   if (token) headers.set("Authorization", `Bearer ${token}`);
-  const response = await fetch(`${API_BASE}${path}`, { ...options, headers });
+  const response = await fetch(`${API_BASE}${path}`, { ...options, headers, credentials: "include" });
   if (response.status === 401) clearSession();
   if (!response.ok) {
     const body = await response.json().catch(() => ({}));
