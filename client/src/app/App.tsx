@@ -482,6 +482,8 @@ function Shell({
             }}
             aria-expanded={aiPanel}
             aria-controls="ai-agent-panel"
+            aria-label="AI Agent"
+            title="AI Agent"
           >
               <span className="pulse-dot" />
               <Icons.Bot size={16} />
