@@ -27,6 +27,7 @@ let velocity: { n: string; v: number }[] = [];
 let risk: { n: string; v: number }[] = [];
 const serverData: any = {
   user: null,
+  company: null,
   organization: null,
   dashboard: null,
   notifications: [],
@@ -40,6 +41,7 @@ const serverData: any = {
 };
 const WorkspaceContext = React.createContext<{
   user: any;
+  company: any;
   organization: any;
   memberships: any[];
   pendingInvitations: any[];
@@ -90,6 +92,7 @@ export function ApiGate({
   const [error, setError] = useState("");
   const [workspace, setWorkspace] = useState<any>({
     user: null,
+    company: null,
     organization: null,
     memberships: [],
     pendingInvitations: [],
@@ -122,7 +125,7 @@ export function ApiGate({
     try {
       const me = await api<any>("/auth/me");
       if (!me.organization || location.pathname.startsWith("/onboarding") || String(me.next || "").startsWith("/onboarding")) {
-        setWorkspace((previous: any) => ({ ...previous, user: me.user, organization: me.organization, memberships: me.memberships || [], pendingInvitations: me.pendingInvitations || [] }));
+        setWorkspace((previous: any) => ({ ...previous, user: me.user, company: me.company, organization: me.organization, memberships: me.memberships || [], pendingInvitations: me.pendingInvitations || [] }));
         setLoading(false);
         if (!location.pathname.startsWith("/onboarding")) navigate(me.pendingInvitations?.length && !me.organization ? "/onboarding/workspace" : (me.next || "/onboarding/workspace"), { replace: true });
         return;
@@ -285,6 +288,7 @@ export function ApiGate({
 
       const stateVal = {
         user: me.user,
+        company: me.company,
         organization: me.organization,
         memberships: me.memberships || [],
         pendingInvitations: me.pendingInvitations || [],
@@ -318,6 +322,7 @@ export function ApiGate({
       risk = parsedRisk;
       Object.assign(serverData, {
         user: me.user,
+        company: me.company,
         organization: me.organization,
         dashboard,
         notifications: notificationsData.notifications || [],
@@ -377,6 +382,7 @@ export function ApiGate({
         risk = next.risk;
         Object.assign(serverData, {
           user: next.user,
+          company: next.company,
           organization: next.organization,
           dashboard: next.dashboard,
           notifications: next.notifications,
@@ -421,6 +427,7 @@ export function ApiGate({
       risk = next.risk;
       Object.assign(serverData, {
         user: next.user,
+        company: next.company,
         organization: next.organization,
         dashboard: next.dashboard,
         notifications: next.notifications,

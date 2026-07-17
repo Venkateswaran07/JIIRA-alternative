@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { rolesForEndpoint } from "./middleware/access.js";
+import { catalogEndpointsWithoutAccessPolicy, hasExplicitAccessPolicy, rolesForEndpoint } from "./middleware/access.js";
 import { openApiDocument } from "./openapi.js";
 
 test("RBAC protects administrative and planning endpoints", () => {
@@ -10,9 +10,13 @@ test("RBAC protects administrative and planning endpoints", () => {
   assert.deepEqual(rolesForEndpoint("PATCH", "/settings"), ["admin"]);
   assert.deepEqual(rolesForEndpoint("PATCH", "/sla/policy"), ["admin", "manager"]);
   assert.deepEqual(rolesForEndpoint("POST", "/projects"), ["admin", "manager"]);
+  assert.deepEqual(rolesForEndpoint("POST", "/companies/company-1/groups"), ["admin"]);
+  assert.deepEqual(rolesForEndpoint("GET", "/companies/company-1/groups"), ["admin", "manager", "engineer", "designer"]);
   assert.deepEqual(rolesForEndpoint("POST", "/cycles"), ["admin", "manager"]);
   assert.deepEqual(rolesForEndpoint("POST", "/sprints/123/start"), ["admin", "manager"]);
-  assert.deepEqual(rolesForEndpoint("PATCH", "/tickets/123"), ["admin", "manager"]);
+  assert.deepEqual(rolesForEndpoint("PATCH", "/tickets/123"), ["admin", "manager", "engineer", "designer"]);
+  assert.deepEqual(rolesForEndpoint("DELETE", "/projects/123"), ["admin"]);
+  assert.deepEqual(rolesForEndpoint("GET", "/unknown-endpoint"), []);
 });
 
 test("RBAC permits contributor ticket collaboration and authenticated reads", () => {
@@ -36,4 +40,15 @@ test("OpenAPI document covers the catalog and declares bearer security and roles
   assert.deepEqual(cycle["x-allowed-roles"], ["admin", "manager"]);
   const login = openApiDocument.paths["/auth/login"]?.post as { security?: unknown[] };
   assert.deepEqual(login.security, []);
+});
+
+test("every catalog endpoint has an explicit fail-closed RBAC policy", async () => {
+  const { apiCatalog } = await import("./apiCatalog.js");
+  assert.deepEqual(catalogEndpointsWithoutAccessPolicy, []);
+  for (const endpoint of Object.values(apiCatalog.groups).flat()) {
+    const [method, path] = endpoint.split(" ");
+    assert.equal(hasExplicitAccessPolicy(method, path), true, endpoint);
+  }
+  assert.deepEqual(rolesForEndpoint("POST", "/team"), ["admin"]);
+  assert.deepEqual(rolesForEndpoint("POST", "/tickets"), ["admin", "manager", "engineer", "designer"]);
 });

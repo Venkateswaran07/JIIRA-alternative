@@ -10,13 +10,16 @@ import { User } from "./models/User.js";
 import { Invitation, OrganizationMembership } from "./models/WorkspaceAccess.js";
 import { seedUsers, ticketTemplates } from "./data/seedData.js";
 import { defaultSlaPolicy, getTicketSlaStatus, slaFieldsForTicket, statusTransition } from "./services/sla.js";
+import { Company, CompanyMembership } from "./models/Company.js";
 
 async function seed() {
   await connectDb();
-  await postgres.query("TRUNCATE TABLE audit_events, integrations, notifications, action_tokens, sessions, counters, workspace_resources, tickets, cycles, sprints, projects, invitations, organization_memberships, organizations, users RESTART IDENTITY CASCADE");
+  await postgres.query("TRUNCATE TABLE workspace_group_access, company_group_members, company_groups, company_memberships, audit_events, integrations, notifications, action_tokens, sessions, counters, workspace_resources, tickets, cycles, sprints, projects, invitations, organization_memberships, organizations, companies, users RESTART IDENTITY CASCADE");
 
   const passwordHash = await bcrypt.hash("Password123!", 10);
+  const company = await Company.create({ name: "I-TRACK Demo Company", slug: "itrack-demo-company" });
   const organization = await Organization.create({
+    company: company._id,
     name: "I-TRACK Demo Workspace",
     slug: "itrack-demo",
     plan: "scale",
@@ -32,6 +35,9 @@ async function seed() {
   organization.owner = users[0]._id;
   organization.onboardingCompletedAt = new Date();
   await organization.save();
+  company.owner = users[0]._id;
+  await company.save();
+  await CompanyMembership.insertMany(users.map((user, index) => ({ company: company._id, user: user._id, role: index === 0 ? "admin" : "member", status: "active", jobFunction: ["engineer", "designer"].includes(seedUsers[index].role) ? seedUsers[index].role : undefined })));
   await OrganizationMembership.insertMany(users.map((user, index) => ({ user: user._id, organization: organization._id, role: index === 0 ? "admin" : seedUsers[index].role, status: "active", skills: seedUsers[index].skills, availability: seedUsers[index].availability, capacity: seedUsers[index].capacity })));
   const project = await Project.create({
     organization: organization._id,

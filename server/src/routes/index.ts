@@ -8,6 +8,7 @@ import dataRoutes from "./data.js";
 import extendedRoutes from "./extended.js";
 import marketingRoutes from "./marketing.js";
 import workspaceRoutes from "./workspaces.js";
+import companyRoutes from "./companies.js";
 
 function registerVersionedRoutes(app: express.Express) {
   app.get("/api/v1/health", (_req, res) => res.json({ ok: true, service: "itrack-api", version: "v1" }));
@@ -17,6 +18,7 @@ function registerVersionedRoutes(app: express.Express) {
   app.get("/api/docs", (_req, res) => res.type("html").send(swaggerPageHtml()));
 
   app.use("/api/v1/auth", authRoutes);
+  app.use("/api/v1", companyRoutes);
   app.use("/api/v1", workspaceRoutes);
   app.use("/api/v1/analysis", analysisRoutes);
   app.use("/api/v1/ai", aiRoutes);
@@ -26,6 +28,7 @@ function registerVersionedRoutes(app: express.Express) {
 
 function registerLegacyRoutes(app: express.Express) {
   app.use("/api/auth", authRoutes);
+  app.use("/api", companyRoutes);
   app.use("/api", workspaceRoutes);
   app.use("/api", dataRoutes);
   app.use("/api/analysis", analysisRoutes);

@@ -8,6 +8,7 @@ import { z } from "zod";
 import { aiEndpointsForRole, canRoleAccessAiEndpoint, isConfirmationRequired, normalizeAiPath } from "../aiAccess.js";
 import { mutationContractFor, mutationContractGuidanceForRole } from "../aiContracts.js";
 import { env } from "../config/env.js";
+import { postgres } from "../config/postgres.js";
 import { measureAsync } from "../lib/performance.js";
 import { requireAuth, requireRole, requireWorkspace, type AuthRequest } from "../middleware/auth.js";
 import { enforceApiAccess } from "../middleware/access.js";
@@ -159,6 +160,42 @@ router.get("/models", async (_req, res) => {
   }
 });
 
+router.get("/conversations", async (req: AuthRequest, res) => {
+  const result = await postgres.query(
+    `select id, title, created_at as "createdAt", updated_at as "updatedAt"
+       from ai_conversations
+      where organization = $1 and user_id = $2
+      order by updated_at desc
+      limit 50`,
+    [req.user!.organizationId, req.user!.userId],
+  );
+  return res.json({ conversations: result.rows });
+});
+
+router.get("/conversations/:id/messages", async (req: AuthRequest, res) => {
+  const conversation = await postgres.query(
+    "select id, title from ai_conversations where id = $1 and organization = $2 and user_id = $3",
+    [req.params.id, req.user!.organizationId, req.user!.userId],
+  );
+  if (!conversation.rowCount) return res.status(404).json({ message: "Conversation not found" });
+  const messages = await postgres.query(
+    `select id, role, content, metadata, created_at as "createdAt"
+       from ai_messages where conversation_id = $1 order by created_at asc`,
+    [req.params.id],
+  );
+  return res.json({ conversation: conversation.rows[0], messages: messages.rows });
+});
+
+router.delete("/conversations/:id", async (req: AuthRequest, res) => {
+  const result = await postgres.query(
+    "delete from ai_conversations where id = $1 and organization = $2 and user_id = $3 returning id",
+    [req.params.id, req.user!.organizationId, req.user!.userId],
+  );
+  return result.rowCount
+    ? res.json({ ok: true })
+    : res.status(404).json({ message: "Conversation not found" });
+});
+
 router.post("/generate-tickets", async (req, res) => {
   const parsed = z.object({ prompt: z.string().min(20), model: z.string().optional() }).safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ message: "A detailed feature prompt is required" });
@@ -288,6 +325,7 @@ router.post("/confirm-ticket-plan", requireRole(["admin", "manager"]), async (re
 router.post("/chat", async (req, res) => {
   const parsed = z.object({
     message: z.string().min(1),
+    conversationId: z.string().optional(),
     history: z.array(z.object({
       role: z.enum(["user", "assistant"]),
       content: z.string(),
@@ -295,6 +333,37 @@ router.post("/chat", async (req, res) => {
     confirmed: z.object({ action: z.string() }).optional(),
   }).safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ message: "Invalid chat request", issues: parsed.error.issues });
+
+  const authReq = req as AuthRequest;
+  let conversationId = parsed.data.conversationId;
+  let storedHistory: { role: "user" | "assistant"; content: string }[] = [];
+  if (conversationId) {
+    const conversation = await postgres.query(
+      "select id from ai_conversations where id = $1 and organization = $2 and user_id = $3",
+      [conversationId, authReq.user!.organizationId, authReq.user!.userId],
+    );
+    if (!conversation.rowCount) return res.status(404).json({ message: "Conversation not found" });
+    const historyResult = await postgres.query(
+      "select role, content from ai_messages where conversation_id = $1 order by created_at asc limit 100",
+      [conversationId],
+    );
+    storedHistory = historyResult.rows;
+  } else {
+    const title = parsed.data.message.trim().replace(/\s+/g, " ").slice(0, 72) || "New conversation";
+    const created = await postgres.query(
+      `insert into ai_conversations (organization, user_id, title)
+       values ($1, $2, $3) returning id`,
+      [authReq.user!.organizationId, authReq.user!.userId, title],
+    );
+    conversationId = created.rows[0].id;
+  }
+  if (!parsed.data.confirmed) {
+    await postgres.query(
+      "insert into ai_messages (conversation_id, role, content) values ($1, 'user', $2)",
+      [conversationId, parsed.data.message],
+    );
+    storedHistory.push({ role: "user", content: parsed.data.message });
+  }
 
   const streamsToolActivity = req.get("accept")?.includes("application/x-ndjson") ?? false;
   if (streamsToolActivity) {
@@ -308,14 +377,26 @@ router.post("/chat", async (req, res) => {
   const sendEvent = (event: Record<string, unknown>) => {
     if (streamsToolActivity && !res.writableEnded) res.write(`${JSON.stringify(event)}\n`);
   };
-  const finish = (payload: Record<string, unknown>) => {
+  const finish = async (payload: Record<string, unknown>) => {
+    const reply = typeof payload.reply === "string" ? payload.reply : "";
+    if (reply) {
+      const metadata = {
+        requiresConfirmation: payload.requiresConfirmation === true,
+        ...(payload.pendingAction ? { pendingAction: payload.pendingAction } : {}),
+      };
+      await postgres.query(
+        "insert into ai_messages (conversation_id, role, content, metadata) values ($1, 'assistant', $2, $3)",
+        [conversationId, reply, JSON.stringify(metadata)],
+      );
+      await postgres.query("update ai_conversations set updated_at = now() where id = $1", [conversationId]);
+    }
+    payload.conversationId = conversationId;
     if (!streamsToolActivity) return res.json(payload);
     const { toolCalls: _toolCalls, ...clientPayload } = payload;
     sendEvent({ type: "done", ...clientPayload });
     res.end();
   };
 
-  const authReq = req as AuthRequest;
   const userRole = authReq.user!.role!;
   const endpoints = aiEndpointsForRole(userRole);
   const endpointList = endpoints.map((ep) => `${ep.method} ${ep.path}${ep.requiresConfirmation ? " [requires confirmation]" : ""}`).join("\n");
@@ -362,8 +443,8 @@ router.post("/chat", async (req, res) => {
 
   const messages: ChatCompletionMessageParam[] = [
     { role: "system", content: systemPrompt },
-    ...(parsed.data.history ?? []).map((m) => ({ role: m.role as "user" | "assistant", content: m.content })),
-    { role: "user", content: parsed.data.message },
+    ...(storedHistory.length ? storedHistory : (parsed.data.history ?? [])).map((m) => ({ role: m.role as "user" | "assistant", content: m.content })),
+    ...(parsed.data.confirmed ? [{ role: "user" as const, content: parsed.data.message }] : []),
   ];
 
   const tools: ChatCompletionTool[] = [
@@ -427,7 +508,7 @@ router.post("/chat", async (req, res) => {
       messages.push(assistantMessage);
 
       if (choice.finish_reason !== "tool_calls" || !assistantMessage.tool_calls?.length) {
-        return finish({ reply: assistantMessage.content || fallbackReply(), ...(allToolCalls.length ? { toolCalls: allToolCalls } : {}) });
+        return await finish({ reply: assistantMessage.content || fallbackReply(), ...(allToolCalls.length ? { toolCalls: allToolCalls } : {}) });
       }
 
       const parallelReads = new Map<string, Promise<AiExecutionResult>>();

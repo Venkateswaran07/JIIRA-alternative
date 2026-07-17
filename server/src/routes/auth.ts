@@ -4,13 +4,13 @@ import jwt from "jsonwebtoken";
 import { Router } from "express";
 import { z } from "zod";
 import { env } from "../config/env.js";
-import { requireAuth, type AuthRequest } from "../middleware/auth.js";
+import { effectiveWorkspaceMembership, requireAuth, type AuthRequest } from "../middleware/auth.js";
 import { clearSessionCookies, REFRESH_COOKIE, readCookie, setSessionCookies } from "../lib/authCookies.js";
 import { ActionToken, Session } from "../models/Operational.js";
 import { User } from "../models/User.js";
 import { OrganizationMembership } from "../models/WorkspaceAccess.js";
 import { sendLoginEmail, sendPasswordResetEmail, sendRegistrationEmail } from "../services/mail.js";
-import { hashToken, issueTokens, membershipsFor, pendingInvitationsFor, publicOrganization, publicUser, sessionResponse } from "../services/sessionAuth.js";
+import { hashToken, issueTokens, membershipsFor, pendingInvitationsFor, publicCompany, publicOrganization, publicUser, sessionResponse } from "../services/sessionAuth.js";
 
 const router = Router();
 const credentials = z.object({ email: z.string().email(), password: z.string().min(8) });
@@ -25,15 +25,18 @@ const googleProfileSchema = z.object({
 
 async function preferredMembership(user: any, organizationId?: unknown) {
   if (organizationId) {
-    const selected = await OrganizationMembership.findOne({ user: user._id, organization: organizationId, status: "active" });
+    const selected = await effectiveWorkspaceMembership(user._id, String(organizationId));
     if (selected) return selected;
   }
   if (user.lastActiveOrganization) {
-    const recent = await OrganizationMembership.findOne({ user: user._id, organization: user.lastActiveOrganization, status: "active" });
+    const recent = await effectiveWorkspaceMembership(user._id, String(user.lastActiveOrganization));
     if (recent) return recent;
   }
   const first = await OrganizationMembership.findOne({ user: user._id, status: "active" }).sort("createdAt");
-  if (first || !user.organization) return first;
+  if (first) return first;
+  const inherited = (await membershipsFor(user._id))[0];
+  if (inherited) return { id: inherited.id, organization: inherited.organization.id, role: inherited.role, status: inherited.status };
+  if (!user.organization) return null;
   return OrganizationMembership.findOneAndUpdate(
     { user: user._id, organization: user.organization },
     { $setOnInsert: { role: user.role || "engineer", status: user.inviteStatus === "disabled" ? "disabled" : "active", skills: user.skills || [], availability: user.availability ?? 1, capacity: user.capacity ?? 32 } },
@@ -156,7 +159,8 @@ router.get("/me", requireAuth, async (req: AuthRequest, res) => {
   if (!user) return res.status(404).json({ message: "User not found" });
   const membership = req.user!.organizationId ? await preferredMembership(user, req.user!.organizationId) : undefined;
   const organization = membership ? await (await import("../models/Organization.js")).Organization.findById(membership.organization) : null;
-  return res.json({ user: { ...publicUser(user), role: membership?.role }, organization: publicOrganization(organization), activeMembership: membership ? { id: membership.id, role: membership.role, status: membership.status } : null, memberships: await membershipsFor(user.id), pendingInvitations: await pendingInvitationsFor(user.email), next: membership ? (membership.role !== "admin" || organization?.onboardingCompletedAt ? "/dashboard" : "/onboarding/project") : "/onboarding/workspace" });
+  const company = organization ? await (await import("../models/Company.js")).Company.findById(organization.company) : null;
+  return res.json({ user: { ...publicUser(user), role: membership?.role }, company: publicCompany(company), organization: publicOrganization(organization), workspace: publicOrganization(organization), activeMembership: membership ? { id: membership.id, role: membership.role, status: "status" in membership ? membership.status : "active" } : null, memberships: await membershipsFor(user.id), pendingInvitations: await pendingInvitationsFor(user.email), next: membership ? (membership.role !== "admin" || organization?.onboardingCompletedAt ? "/dashboard" : "/onboarding/project") : "/onboarding/workspace" });
 });
 
 router.post("/forgot-password", async (req, res) => {

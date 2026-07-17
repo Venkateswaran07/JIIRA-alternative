@@ -1,4 +1,6 @@
 import { Router } from "express";
+import bcrypt from "bcryptjs";
+import { randomUUID } from "node:crypto";
 import { z } from "zod";
 import { withTransaction } from "../db/pgModel.js";
 import { userRoles } from "../constants/workflow.js";
@@ -6,7 +8,7 @@ import { hashSha256, randomBase64UrlToken } from "../lib/crypto.js";
 import { parseOr400 } from "../lib/http.js";
 import { currentUserId, organizationId } from "../lib/routeContext.js";
 import { invalidateWorkspaceMembership, requireAuth, requireRole, requireWorkspace, type AuthRequest } from "../middleware/auth.js";
-import { enforceApiAccess } from "../middleware/access.js";
+import { enforceApiAccess, leaders } from "../middleware/access.js";
 import { recordAuditEvent } from "../services/audit.js";
 import { Organization } from "../models/Organization.js";
 import { Counter } from "../models/Counter.js";
@@ -19,6 +21,7 @@ import { User } from "../models/User.js";
 import { Invitation, OrganizationMembership } from "../models/WorkspaceAccess.js";
 import { resourceKinds, WorkspaceResource } from "../models/WorkspaceResource.js";
 import { applySlaState, statusTransition } from "../services/sla.js";
+import { applyWorkspaceRules } from "../services/rules.js";
 
 const router = Router();
 router.use(requireAuth);
@@ -31,6 +34,23 @@ const hash = hashSha256;
 const Resources = WorkspaceResource as any;
 const Integrations = Integration as any;
 const audit = recordAuditEvent;
+
+const canAccessProject = (req: AuthRequest, project: any) =>
+  req.user!.role === "admin" || req.user!.workspaceAccessSource === "group" || (Array.isArray(project?.members) && project.members.map(String).includes(uid(req)));
+const canManageProject = (req: AuthRequest, project: any) =>
+  req.user!.role === "admin" || (req.user!.role === "manager" && canAccessProject(req, project));
+async function projectForTicket(req: AuthRequest, ticket: any) {
+  return ticket ? Project.findOne({ _id: ticket.project, organization: oid(req) }) : null;
+}
+async function requireTicketAccess(req: AuthRequest, res: any, ticket: any) {
+  if (!ticket) { res.status(404).json({ message: "Ticket not found" }); return false; }
+  if (!canAccessProject(req, await projectForTicket(req, ticket))) { res.status(403).json({ message: "You do not have access to this project" }); return false; }
+  return true;
+}
+function ownedBy(entry: any, req: AuthRequest, user?: any) {
+  return String(entry?.authorId ?? entry?.uploadedBy ?? "") === uid(req)
+    || (!entry?.authorId && (entry?.author === user?.name || entry?.author === req.user!.email));
+}
 
 const userPatch = z.object({ name: z.string().min(2).optional(), role: z.enum(userRoles).optional(), skills: z.array(z.string()).optional(), availability: z.number().min(0).max(1).optional(), capacity: z.number().min(0).optional(), avatarColor: z.string().optional() });
 router.get("/users", async (req: AuthRequest, res) => { const memberships = await OrganizationMembership.find({ organization: oid(req) }).populate("user", "name email avatarColor notificationPreferences"); return res.json({ users: memberships.map((m: any) => ({ ...(m.user?.toObject?.() || {}), role: m.role, inviteStatus: m.status, skills: m.skills, availability: m.availability, capacity: m.capacity })) }); });
@@ -65,8 +85,8 @@ router.delete("/users/:id", requireRole(["admin"]), async (req: AuthRequest, res
   const membership = await OrganizationMembership.findOneAndDelete({ user: req.params.id, organization: oid(req) }); if (!membership) return res.status(404).json({ message: "User not found" }); invalidateWorkspaceMembership(String(req.params.id), String(oid(req))); await Session.updateMany({ user: req.params.id, organization: oid(req) }, { revokedAt: new Date() }); return res.status(204).send();
 });
 
-router.get("/projects/:id", async (req: AuthRequest, res) => { const project = await Project.findOne({ _id: req.params.id, organization: oid(req) }).populate("members", "name email role"); return project ? res.json({ project }) : res.status(404).json({ message: "Project not found" }); });
-router.put("/projects/:id/members", requireRole(["admin", "manager"]), async (req: AuthRequest, res) => { const body = parseOr400(z.object({ userIds: z.array(z.string()) }), req.body, res); if (!body) return; const count = await OrganizationMembership.countDocuments({ user: { $in: body.userIds }, organization: oid(req), status: "active" }); if (count !== new Set(body.userIds).size) return res.status(400).json({ message: "Invalid member" }); const project = await Project.findOneAndUpdate({ _id: req.params.id, organization: oid(req) }, { members: body.userIds }, { new: true }).populate("members", "name email"); return project ? res.json({ project }) : res.status(404).json({ message: "Project not found" }); });
+router.get("/projects/:id", async (req: AuthRequest, res) => { const project = await Project.findOne({ _id: req.params.id, organization: oid(req) }); if (!project) return res.status(404).json({ message: "Project not found" }); if (!canAccessProject(req, project)) return res.status(403).json({ message: "You do not have access to this project" }); return res.json({ project: await project.populate("members", "name email role") }); });
+router.put("/projects/:id/members", requireRole(["admin", "manager"]), async (req: AuthRequest, res) => { const body = parseOr400(z.object({ userIds: z.array(z.string()) }), req.body, res); if (!body) return; const existing = await Project.findOne({ _id: req.params.id, organization: oid(req) }); if (!existing) return res.status(404).json({ message: "Project not found" }); if (!canManageProject(req, existing)) return res.status(403).json({ message: "Only an assigned manager can manage this project" }); const count = await OrganizationMembership.countDocuments({ user: { $in: body.userIds }, organization: oid(req), status: "active" }); if (count !== new Set(body.userIds).size) return res.status(400).json({ message: "Invalid member" }); const project = await Project.findOneAndUpdate({ _id: req.params.id, organization: oid(req) }, { members: body.userIds }, { new: true }).populate("members", "name email"); return res.json({ project }); });
 router.post("/projects/:id/archive", requireRole(["admin", "manager"]), async (req: AuthRequest, res) => { const project = await Project.findOneAndUpdate({ _id: req.params.id, organization: oid(req) }, { status: "done" }, { new: true }); return project ? res.json({ project }) : res.status(404).json({ message: "Project not found" }); });
 router.post("/projects/:id/restore", requireRole(["admin", "manager"]), async (req: AuthRequest, res) => { const project = await Project.findOneAndUpdate({ _id: req.params.id, organization: oid(req) }, { status: "active" }, { new: true }); return project ? res.json({ project }) : res.status(404).json({ message: "Project not found" }); });
 
@@ -76,20 +96,52 @@ router.post("/sprints/:id/complete", requireRole(["admin", "manager"]), async (r
 router.post("/sprints/:id/reopen", requireRole(["admin", "manager"]), async (req: AuthRequest, res) => { const sprint = await Sprint.findOneAndUpdate({ _id: req.params.id, organization: oid(req) }, { status: "active" }, { new: true }); return sprint ? res.json({ sprint }) : res.status(404).json({ message: "Sprint not found" }); });
 
 router.post("/tickets/bulk", requireRole(["admin", "manager"]), async (req: AuthRequest, res) => { const body = parseOr400(z.object({ ids: z.array(z.string()).min(1), update: z.object({ status: z.enum(["Backlog", "To Do", "In Progress", "In Review", "Done"]).optional(), priority: z.enum(["low", "medium", "high", "critical"]).optional(), assignee: z.string().optional(), sprint: z.string().optional(), blocked: z.boolean().optional() }) }), req.body, res); if (!body) return; if (body.update.status) { const items = await Ticket.find({ _id: { $in: body.ids }, organization: oid(req) }); await Promise.all(items.map(async (ticket) => { const fromStatus = ticket.status; Object.assign(ticket, body.update); ticket.history.push({ event: `Moved to ${body.update.status}`, createdAt: new Date() }); ticket.statusTransitions.push(statusTransition(fromStatus, body.update.status!, new Date(), uid(req))); if (body.update.status === "Done" && !ticket.resolvedAt) ticket.resolvedAt = new Date(); applySlaState(ticket); await ticket.save(); })); return res.json({ matched: items.length, modified: items.length }); } const result = await Ticket.updateMany({ _id: { $in: body.ids }, organization: oid(req) }, body.update); return res.json({ matched: result.matchedCount, modified: result.modifiedCount }); });
-router.post("/tickets/:id/assign", async (req: AuthRequest, res) => { const body = parseOr400(z.object({ assignee: z.string().nullable() }), req.body, res); if (!body) return; if (body.assignee && !(await OrganizationMembership.exists({ user: body.assignee, organization: oid(req), status: "active" }))) return res.status(404).json({ message: "Assignee not found" }); const ticket = await Ticket.findOneAndUpdate({ _id: req.params.id, organization: oid(req) }, body.assignee ? { assignee: body.assignee } : { $unset: { assignee: 1 } }, { new: true }); return ticket ? res.json({ ticket }) : res.status(404).json({ message: "Ticket not found" }); });
+router.post("/tickets/:id/assign", async (req: AuthRequest, res) => { const body = parseOr400(z.object({ assignee: z.string().nullable() }), req.body, res); if (!body) return; const existing = await Ticket.findOne({ _id: req.params.id, organization: oid(req) }); if (!(await requireTicketAccess(req, res, existing))) return; if (!["admin", "manager"].includes(req.user!.role!) && body.assignee !== uid(req)) return res.status(403).json({ message: "Contributors may only assign tickets to themselves" }); if (body.assignee && !(await OrganizationMembership.exists({ user: body.assignee, organization: oid(req), status: "active" }))) return res.status(404).json({ message: "Assignee not found" }); const ticket = await Ticket.findOneAndUpdate({ _id: req.params.id, organization: oid(req) }, body.assignee ? { assignee: body.assignee } : { $unset: { assignee: 1 } }, { new: true }); if (ticket) await applyWorkspaceRules(oid(req)!, "ticket.assigned", ticket); return res.json({ ticket }); });
 router.post("/tickets/:id/archive", requireRole(["admin", "manager"]), async (req: AuthRequest, res) => { const ticket = await Ticket.findOneAndUpdate({ _id: req.params.id, organization: oid(req) }, { archivedAt: new Date() }, { new: true }); return ticket ? res.json({ ticket }) : res.status(404).json({ message: "Ticket not found" }); });
 router.post("/tickets/:id/restore", requireRole(["admin", "manager"]), async (req: AuthRequest, res) => { const ticket = await Ticket.findOneAndUpdate({ _id: req.params.id, organization: oid(req) }, { $unset: { archivedAt: 1 } }, { new: true }); return ticket ? res.json({ ticket }) : res.status(404).json({ message: "Ticket not found" }); });
 router.patch("/tickets/:id/rank", async (req: AuthRequest, res) => { const body = parseOr400(z.object({ rank: z.number(), sprint: z.string().nullable().optional(), status: z.enum(["Backlog", "To Do", "In Progress", "In Review", "Done"]).optional() }), req.body, res); if (!body) return; const ticket = await Ticket.findOne({ _id: req.params.id, organization: oid(req) }); if (!ticket) return res.status(404).json({ message: "Ticket not found" }); const fromStatus = ticket.status; ticket.rank = body.rank; if (body.status) { ticket.status = body.status; ticket.history.push({ event: `Moved to ${body.status}`, createdAt: new Date() }); ticket.statusTransitions.push(statusTransition(fromStatus, body.status, new Date(), uid(req))); if (body.status === "Done" && !ticket.resolvedAt) ticket.resolvedAt = new Date(); } if (body.sprint === null) ticket.sprint = null; else if (body.sprint) ticket.sprint = body.sprint; applySlaState(ticket); await ticket.save(); return res.json({ ticket }); });
-router.post("/tickets/:id/links", async (req: AuthRequest, res) => { const body = parseOr400(z.object({ type: z.enum(["blocks", "is-blocked-by", "relates-to", "duplicates"]), ticket: z.string().min(1) }), req.body, res); if (!body) return; const [source, target] = await Promise.all([Ticket.findOne({ _id: req.params.id, organization: oid(req) }), Ticket.findOne({ _id: body.ticket, organization: oid(req) })]); if (!source || !target) return res.status(404).json({ message: "Ticket not found" }); source.issueLinks.push({ ...body, createdAt: new Date() }); await source.save(); await audit(req, "ticket.linked", "ticket", source._id, { type: body.type, ticket: target.ticketId }); return res.status(201).json({ ticket: source }); });
+router.post("/tickets/:id/links", async (req: AuthRequest, res) => {
+  const body = parseOr400(z.object({ type: z.enum(["blocks", "is-blocked-by", "relates-to", "duplicates"]), ticket: z.string().min(1) }), req.body, res);
+  if (!body) return;
+  const [source, target] = await Promise.all([
+    Ticket.findOne({ _id: req.params.id, organization: oid(req) }),
+    Ticket.findOne({ _id: body.ticket, organization: oid(req) }),
+  ]);
+  if (!(await requireTicketAccess(req, res, source)) || !source) return;
+  if (!(await requireTicketAccess(req, res, target)) || !target) return;
+  if (String(source._id) === String(target._id)) return res.status(400).json({ message: "A ticket cannot link to itself" });
+  if (source.issueLinks.some((link: any) => link.type === body.type && String(link.ticket) === String(target._id))) {
+    return res.status(409).json({ message: "This issue link already exists" });
+  }
+  source.issueLinks.push({ id: randomUUID(), ...body, createdAt: new Date(), createdBy: uid(req) });
+  await source.save();
+  await audit(req, "ticket.linked", "ticket", source._id, { type: body.type, ticket: target.ticketId });
+  return res.status(201).json({ ticket: source });
+});
 router.post("/tickets/:id/watch", async (req: AuthRequest, res) => { const ticket = await Ticket.findOneAndUpdate({ _id: req.params.id, organization: oid(req) }, { $addToSet: { watchers: uid(req) } }, { new: true }); return ticket ? res.json({ ticket }) : res.status(404).json({ message: "Ticket not found" }); });
 router.delete("/tickets/:id/watch", async (req: AuthRequest, res) => { const ticket = await Ticket.findOneAndUpdate({ _id: req.params.id, organization: oid(req) }, { $pull: { watchers: uid(req) } }, { new: true }); return ticket ? res.json({ ticket }) : res.status(404).json({ message: "Ticket not found" }); });
 router.get("/tickets/:id/history", async (req: AuthRequest, res) => { const ticket = await Ticket.findOne({ _id: req.params.id, organization: oid(req) }).select("history"); return ticket ? res.json({ history: ticket.history }) : res.status(404).json({ message: "Ticket not found" }); });
-router.patch("/tickets/:id/comments/:commentId", async (req: AuthRequest, res) => { const body = parseOr400(z.object({ body: z.string().min(1) }), req.body, res); if (!body) return; const ticket = await Ticket.findOneAndUpdate({ _id: req.params.id, organization: oid(req), "comments._id": req.params.commentId }, { $set: { "comments.$.body": body.body } }, { new: true }); return ticket ? res.json({ ticket }) : res.status(404).json({ message: "Comment not found" }); });
-router.delete("/tickets/:id/comments/:commentId", async (req: AuthRequest, res) => { const ticket = await Ticket.findOneAndUpdate({ _id: req.params.id, organization: oid(req) }, { $pull: { comments: { _id: req.params.commentId } } }, { new: true }); return ticket ? res.json({ ticket }) : res.status(404).json({ message: "Ticket not found" }); });
-router.patch("/tickets/:id/work-logs/:logId", async (req: AuthRequest, res) => { const body = parseOr400(z.object({ hours: z.number().min(.25).max(24).optional(), note: z.string().min(1).optional() }), req.body, res); if (!body) return; const set = Object.fromEntries(Object.entries(body).map(([key, value]) => [`workLogs.$.${key}`, value])); const ticket = await Ticket.findOneAndUpdate({ _id: req.params.id, organization: oid(req), "workLogs._id": req.params.logId }, { $set: set }, { new: true }); return ticket ? res.json({ ticket }) : res.status(404).json({ message: "Work log not found" }); });
-router.delete("/tickets/:id/work-logs/:logId", async (req: AuthRequest, res) => { const ticket = await Ticket.findOneAndUpdate({ _id: req.params.id, organization: oid(req) }, { $pull: { workLogs: { _id: req.params.logId } } }, { new: true }); return ticket ? res.json({ ticket }) : res.status(404).json({ message: "Ticket not found" }); });
-router.post("/tickets/:id/attachments", async (req: AuthRequest, res) => { const body = parseOr400(z.object({ name: z.string().min(1), url: z.string().url(), mimeType: z.string().optional(), size: z.number().int().min(0).optional() }), req.body, res); if (!body) return; const ticket = await Ticket.findOneAndUpdate({ _id: req.params.id, organization: oid(req) }, { $push: { attachments: { ...body, uploadedBy: uid(req), createdAt: new Date() } } }, { new: true }); return ticket ? res.status(201).json({ ticket }) : res.status(404).json({ message: "Ticket not found" }); });
-router.delete("/tickets/:id/attachments/:attachmentId", async (req: AuthRequest, res) => { const ticket = await Ticket.findOneAndUpdate({ _id: req.params.id, organization: oid(req) }, { $pull: { attachments: { _id: req.params.attachmentId } } }, { new: true }); return ticket ? res.json({ ticket }) : res.status(404).json({ message: "Ticket not found" }); });
+router.patch("/tickets/:id/comments/:commentId", async (req: AuthRequest, res) => { const body = parseOr400(z.object({ body: z.string().min(1) }), req.body, res); if (!body) return; const [ticket, user] = await Promise.all([Ticket.findOne({ _id: req.params.id, organization: oid(req) }), User.findById(uid(req))]); if (!(await requireTicketAccess(req, res, ticket)) || !ticket) return; const comment = ticket.comments.find((item: any) => String(item._id ?? item.id) === req.params.commentId); if (!comment) return res.status(404).json({ message: "Comment not found" }); if (!leaders.includes(req.user!.role as any) && !ownedBy(comment, req, user)) return res.status(403).json({ message: "You may only edit your own comments" }); comment.body = body.body; await ticket.save(); return res.json({ ticket }); });
+router.delete("/tickets/:id/comments/:commentId", async (req: AuthRequest, res) => { const [ticket, user] = await Promise.all([Ticket.findOne({ _id: req.params.id, organization: oid(req) }), User.findById(uid(req))]); if (!(await requireTicketAccess(req, res, ticket)) || !ticket) return; const comment = ticket.comments.find((item: any) => String(item._id ?? item.id) === req.params.commentId); if (!comment) return res.status(404).json({ message: "Comment not found" }); if (!leaders.includes(req.user!.role as any) && !ownedBy(comment, req, user)) return res.status(403).json({ message: "You may only delete your own comments" }); ticket.comments = ticket.comments.filter((item: any) => String(item._id ?? item.id) !== req.params.commentId); await ticket.save(); return res.json({ ticket }); });
+router.patch("/tickets/:id/work-logs/:logId", async (req: AuthRequest, res) => { const body = parseOr400(z.object({ hours: z.number().min(.25).max(24).optional(), note: z.string().min(1).optional() }), req.body, res); if (!body) return; const [ticket, user] = await Promise.all([Ticket.findOne({ _id: req.params.id, organization: oid(req) }), User.findById(uid(req))]); if (!(await requireTicketAccess(req, res, ticket)) || !ticket) return; const log = ticket.workLogs.find((item: any) => String(item._id ?? item.id) === req.params.logId); if (!log) return res.status(404).json({ message: "Work log not found" }); if (!leaders.includes(req.user!.role as any) && !ownedBy(log, req, user)) return res.status(403).json({ message: "You may only edit your own work logs" }); Object.assign(log, body); await ticket.save(); return res.json({ ticket }); });
+router.delete("/tickets/:id/work-logs/:logId", async (req: AuthRequest, res) => { const [ticket, user] = await Promise.all([Ticket.findOne({ _id: req.params.id, organization: oid(req) }), User.findById(uid(req))]); if (!(await requireTicketAccess(req, res, ticket)) || !ticket) return; const log = ticket.workLogs.find((item: any) => String(item._id ?? item.id) === req.params.logId); if (!log) return res.status(404).json({ message: "Work log not found" }); if (!leaders.includes(req.user!.role as any) && !ownedBy(log, req, user)) return res.status(403).json({ message: "You may only delete your own work logs" }); ticket.workLogs = ticket.workLogs.filter((item: any) => String(item._id ?? item.id) !== req.params.logId); await ticket.save(); return res.json({ ticket }); });
+router.post("/tickets/:id/attachments", async (req: AuthRequest, res) => {
+  const body = parseOr400(z.object({
+    name: z.string().min(1).max(255),
+    url: z.string().url().optional(),
+    dataUrl: z.string().regex(/^data:[^;]+;base64,/).max(900_000).optional(),
+    mimeType: z.string().max(255).optional(),
+    size: z.number().int().min(0).max(650_000).optional(),
+  }).refine((value) => Boolean(value.url || value.dataUrl), { message: "A file or URL is required" }), req.body, res);
+  if (!body) return;
+  const ticket = await Ticket.findOne({ _id: req.params.id, organization: oid(req) });
+  if (!(await requireTicketAccess(req, res, ticket)) || !ticket) return;
+  ticket.attachments.push({ id: randomUUID(), ...body, storage: body.dataUrl ? "database" : "external", uploadedBy: uid(req), createdAt: new Date() });
+  await ticket.save();
+  await audit(req, "ticket.attachment.added", "ticket", ticket._id, { name: body.name, size: body.size, storage: body.dataUrl ? "database" : "external" });
+  return res.status(201).json({ ticket });
+});
+router.delete("/tickets/:id/attachments/:attachmentId", async (req: AuthRequest, res) => { const ticket = await Ticket.findOne({ _id: req.params.id, organization: oid(req) }); if (!(await requireTicketAccess(req, res, ticket)) || !ticket) return; const attachment = ticket.attachments.find((item: any) => String(item._id ?? item.id) === req.params.attachmentId); if (!attachment) return res.status(404).json({ message: "Attachment not found" }); if (!leaders.includes(req.user!.role as any) && !ownedBy(attachment, req)) return res.status(403).json({ message: "You may only delete your own attachments" }); ticket.attachments = ticket.attachments.filter((item: any) => String(item._id ?? item.id) !== req.params.attachmentId); await ticket.save(); return res.json({ ticket }); });
 router.delete("/tickets/:id", requireRole(["admin", "manager"]), async (req: AuthRequest, res) => { const ticket = await Ticket.findOneAndDelete({ _id: req.params.id, organization: oid(req) }); return ticket ? res.status(204).send() : res.status(404).json({ message: "Ticket not found" }); });
 router.post("/tickets/:id/clone", requireRole(["admin", "manager"]), async (req: AuthRequest, res) => { const source = await Ticket.findOne({ _id: req.params.id, organization: oid(req) }).lean(); if (!source) return res.status(404).json({ message: "Ticket not found" }); const project = await Project.findById(source.project); const counter = await Counter.findOneAndUpdate({ organization: oid(req), scope: `ticket:${source.project}` }, { $inc: { value: 1 } }, { upsert: true, new: true, setDefaultsOnInsert: true }); const { _id, createdAt, updatedAt, ...copy } = source as typeof source & { createdAt?: Date; updatedAt?: Date }; const ticket = await Ticket.create({ ...copy, title: `${source.title} (copy)`, ticketId: `${project?.key}-${counter!.value}`, history: [{ event: "Cloned", createdAt: new Date() }] }); return res.status(201).json({ ticket }); });
 
@@ -107,10 +159,11 @@ router.delete("/integrations/:kind/:id", requireRole(["admin"]), async (req: Aut
 
 router.patch("/organization", requireRole(["admin"]), async (req: AuthRequest, res) => { const body = parseOr400(z.object({ name: z.string().min(2).optional(), plan: z.enum(["starter", "scale", "enterprise"]).optional() }), req.body, res); if (!body) return; const organization = await Organization.findByIdAndUpdate(oid(req), body, { new: true }); return res.json({ organization }); });
 router.delete("/organization", requireRole(["admin"]), async (req: AuthRequest, res) => {
-  const body = parseOr400(z.object({ confirmationName: z.string().min(1) }), req.body, res); if (!body) return;
-  const organization = await Organization.findById(oid(req));
-  if (!organization) return res.status(404).json({ message: "Organization not found" });
+  const body = parseOr400(z.object({ confirmationName: z.string().min(1), currentPassword: z.string().min(1) }), req.body, res); if (!body) return;
+  const [organization, user] = await Promise.all([Organization.findById(oid(req)), User.findById(uid(req))]);
+  if (!organization || !user) return res.status(404).json({ message: "Organization or user not found" });
   if (body.confirmationName !== organization.name) return res.status(409).json({ message: "Organization name does not match" });
+  if (!(await bcrypt.compare(body.currentPassword, user.passwordHash))) return res.status(401).json({ message: "Current password is incorrect" });
   await withTransaction(async (client) => {
     await client.query("UPDATE users SET last_active_organization = NULL WHERE last_active_organization = $1", [organization._id]);
     await client.query("UPDATE organizations SET owner = NULL WHERE id = $1", [organization._id]);

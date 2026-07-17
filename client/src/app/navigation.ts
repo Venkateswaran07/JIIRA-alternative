@@ -23,6 +23,7 @@ import {
   Sparkles,
   Timer,
   Users,
+  UsersRound,
   Webhook,
   Zap,
   type LucideIcon,
@@ -77,6 +78,7 @@ export const nav: NavGroup[] = [
     admin: true,
     items: [
       ["/organization", Building2, "Organization"],
+      ["/groups", UsersRound, "Groups"],
       ["/resources/workflow", GitBranch, "Workflow editor"],
       ["/resources/permission-scheme", KeyRound, "Permission schemes"],
       ["/resources/automation-rule", Zap, "Automation rules"],

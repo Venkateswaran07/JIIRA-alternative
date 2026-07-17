@@ -62,7 +62,7 @@ const workspaceRouteRoots = new Set([
   "dashboard", "my-work", "notifications", "projects", "resources", "backlog",
   "board", "cycles", "sprints", "sla", "sprint-risk", "tickets", "team",
   "reports", "ai", "organization", "sessions", "settings", "audit-logs",
-  "integrations", "import", "403", "500", "offline",
+  "integrations", "import", "groups", "403", "500", "offline",
 ]);
 
 function workspaceBasename() {
@@ -164,6 +164,7 @@ function Shell({
   toast: (s: string) => void;
 }) {
   const {
+    company,
     organization,
     user: currentUser,
     notifications = [],
@@ -174,10 +175,12 @@ function Shell({
   const [collapsed, setCollapsed] = useState(false),
     [mobile, setMobile] = useState(false),
     [search, setSearch] = useState(false),
+    [companyMenu, setCompanyMenu] = useState(false),
     [workspaceMenu, setWorkspaceMenu] = useState(false),
     [notificationMenu, setNotificationMenu] = useState(false);
   const [aiPanel, setAiPanel] = useState(false);
   const [selectedInvitation, setSelectedInvitation] = useState<any>(null);
+  const [companies, setCompanies] = useState<any[]>([]);
   const mobileMenuButton = React.useRef<HTMLButtonElement>(null);
   const searchButton = React.useRef<HTMLButtonElement>(null);
   const notificationMenuRef = React.useRef<HTMLDivElement>(null);
@@ -201,12 +204,31 @@ function Shell({
     window.location.assign("/dashboard");
   };
 
+  useEffect(() => {
+    void api<any>("/companies")
+      .then((data) => setCompanies(data.companies || []))
+      .catch(() => setCompanies([]));
+  }, [company?.id, company?._id, organization?.id, organization?._id]);
+
+  const switchCompany = async (nextCompany: any) => {
+    try {
+      setCompanyMenu(false);
+      const data = await api<any>(`/companies/${nextCompany.id || nextCompany._id}/workspaces`);
+      const nextWorkspace = data.workspaces?.[0];
+      if (!nextWorkspace) return toast("This organization has no accessible workspaces");
+      await switchWorkspace(nextWorkspace.id || nextWorkspace._id);
+    } catch (error) {
+      toast(error instanceof Error ? error.message : "Unable to switch organization");
+    }
+  };
+
   const unreadCount = notifications.filter((n: any) => !n.readAt).length;
   const recentNotifications = notifications.slice(0, 5);
 
   const closeOverlays = React.useCallback(() => {
     setMobile(false);
     setSearch(false);
+    setCompanyMenu(false);
     setWorkspaceMenu(false);
     setNotificationMenu(false);
     setAiPanel(false);
@@ -303,6 +325,24 @@ function Shell({
             <Icons.X size={19} />
           </button>
         </div>
+        <div className="company-context-wrap">
+          <button className="company-context" onClick={() => { setWorkspaceMenu(false); setCompanyMenu(!companyMenu); }} aria-haspopup="menu" aria-expanded={companyMenu}>
+            <span className="avatar">{(company?.name || organization?.name || "O").slice(0, 2).toUpperCase()}</span>
+            <span><small>ORGANIZATION</small><b>{company?.name || organization?.name || "Organization"}</b></span>
+            <Icons.ChevronsUpDown size={14} />
+          </button>
+          {companyMenu && (
+            <div className="workspace-menu company-menu" role="menu">
+              <p>ORGANIZATIONS</p>
+              {companies.map((item) => {
+                const selected = String(item.id || item._id) === String(company?.id || company?._id);
+                return <button key={item.id || item._id} className={selected ? "selected" : ""} role="menuitem" onClick={() => selected ? setCompanyMenu(false) : void switchCompany(item)}><span className="avatar">{item.name.slice(0, 2).toUpperCase()}</span><span><b>{item.name}</b><small>{selected ? "Current organization" : fmt(item.role)}</small></span>{selected && <Icons.Check size={16} />}</button>;
+              })}
+              <hr />
+              <button role="menuitem" onClick={() => { setCompanyMenu(false); navigate("/organization"); }}><Icons.Settings size={17} /><span><b>Organization settings</b><small>Directory, groups and workspaces</small></span></button>
+            </div>
+          )}
+        </div>
         <div className="workspace-switcher">
           <button
             className="org-switch"
@@ -319,7 +359,7 @@ function Shell({
             </span>
             <span>
               <b>{organization?.name || "Workspace"}</b>
-              <small>{fmt(organization?.plan || "starter")} workspace</small>
+              <small>Current workspace · {fmt(organization?.plan || "starter")}</small>
             </span>
             <Icons.ChevronsUpDown size={15} />
           </button>
@@ -342,7 +382,7 @@ function Shell({
                 <Icons.Settings size={17} />
                 <span>
                   <b>Workspace settings</b>
-                  <small>Members, plan and preferences</small>
+                  <small>Projects, members and preferences</small>
                 </span>
               </button>
             </div>
@@ -681,11 +721,18 @@ function Command({
 }
 
 type AiChatMessage = {
-  id: number;
+  id: number | string;
   role: "user" | "assistant";
   content: string;
   requiresConfirmation?: boolean;
   pendingAction?: { method: string; path: string; body?: any; description: string };
+};
+
+type AiConversation = {
+  id: string;
+  title: string;
+  createdAt: string;
+  updatedAt: string;
 };
 
 type AiToolActivity = {
@@ -707,6 +754,9 @@ function redactAiPrivateDetails(value: string) {
 
 type AiAgentContextValue = {
   messages: AiChatMessage[];
+  conversations: AiConversation[];
+  activeConversationId: string | null;
+  historyLoading: boolean;
   input: string;
   setInput: React.Dispatch<React.SetStateAction<string>>;
   loading: boolean;
@@ -715,6 +765,8 @@ type AiAgentContextValue = {
   confirmMessage: (message: AiChatMessage) => void;
   denyMessage: () => void;
   clearChat: () => void;
+  openConversation: (id: string) => Promise<void>;
+  deleteConversation: (id: string) => Promise<void>;
 };
 
 const AiAgentContext = createContext<AiAgentContextValue | null>(null);
@@ -773,9 +825,51 @@ function aiActivityLabel(activity: AiToolActivity) {
 
 function AiAgentProvider({ children, toast }: { children: React.ReactNode; toast: (s: string) => void }) {
   const [messages, setMessages] = useState<AiChatMessage[]>([]);
+  const [conversations, setConversations] = useState<AiConversation[]>([]);
+  const [activeConversationId, setActiveConversationId] = useState<string | null>(null);
+  const [historyLoading, setHistoryLoading] = useState(true);
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
   const [toolActivities, setToolActivities] = useState<AiToolActivity[]>([]);
+
+  const refreshConversations = async () => {
+    const response = await apiFetch("/ai/conversations");
+    if (!response.ok) throw new Error("Unable to load AI chat history");
+    const data = await response.json();
+    const items = (data.conversations || []) as AiConversation[];
+    setConversations(items);
+    return items;
+  };
+
+  const openConversation = async (id: string) => {
+    setHistoryLoading(true);
+    try {
+      const response = await apiFetch(`/ai/conversations/${id}/messages`);
+      if (!response.ok) throw new Error("Unable to load this conversation");
+      const data = await response.json();
+      setActiveConversationId(id);
+      setMessages((data.messages || []).map((message: any) => ({
+        id: message.id,
+        role: message.role,
+        content: redactAiPrivateDetails(message.content),
+        requiresConfirmation: message.metadata?.requiresConfirmation,
+        pendingAction: message.metadata?.pendingAction
+          ? { ...message.metadata.pendingAction, description: redactAiPrivateDetails(message.metadata.pendingAction.description) }
+          : undefined,
+      })));
+    } catch (error) {
+      toast(error instanceof Error ? error.message : "Unable to load this conversation");
+    } finally {
+      setHistoryLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    refreshConversations()
+      .then((items) => items[0] ? openConversation(items[0].id) : undefined)
+      .catch((error) => toast(error instanceof Error ? error.message : "Unable to load AI chat history"))
+      .finally(() => setHistoryLoading(false));
+  }, []);
 
   const sendMessage = async (text: string, confirmed?: { action: string }) => {
     if (!text.trim() && !confirmed) return;
@@ -791,7 +885,7 @@ function AiAgentProvider({ children, toast }: { children: React.ReactNode; toast
         headers: {
           Accept: "application/x-ndjson",
         },
-        body: JSON.stringify({ message: text, history, ...(confirmed ? { confirmed } : {}) }),
+        body: JSON.stringify({ message: text, history, ...(activeConversationId ? { conversationId: activeConversationId } : {}), ...(confirmed ? { confirmed } : {}) }),
       });
       if (response.status === 401) {
         window.location.assign("/login");
@@ -861,6 +955,8 @@ function AiAgentProvider({ children, toast }: { children: React.ReactNode; toast
           : undefined,
       };
       setMessages((m) => [...m, assistantMsg]);
+      if (res.conversationId) setActiveConversationId(res.conversationId);
+      await refreshConversations();
     } catch (e) {
       toast(e instanceof Error ? e.message : "AI request failed");
       setMessages((m) => [...m, {
@@ -884,11 +980,33 @@ function AiAgentProvider({ children, toast }: { children: React.ReactNode; toast
     setMessages((m) => [...m, { id: Date.now(), role: "assistant", content: "Understood — action cancelled. How else can I help?" }]);
   };
 
-  const clearChat = () => { setMessages([]); setToolActivities([]); };
+  const clearChat = () => {
+    setActiveConversationId(null);
+    setMessages([]);
+    setToolActivities([]);
+  };
+
+  const deleteConversation = async (id: string) => {
+    try {
+      const response = await apiFetch(`/ai/conversations/${id}`, { method: "DELETE" });
+      if (!response.ok) throw new Error("Unable to delete this conversation");
+      const remaining = conversations.filter((conversation) => conversation.id !== id);
+      setConversations(remaining);
+      if (activeConversationId === id) {
+        if (remaining[0]) await openConversation(remaining[0].id);
+        else clearChat();
+      }
+    } catch (error) {
+      toast(error instanceof Error ? error.message : "Unable to delete this conversation");
+    }
+  };
 
   return (
     <AiAgentContext.Provider value={{
       messages,
+      conversations,
+      activeConversationId,
+      historyLoading,
       input,
       setInput,
       loading,
@@ -897,6 +1015,8 @@ function AiAgentProvider({ children, toast }: { children: React.ReactNode; toast
       confirmMessage: handleConfirm,
       denyMessage: handleDeny,
       clearChat,
+      openConversation,
+      deleteConversation,
     }}>
       {children}
     </AiAgentContext.Provider>
@@ -1113,6 +1233,14 @@ function AppRoutes({
         element={
           <AdminOnly>
             <OrganizationLive toast={toast} />
+          </AdminOnly>
+        }
+      />
+      <Route
+        path="/groups"
+        element={
+          <AdminOnly>
+            <GroupsLive toast={toast} />
           </AdminOnly>
         }
       />
@@ -3610,18 +3738,6 @@ function Reports() {
             <article className="metric"><div><span>Cycle time</span><strong>{report?.cycleTime ?? 0}d</strong><small>average duration</small></div></article>
             <article className="metric"><div><span>Blocked duration</span><strong>{blockedCount * 3}d</strong><small>estimated delay</small></div></article>
           </div>
-          <section className="card">
-            <CardTitle title="Missing Jira-like features" sub="Prioritized product gaps still outside this prototype" />
-            <div className="missing-feature-grid">
-              {(report?.missingFeatures || []).map((feature: any) => (
-                <article key={feature.name} className="missing-feature">
-                  <span><Badge tone={feature.priority}>{fmt(feature.priority)}</Badge><small>{feature.area}</small></span>
-                  <b>{feature.name}</b>
-                  <p>{fmt(feature.status)}</p>
-                </article>
-              ))}
-            </div>
-          </section>
           <div className="two-col">
             <section className="card">
               <CardTitle title="Sprint velocity" sub="Completed story points per sprint" />
@@ -3714,6 +3830,11 @@ function AIPage() {
     confirmMessage,
     denyMessage,
     clearChat,
+    conversations,
+    activeConversationId,
+    historyLoading,
+    openConversation,
+    deleteConversation,
   } = useAiAgent();
   const conversationRef = React.useRef<HTMLDivElement>(null);
   const inputRef = React.useRef<HTMLTextAreaElement>(null);
@@ -3816,6 +3937,25 @@ function AIPage() {
         </div>
 
         <aside className="ai-workspace-side">
+          <div className="ai-side-card ai-history-card">
+            <div className="ai-history-head">
+              <span className="ai-side-label">CHAT HISTORY</span>
+              <button className="icon-btn" onClick={clearChat} title="New conversation" aria-label="New conversation"><Icons.Plus size={14} /></button>
+            </div>
+            <div className="ai-history-list">
+              {historyLoading && conversations.length === 0 && <span className="ai-history-empty">Loading conversations…</span>}
+              {!historyLoading && conversations.length === 0 && <span className="ai-history-empty">Your saved conversations will appear here.</span>}
+              {conversations.map((conversation) => (
+                <div className={cx("ai-history-item", activeConversationId === conversation.id && "active")} key={conversation.id}>
+                  <button onClick={() => void openConversation(conversation.id)}>
+                    <Icons.MessageSquare size={14} />
+                    <span><b>{conversation.title}</b><small>{fmt(conversation.updatedAt)}</small></span>
+                  </button>
+                  <button className="ai-history-delete" onClick={() => void deleteConversation(conversation.id)} title="Delete conversation" aria-label={`Delete ${conversation.title}`}><Icons.Trash2 size={13} /></button>
+                </div>
+              ))}
+            </div>
+          </div>
           <div className="ai-side-card ai-side-capabilities">
             <span className="ai-side-icon purple"><Icons.WandSparkles size={18} /></span>
             <h3>One agent, full context</h3>
@@ -4825,6 +4965,7 @@ function TicketDetailLive({ toast }: { toast: (s: string) => void }) {
   const [desc, setDesc] = useState(raw?.description || "");
   const [isEditingTitle, setIsEditingTitle] = useState(false);
   const [isEditingDesc, setIsEditingDesc] = useState(false);
+  const fileInputRef = React.useRef<HTMLInputElement>(null);
   const acceptanceCriteria = raw?.acceptanceCriteria || [];
   const [acceptanceCriteriaDone, setAcceptanceCriteriaDone] = useState<boolean[]>(
     acceptanceCriteria.map((_: string, index: number) =>
@@ -5050,20 +5191,62 @@ function TicketDetailLive({ toast }: { toast: (s: string) => void }) {
     }
   };
 
-  const addAttachment = async () => {
-    const name = window.prompt("Attachment display name:");
-    const url = window.prompt("Attachment URL:");
-    if (!name || !url) return;
+  const addAttachment = async (file: File) => {
+    if (file.size > 650_000) {
+      toast("Files must be 650 KB or smaller");
+      return;
+    }
     try {
+      const dataUrl = await new Promise<string>((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve(String(reader.result));
+        reader.onerror = () => reject(new Error("Unable to read this file"));
+        reader.readAsDataURL(file);
+      });
       await mutate(() =>
         api(`/tickets/${raw._id}/attachments`, {
           method: "POST",
-          body: JSON.stringify({ name, url }),
+          body: JSON.stringify({
+            name: file.name,
+            dataUrl,
+            mimeType: file.type || "application/octet-stream",
+            size: file.size,
+          }),
         }),
       );
-      toast("Attachment added");
+      toast("File uploaded and stored");
     } catch (err) {
       toast(err instanceof Error ? err.message : "Failed to add attachment");
+    } finally {
+      if (fileInputRef.current) fileInputRef.current.value = "";
+    }
+  };
+
+  const addIssueLink = async () => {
+    const type = window.prompt(
+      "Link type: blocks, is-blocked-by, relates-to, or duplicates",
+      "relates-to",
+    );
+    if (!type || !["blocks", "is-blocked-by", "relates-to", "duplicates"].includes(type)) return;
+    const targetKey = window.prompt("Ticket key to link (for example ITR-102)");
+    if (!targetKey) return;
+    const target = (dashboard?.tickets || []).find(
+      (ticket: any) => ticket.ticketId.toLowerCase() === targetKey.trim().toLowerCase(),
+    );
+    if (!target) {
+      toast(`Ticket ${targetKey} was not found`);
+      return;
+    }
+    try {
+      await mutate(() =>
+        api(`/tickets/${raw._id}/links`, {
+          method: "POST",
+          body: JSON.stringify({ type, ticket: target._id }),
+        }),
+      );
+      toast("Issue link added");
+    } catch (err) {
+      toast(err instanceof Error ? err.message : "Failed to link ticket");
     }
   };
 
@@ -5208,26 +5391,39 @@ function TicketDetailLive({ toast }: { toast: (s: string) => void }) {
               ))}
             </div>
             {tab !== "history" && (
-              <button
-                className="btn primary"
-                onClick={
-                  tab === "comments"
-                    ? addComment
-                    : tab === "workLogs"
-                      ? addWorkLog
-                      : addAttachment
-                }
-                style={{ marginBottom: "1rem" }}
-              >
-                <Icons.Plus />
-                Add {tab === "workLogs" ? "work log" : tab.slice(0, -1)}
-              </button>
+              <>
+                <button
+                  className="btn primary"
+                  onClick={
+                    tab === "comments"
+                      ? addComment
+                      : tab === "workLogs"
+                        ? addWorkLog
+                        : () => fileInputRef.current?.click()
+                  }
+                  style={{ marginBottom: "1rem" }}
+                >
+                  {tab === "attachments" ? <Icons.Upload /> : <Icons.Plus />}
+                  {tab === "attachments" ? "Upload file" : `Add ${tab === "workLogs" ? "work log" : tab.slice(0, -1)}`}
+                </button>
+                {tab === "attachments" && (
+                  <input
+                    ref={fileInputRef}
+                    type="file"
+                    hidden
+                    onChange={(event) => {
+                      const file = event.target.files?.[0];
+                      if (file) void addAttachment(file);
+                    }}
+                  />
+                )}
+              </>
             )}
             <div className="timeline">
               {tabItems.length ? (
                 tabItems.map((item: any, index: number) => (
                   <div
-                    key={item._id || index}
+                    key={item._id || item.id || index}
                     style={{
                       display: "flex",
                       justifyContent: "space-between",
@@ -5244,10 +5440,22 @@ function TicketDetailLive({ toast }: { toast: (s: string) => void }) {
                       <i className="done" />
                       <span>
                         <b>
-                          {item.body || item.note || item.name || item.event}
+                          {tab === "attachments" ? (
+                            <a
+                              href={item.dataUrl || item.url}
+                              download={item.dataUrl ? item.name : undefined}
+                              target={item.url ? "_blank" : undefined}
+                              rel="noreferrer"
+                              onClick={(event) => event.stopPropagation()}
+                            >
+                              {item.name}
+                            </a>
+                          ) : item.body || item.note || item.event}
                         </b>
                         <small style={{ marginLeft: "10px" }}>
                           {item.hours ? `${item.hours} hours · ` : ""}
+                          {item.size ? `${Math.ceil(item.size / 1024)} KB · ` : ""}
+                          {item.storage === "database" ? "Stored file · " : ""}
                           {item.createdAt
                             ? new Date(item.createdAt).toLocaleString()
                             : ""}
@@ -5293,7 +5501,7 @@ function TicketDetailLive({ toast }: { toast: (s: string) => void }) {
                         {tab === "attachments" && (
                           <button
                             className="btn text-btn danger"
-                            onClick={() => deleteAttachment(item._id)}
+                            onClick={() => deleteAttachment(item._id || item.id)}
                           >
                             Delete
                           </button>
@@ -5374,7 +5582,136 @@ function TicketDetailLive({ toast }: { toast: (s: string) => void }) {
               disabled={!isLeader}
             />
           </div>
+          <div className="ticket-links">
+            <span>Issue links</span>
+            {(raw.issueLinks || []).map((link: any, index: number) => {
+              const target = (dashboard?.tickets || []).find(
+                (ticket: any) => String(ticket._id) === String(link.ticket),
+              );
+              return (
+                <button
+                  className="ticket-link"
+                  key={`${link.type}-${link.ticket}-${index}`}
+                  onClick={() => target && navigate(`/tickets/${target.ticketId}`)}
+                  disabled={!target}
+                >
+                  <Icons.Link2 />
+                  <span><small>{fmt(link.type)}</small><b>{target?.ticketId || "Unavailable ticket"}</b></span>
+                </button>
+              );
+            })}
+            {!(raw.issueLinks || []).length && <small>No linked issues</small>}
+            {isLeader && (
+              <button className="btn wide" onClick={addIssueLink}>
+                <Icons.Link2 />
+                Link issue
+              </button>
+            )}
+          </div>
         </aside>
+      </div>
+    </>
+  );
+}
+
+function GroupsLive({ toast }: { toast: (s: string) => void }) {
+  const { company } = useWorkspace();
+  const [groups, setGroups] = useState<any[]>([]);
+  const [workspaces, setWorkspaces] = useState<any[]>([]);
+  const [directory, setDirectory] = useState<any[]>([]);
+  const companyId = company?.id || company?._id;
+
+  const load = React.useCallback(async () => {
+    if (!companyId) return;
+    const [groupData, workspaceData, directoryData] = await Promise.all([
+      api<any>(`/companies/${companyId}/groups`),
+      api<any>(`/companies/${companyId}/workspaces`),
+      api<any>(`/companies/${companyId}/members`),
+    ]);
+    setGroups(groupData.groups || []);
+    setWorkspaces(workspaceData.workspaces || []);
+    setDirectory(directoryData.members || []);
+  }, [companyId]);
+
+  useEffect(() => {
+    void load().catch((error) => toast(error instanceof Error ? error.message : "Unable to load groups"));
+  }, [load]);
+
+  const create = async () => {
+    const name = window.prompt("Group name (for example Engineering)");
+    if (!name || !companyId) return;
+    const description = window.prompt("Group description", "") || "";
+    try {
+      await api(`/companies/${companyId}/groups`, { method: "POST", body: JSON.stringify({ name, description }) });
+      await load();
+      toast("Group created");
+    } catch (error) {
+      toast(error instanceof Error ? error.message : "Unable to create group");
+    }
+  };
+
+  const setMembers = async (group: any) => {
+    const current = (group.members || []).map((member: any) => member.email).join(", ");
+    const emails = window.prompt("Member emails, separated by commas", current);
+    if (emails === null || !companyId) return;
+    const requested = emails.split(",").map((email) => email.trim().toLowerCase()).filter(Boolean);
+    const users = directory;
+    const missing = requested.filter((email) => !users.some((user: any) => String(user.email || "").toLowerCase() === email));
+    if (missing.length) return toast(`Not in the organization directory: ${missing.join(", ")}`);
+    const userIds = requested.map((email) => users.find((user: any) => String(user.email).toLowerCase() === email)?._id);
+    try {
+      await api(`/companies/${companyId}/groups/${group._id}/members`, { method: "PUT", body: JSON.stringify({ userIds }) });
+      await load();
+      toast("Group members updated");
+    } catch (error) {
+      toast(error instanceof Error ? error.message : "Unable to update members");
+    }
+  };
+
+  const setWorkspaceAccess = async (group: any) => {
+    const currentNames = (group.workspaceAccess || []).map((grant: any) => workspaces.find((workspace: any) => String(workspace._id) === String(grant.workspace))?.name).filter(Boolean).join(", ");
+    const names = window.prompt("Workspace names this group can access, separated by commas", currentNames);
+    if (names === null || !companyId) return;
+    const role = window.prompt("Access role: manager, engineer, or designer", "engineer");
+    if (!role || !["manager", "engineer", "designer"].includes(role)) return toast("Choose a valid workspace role");
+    const requested = names.split(",").map((name) => name.trim().toLowerCase()).filter(Boolean);
+    const missing = requested.filter((name) => !workspaces.some((workspace: any) => workspace.name.toLowerCase() === name));
+    if (missing.length) return toast(`Unknown workspaces: ${missing.join(", ")}`);
+    const grants = requested.map((name) => ({ workspace: workspaces.find((workspace: any) => workspace.name.toLowerCase() === name)._id, role }));
+    try {
+      await api(`/companies/${companyId}/groups/${group._id}/workspaces`, { method: "PUT", body: JSON.stringify({ grants }) });
+      await load();
+      toast("Workspace access updated");
+    } catch (error) {
+      toast(error instanceof Error ? error.message : "Unable to update access");
+    }
+  };
+
+  const remove = async (group: any) => {
+    if (!companyId || !window.confirm(`Delete ${group.name}?`)) return;
+    try {
+      await api(`/companies/${companyId}/groups/${group._id}`, { method: "DELETE" });
+      await load();
+      toast("Group deleted");
+    } catch (error) {
+      toast(error instanceof Error ? error.message : "Unable to delete group");
+    }
+  };
+
+  return (
+    <>
+      <PageHead title="Organization groups" desc="Group people once, then grant access across multiple workspaces.">
+        <button className="btn primary" onClick={create}><Icons.Plus />New group</button>
+      </PageHead>
+      <div className="group-grid">
+        {groups.length ? groups.map((group) => (
+          <article className="card group-card" key={group._id}>
+            <header><span className="group-icon"><Icons.UsersRound /></span><div><h2>{group.name}</h2><p>{group.description || "Organization access group"}</p></div></header>
+            <div className="group-section"><span>MEMBERS</span><div className="group-chips">{(group.members || []).map((member: any) => <span key={member._id}><Avatar name={member.name} color={member.avatarColor} />{member.name}</span>)}{!group.members?.length && <small>No members</small>}</div></div>
+            <div className="group-section"><span>WORKSPACE ACCESS</span><div className="group-chips">{(group.workspaceAccess || []).map((grant: any) => <Badge key={grant._id} tone="purple">{workspaces.find((workspace: any) => String(workspace._id) === String(grant.workspace))?.name || "Workspace"} · {fmt(grant.role)}</Badge>)}{!group.workspaceAccess?.length && <small>No workspace grants</small>}</div></div>
+            <footer><button className="btn" onClick={() => setMembers(group)}>Manage members</button><button className="btn" onClick={() => setWorkspaceAccess(group)}>Workspace access</button><button className="icon-btn" onClick={() => remove(group)} aria-label={`Delete ${group.name}`}><Icons.Trash2 /></button></footer>
+          </article>
+        )) : <Empty title="No groups yet" body="Create groups such as Engineering, Product, Design, or Finance." />}
       </div>
     </>
   );
@@ -5382,6 +5719,7 @@ function TicketDetailLive({ toast }: { toast: (s: string) => void }) {
 
 function OrganizationLive({ toast }: { toast: (s: string) => void }) {
   const {
+    company,
     organization: org,
     dashboard,
     resources,
@@ -5389,6 +5727,15 @@ function OrganizationLive({ toast }: { toast: (s: string) => void }) {
     role,
   } = useWorkspace();
   const [name, setName] = useState(org?.name || "");
+  const [workspaces, setWorkspaces] = useState<any[]>([]);
+
+  useEffect(() => {
+    const companyId = company?.id || company?._id;
+    if (!companyId) return;
+    void api<any>(`/companies/${companyId}/workspaces`)
+      .then((data) => setWorkspaces(data.workspaces || []))
+      .catch(() => setWorkspaces([]));
+  }, [company?.id, company?._id]);
 
   const resourceCount = Object.values(resources || {}).reduce(
     (sum: number, items: any) => sum + (items?.length || 0),
@@ -5412,22 +5759,48 @@ function OrganizationLive({ toast }: { toast: (s: string) => void }) {
 
   const remove = async () => {
     const confirmation = window.prompt(
-      `Type ${org.name} to permanently delete this organization.`,
+      `Type ${org.name} to permanently delete this workspace.`,
     );
     if (confirmation !== org.name) return;
+    const currentPassword = window.prompt(
+      "Enter your current password to confirm permanent deletion.",
+    );
+    if (!currentPassword) return;
     try {
       await api("/organization", {
         method: "DELETE",
-        body: JSON.stringify({ confirmationName: confirmation }),
+        body: JSON.stringify({ confirmationName: confirmation, currentPassword }),
       });
       clearSession();
       window.location.href = "/login";
     } catch (err) {
-      toast(err instanceof Error ? err.message : "Deletion failed");
+      toast(err instanceof Error ? err.message : "Workspace deletion failed");
     }
   };
 
   const isAdmin = role === "admin";
+
+  const createWorkspace = async () => {
+    const companyId = company?.id || company?._id;
+    const workspaceName = window.prompt("Workspace name");
+    if (!companyId || !workspaceName) return;
+    try {
+      const result = await api<any>(`/companies/${companyId}/workspaces`, { method: "POST", body: JSON.stringify({ name: workspaceName }) });
+      toast("Workspace created");
+      await switchToCreatedWorkspace(result.workspace);
+    } catch (error) {
+      toast(error instanceof Error ? error.message : "Workspace creation failed");
+    }
+  };
+
+  const switchToCreatedWorkspace = async (workspace: any) => {
+    const session = await api<any>(`/workspaces/${workspace._id || workspace.id}/switch`, {
+      method: "POST",
+      body: JSON.stringify({ refreshToken: localStorage.getItem("itrack_refresh_token") }),
+    });
+    saveSession(session);
+    window.location.assign("/dashboard");
+  };
 
   const usage = [
     ["Team members", dashboard?.users?.length || 0],
@@ -5439,18 +5812,31 @@ function OrganizationLive({ toast }: { toast: (s: string) => void }) {
   return (
     <>
       <PageHead
-        title="Organization"
-        desc={`Manage ${org?.name || "Organization"} and monitor live usage.`}
+        title={company?.name || "Organization"}
+        desc="Company directory, groups, and workspaces."
       >
         <Badge tone="purple">{fmt(org?.plan || "starter")} plan</Badge>
       </PageHead>
       <div className="settings-layout">
         <SettingsNav active="Organization" />
         <div>
+          <section className="card">
+            <CardTitle title="Workspaces" sub="Collaboration areas inside this organization." />
+            <div className="workspace-overview-list">
+              {workspaces.map((workspace) => (
+                <button key={workspace._id} onClick={() => switchToCreatedWorkspace(workspace)}>
+                  <span className="avatar square">{workspace.name.slice(0, 2).toUpperCase()}</span>
+                  <span><b>{workspace.name}</b><small>{workspace.slug}</small></span>
+                  {String(workspace._id) === String(org?._id || org?.id) ? <Badge tone="green">Current</Badge> : <Icons.ChevronRight />}
+                </button>
+              ))}
+            </div>
+            {isAdmin && <button className="btn primary" onClick={createWorkspace}><Icons.Plus />New workspace</button>}
+          </section>
           <section className="card form-card">
             <CardTitle
-              title="Organization details"
-              sub="Loaded from the organization API"
+              title="Current workspace"
+              sub="Workspace name, URL, and delivery settings."
             />
             <div className="form-grid">
               <label className="field">
@@ -5477,8 +5863,8 @@ function OrganizationLive({ toast }: { toast: (s: string) => void }) {
           </section>
           <section className="card">
             <CardTitle
-              title="Current usage"
-              sub="Live organization record counts"
+              title="Current workspace usage"
+              sub="Live record counts for this workspace"
             />
             <div className="usage-list">
               {usage.map(([label, value]) => (
@@ -5495,11 +5881,11 @@ function OrganizationLive({ toast }: { toast: (s: string) => void }) {
           {isAdmin && (
             <section className="card danger-zone">
               <CardTitle
-                title="Danger zone"
-                sub="Permanently delete this organization and all workspace data."
+                title="Workspace danger zone"
+                sub="Permanently delete this workspace and all of its data."
               />
               <button className="btn danger" onClick={remove}>
-                Delete organization
+                Delete workspace
               </button>
             </section>
           )}
@@ -6016,17 +6402,115 @@ function SprintsLive({
   );
 }
 
+const resourceFeatureConfig: Record<string, {
+  description: string;
+  fields: { key: string; label: string; initial?: string }[];
+}> = {
+  release: {
+    description: "Plan versions, release dates, ownership, and delivery progress.",
+    fields: [
+      { key: "version", label: "Version", initial: "1.0.0" },
+      { key: "startDate", label: "Start date (YYYY-MM-DD)" },
+      { key: "releaseDate", label: "Release date (YYYY-MM-DD)" },
+      { key: "owner", label: "Release owner" },
+      { key: "progress", label: "Progress percentage", initial: "0" },
+    ],
+  },
+  epic: {
+    description: "Sequence epics on a delivery timeline with owners and progress.",
+    fields: [
+      { key: "startDate", label: "Start date (YYYY-MM-DD)" },
+      { key: "endDate", label: "End date (YYYY-MM-DD)" },
+      { key: "owner", label: "Epic owner" },
+      { key: "progress", label: "Progress percentage", initial: "0" },
+    ],
+  },
+  workflow: {
+    description: "Define workflow statuses and allowed transitions.",
+    fields: [
+      { key: "statuses", label: "Statuses (comma separated)", initial: "Backlog, To Do, In Progress, In Review, Done" },
+      { key: "transitions", label: "Transitions (comma separated, e.g. To Do > In Progress)" },
+    ],
+  },
+  "permission-scheme": {
+    description: "Configure scoped roles and the actions they may perform.",
+    fields: [
+      { key: "roles", label: "Roles in this scheme (comma separated)", initial: "admin, manager, engineer, designer" },
+      { key: "permissions", label: "Permissions (comma separated)", initial: "browse, create, edit, transition, comment" },
+      { key: "scope", label: "Scope", initial: "workspace" },
+    ],
+  },
+  "automation-rule": {
+    description: "Define event-driven rules for routine ticket operations.",
+    fields: [
+      { key: "trigger", label: "Trigger", initial: "ticket.status.changed" },
+      { key: "condition", label: "Condition", initial: "status = Done" },
+      { key: "action", label: "Action", initial: "notify watchers" },
+    ],
+  },
+  "notification-rule": {
+    description: "Route workspace events to selected audiences and channels.",
+    fields: [
+      { key: "event", label: "Event", initial: "ticket.assigned" },
+      { key: "channel", label: "Channel", initial: "in-app" },
+      { key: "recipients", label: "Recipients", initial: "assignee" },
+    ],
+  },
+  "saved-filter": {
+    description: "Save a ticket search as a reusable, shared queue.",
+    fields: [
+      { key: "query", label: "Search text" },
+      { key: "label", label: "Label" },
+      { key: "filter", label: "State (open or all)", initial: "open" },
+      { key: "sort", label: "Sort (asc or desc)", initial: "asc" },
+      { key: "shared", label: "Shared with workspace (yes or no)", initial: "yes" },
+    ],
+  },
+};
+
+const resourceIcons: Record<string, React.ComponentType<any>> = {
+  epic: Icons.Map,
+  label: Icons.Tags,
+  component: Icons.Boxes,
+  release: Icons.Rocket,
+  "issue-type": Icons.TicketCheck,
+  priority: Icons.Signal,
+  workflow: Icons.GitBranch,
+  "custom-field": Icons.Braces,
+  template: Icons.LayoutTemplate,
+  board: Icons.Columns3,
+  milestone: Icons.Flag,
+  "automation-rule": Icons.Zap,
+  "notification-rule": Icons.BellRing,
+  "permission-scheme": Icons.KeyRound,
+  "saved-filter": Icons.ListFilter,
+};
+
+function collectResourceDefinition(kind: string, current?: any) {
+  const name = window.prompt(`${current ? "Edit" : "Name for"} ${fmt(kind)}`, current?.name || "");
+  if (!name) return null;
+  const description = window.prompt("Description", current?.description || "") ?? current?.description ?? "";
+  const key = window.prompt("Key (optional)", current?.key || "") ?? current?.key ?? "";
+  const config = { ...(current?.config || {}) };
+  for (const field of resourceFeatureConfig[kind]?.fields || []) {
+    const value = window.prompt(field.label, String(config[field.key] ?? field.initial ?? ""));
+    if (value === null) return null;
+    config[field.key] = value.trim();
+  }
+  return { name: name.trim(), description, key: key.trim() || undefined, status: current?.status || "active", order: current?.order || 0, config };
+}
+
 function ResourcesLive({ toast }: { toast: (s: string) => void }) {
   const { resources, mutate, role } = useWorkspace();
   const location = useLocation();
   const navigate = useNavigate();
+  const [params] = useSearchParams();
   const kind = location.pathname.split("/")[2];
 
   const isLeader = ["admin", "manager"].includes(role);
 
   if (kind) {
     const rawRows = resources[kind] || [];
-    const [params] = useSearchParams();
     const q = params.get("q") || "";
     const filter = params.get("filter") || "";
     const sort = params.get("sort") || "";
@@ -6055,18 +6539,15 @@ function ResourcesLive({ toast }: { toast: (s: string) => void }) {
       : filtered;
 
     const create = async () => {
-      const name = window.prompt(`Name for the new ${fmt(kind)}`);
-      if (!name) return;
+      const definition = collectResourceDefinition(kind);
+      if (!definition) return;
       try {
         await mutate(() =>
           api(`/resources/${kind}`, {
             method: "POST",
             body: JSON.stringify({
-              name,
-              description: "",
-              status: "active",
+              ...definition,
               order: rows.length,
-              config: {},
             }),
           }),
         );
@@ -6076,20 +6557,30 @@ function ResourcesLive({ toast }: { toast: (s: string) => void }) {
       }
     };
 
-    const rename = async (item: any) => {
-      const name = window.prompt(`Rename ${fmt(kind)}`, item.name);
-      if (!name) return;
+    const edit = async (item: any) => {
+      const definition = collectResourceDefinition(kind, item);
+      if (!definition) return;
       try {
         await mutate(() =>
           api(`/resources/${kind}/${item._id}`, {
             method: "PATCH",
-            body: JSON.stringify({ name }),
+            body: JSON.stringify(definition),
           }),
         );
         toast(`${fmt(kind)} updated`);
       } catch (err) {
-        toast(err instanceof Error ? err.message : "Rename failed");
+        toast(err instanceof Error ? err.message : "Update failed");
       }
+    };
+
+    const openSavedQueue = (item: any) => {
+      const queue = new URLSearchParams();
+      for (const key of ["query", "label", "filter", "sort"]) {
+        const value = String(item.config?.[key] || "");
+        if (!value || value === "all") continue;
+        queue.set(key === "query" ? "q" : key, value);
+      }
+      navigate(`/tickets?${queue.toString()}`);
     };
 
     const remove = async (item: any) => {
@@ -6111,7 +6602,7 @@ function ResourcesLive({ toast }: { toast: (s: string) => void }) {
       <>
         <PageHead
           title={fmt(kind)}
-          desc={`Live ${fmt(kind).toLowerCase()} resources from the API.`}
+          desc={resourceFeatureConfig[kind]?.description || `Manage live ${fmt(kind).toLowerCase()} definitions.`}
         >
           {isLeader && (
             <button className="btn primary" onClick={create}>
@@ -6121,6 +6612,30 @@ function ResourcesLive({ toast }: { toast: (s: string) => void }) {
           )}
         </PageHead>
         <FilterBar />
+        {(kind === "epic" || kind === "release") && rows.length > 0 && (
+          <section className="card resource-plan">
+            <CardTitle
+              title={kind === "epic" ? "Epic roadmap timeline" : "Release plan"}
+              sub={kind === "epic" ? "Delivery windows and progress across epics." : "Version targets and readiness at a glance."}
+            />
+            <div className="resource-plan-grid">
+              {rows.map((item: any) => {
+                const start = item.config?.startDate;
+                const end = item.config?.endDate || item.config?.releaseDate;
+                const progress = Math.max(0, Math.min(100, Number(item.config?.progress || 0)));
+                return (
+                  <article key={item._id}>
+                    <span><Badge tone={kind === "release" ? "purple" : "blue"}>{item.config?.version || fmt(kind)}</Badge><small>{item.config?.owner || "Unassigned"}</small></span>
+                    <b>{item.name}</b>
+                    <small>{start || "No start date"} → {end || "No target date"}</small>
+                    <Progress value={progress} tone={progress >= 80 ? "green" : "purple"} />
+                    <strong>{progress}%</strong>
+                  </article>
+                );
+              })}
+            </div>
+          </section>
+        )}
         <section className="card no-pad">
           {rows.length ? (
             <table>
@@ -6129,8 +6644,9 @@ function ResourcesLive({ toast }: { toast: (s: string) => void }) {
                   <th>Name</th>
                   <th>Status</th>
                   <th>Key</th>
+                  <th>Configuration</th>
                   <th>Updated</th>
-                  {isLeader && <th>Actions</th>}
+                  {(isLeader || kind === "saved-filter") && <th>Actions</th>}
                 </tr>
               </thead>
               <tbody>
@@ -6143,22 +6659,39 @@ function ResourcesLive({ toast }: { toast: (s: string) => void }) {
                       <Badge tone="green">{item.status}</Badge>
                     </td>
                     <td>{item.key || "—"}</td>
+                    <td>
+                      <div className="resource-config-summary">
+                        {Object.entries(item.config || {}).slice(0, 4).map(([key, value]) => (
+                          value ? <span key={key}><small>{fmt(key)}</small><b>{String(value)}</b></span> : null
+                        ))}
+                        {!Object.values(item.config || {}).some(Boolean) && <span>Default configuration</span>}
+                      </div>
+                    </td>
                     <td>{new Date(item.updatedAt).toLocaleString()}</td>
-                    {isLeader && (
+                    {(isLeader || kind === "saved-filter") && (
                       <td>
                         <div style={{ display: "flex", gap: "10px" }}>
-                          <button
-                            className="btn text-btn"
-                            onClick={() => rename(item)}
-                          >
-                            Rename
-                          </button>
-                          <button
-                            className="btn text-btn danger"
-                            onClick={() => remove(item)}
-                          >
-                            Delete
-                          </button>
+                          {isLeader && (
+                            <>
+                              <button
+                                className="btn text-btn"
+                                onClick={() => edit(item)}
+                              >
+                                Edit
+                              </button>
+                              <button
+                                className="btn text-btn danger"
+                                onClick={() => remove(item)}
+                              >
+                                Delete
+                              </button>
+                            </>
+                          )}
+                          {kind === "saved-filter" && (
+                            <button className="btn text-btn" onClick={() => openSavedQueue(item)}>
+                              Open queue
+                            </button>
+                          )}
                         </div>
                       </td>
                     )}
@@ -6183,20 +6716,8 @@ function ResourcesLive({ toast }: { toast: (s: string) => void }) {
         desc="Live reusable workspace configuration."
       />
       <div className="resource-grid">
-        {resourceKinds.map((resourceKind, index) => {
-          const Icon = [
-            Icons.Layers3,
-            Icons.Tags,
-            Icons.Boxes,
-            Icons.Rocket,
-            Icons.TicketCheck,
-            Icons.Signal,
-            Icons.GitBranch,
-            Icons.Braces,
-            Icons.LayoutTemplate,
-            Icons.Columns3,
-            Icons.Flag,
-          ][index];
+        {resourceKinds.map((resourceKind) => {
+          const Icon = resourceIcons[resourceKind] || Icons.Layers3;
           return (
             <article
               className="card resource-card"
@@ -6362,12 +6883,29 @@ function AuditLogsLive() {
       })
     : filtered;
 
+  const exportAuditLog = async () => {
+    const response = await apiFetch("/audit-logs/export");
+    if (!response.ok) throw new Error("Audit export failed");
+    const blob = await response.blob();
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = `audit-log-${new Date().toISOString().slice(0, 10)}.csv`;
+    link.click();
+    URL.revokeObjectURL(url);
+  };
+
   return (
     <>
       <PageHead
         title="Audit logs"
         desc="Live organization activity from the audit API."
-      />
+      >
+        <button className="btn" onClick={() => void exportAuditLog()}>
+          <Icons.Download />
+          Export CSV
+        </button>
+      </PageHead>
       <FilterBar placeholder="Search actions or entities…" />
       <section className="card no-pad">
         {filtered.length ? (

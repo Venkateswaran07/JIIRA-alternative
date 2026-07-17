@@ -37,6 +37,9 @@ const internalToolEndpoints = new Set([
   "POST /ai/execute",
   "POST /ai/chat",
   "GET /ai/models",
+  "GET /ai/conversations",
+  "GET /ai/conversations/:id/messages",
+  "DELETE /ai/conversations/:id",
 ]);
 
 export function normalizeAiPath(path: string) {

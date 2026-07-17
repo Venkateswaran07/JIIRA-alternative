@@ -5,8 +5,9 @@ import jwt from "jsonwebtoken";
 import { z } from "zod";
 import { env } from "../config/env.js";
 import { ACCESS_COOKIE, readCookie } from "../lib/authCookies.js";
-import { invalidateWorkspaceMembership, requireAuth, requireWorkspace, type AuthRequest } from "../middleware/auth.js";
+import { effectiveWorkspaceMembership, invalidateWorkspaceMembership, requireAuth, requireWorkspace, type AuthRequest } from "../middleware/auth.js";
 import { Organization } from "../models/Organization.js";
+import { Company, CompanyMembership } from "../models/Company.js";
 import { Project } from "../models/Project.js";
 import { Session } from "../models/Operational.js";
 import { User } from "../models/User.js";
@@ -38,11 +39,22 @@ router.get("/workspaces", requireAuth, async (req: AuthRequest, res) => {
 });
 
 router.post("/workspaces", requireAuth, async (req: AuthRequest, res) => {
-  const parsed = z.object({ name: z.string().min(2) }).safeParse(req.body);
+  const parsed = z.object({ name: z.string().min(2), companyName: z.string().min(2).optional(), companyId: z.string().optional() }).safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ message: "Workspace name is required" });
   const user = await User.findById(req.user!.userId);
   if (!user) return res.status(404).json({ message: "User not found" });
-  const organization = await Organization.create({ name: parsed.data.name, slug: await uniqueSlug(parsed.data.name), plan: "starter", owner: user._id });
+  let company;
+  if (parsed.data.companyId) {
+    const membership = await CompanyMembership.findOne({ company: parsed.data.companyId, user: user._id, role: "admin", status: "active" });
+    if (!membership) return res.status(403).json({ message: "Only organization admins can create workspaces" });
+    company = await Company.findById(parsed.data.companyId);
+  } else {
+    const companyName = parsed.data.companyName || parsed.data.name;
+    company = await Company.create({ name: companyName, slug: await uniqueSlug(companyName), owner: user._id });
+    await CompanyMembership.create({ company: company._id, user: user._id, role: "admin", status: "active" });
+  }
+  if (!company) return res.status(404).json({ message: "Organization not found" });
+  const organization = await Organization.create({ company: company._id, name: parsed.data.name, slug: await uniqueSlug(parsed.data.name), plan: "starter", owner: user._id });
   const membership = await OrganizationMembership.create({ user: user._id, organization: organization._id, role: "admin", status: "active", skills: ["Planning"], availability: 1, capacity: 32 });
   invalidateWorkspaceMembership(String(user._id), String(organization._id));
   user.lastActiveOrganization = organization._id; await user.save();
@@ -50,7 +62,7 @@ router.post("/workspaces", requireAuth, async (req: AuthRequest, res) => {
 });
 
 router.post("/workspaces/:id/switch", requireAuth, async (req: AuthRequest, res) => {
-  const [user, membership] = await Promise.all([User.findById(req.user!.userId), OrganizationMembership.findOne({ user: req.user!.userId, organization: req.params.id, status: "active" })]);
+  const [user, membership] = await Promise.all([User.findById(req.user!.userId), effectiveWorkspaceMembership(req.user!.userId, String(req.params.id))]);
   if (!user || !membership) return res.status(404).json({ message: "Workspace membership not found" });
   if (typeof req.body?.refreshToken === "string") await Session.updateOne({ tokenHash: hashToken(req.body.refreshToken), user: user._id }, { revokedAt: new Date() });
   user.lastActiveOrganization = membership.organization; await user.save();
@@ -119,6 +131,10 @@ router.post("/auth/accept-invite", async (req: AuthRequest, res) => {
   let membership = await OrganizationMembership.findOne({ user: user._id, organization: invitation.organization });
   if (!membership) membership = await OrganizationMembership.create({ user: user._id, organization: invitation.organization, role: invitation.role, status: "active", capacity: invitation.capacity, availability: 1, skills: [] });
   else if (membership.status !== "active") { membership.status = "active"; membership.role = invitation.role; await membership.save(); }
+  const workspace = await Organization.findById(invitation.organization);
+  if (workspace && !(await CompanyMembership.exists({ company: workspace.company, user: user._id }))) {
+    await CompanyMembership.create({ company: workspace.company, user: user._id, role: "member", status: "active", jobFunction: ["engineer", "designer"].includes(invitation.role) ? invitation.role : undefined });
+  }
   invalidateWorkspaceMembership(String(user._id), String(invitation.organization));
   invitation.status = "accepted"; invitation.acceptedBy = user._id; invitation.acceptedAt = new Date(); await invitation.save();
   user.lastActiveOrganization = invitation.organization; await user.save();

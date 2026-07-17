@@ -15,6 +15,22 @@ const tableDivider = /^\s*\|?\s*:?-{3,}:?\s*(?:\|\s*:?-{3,}:?\s*)+\|?\s*$/;
 const unorderedItem = /^\s*[-+*•]\s+(.+)$/;
 const orderedItem = /^\s*(\d+)[.)]\s+(.+)$/;
 
+function normalizeEscapedMarkdown(content: string) {
+  // Some providers return Markdown as an escaped JSON string, leaving the
+  // fence and newline markers visible in the chat instead of rendering them.
+  if (!content.includes("\\n") || (!content.includes("```") && !content.includes('\\"'))) return content;
+  return content.replace(/\\r?\\n/g, "\n").replace(/\\"/g, '"');
+}
+
+function formatJsonCode(code: string, language?: string) {
+  if (language?.toLowerCase() !== "json") return code;
+  try {
+    return JSON.stringify(JSON.parse(code.trim()), null, 2);
+  } catch {
+    return code;
+  }
+}
+
 function splitTableRow(row: string) {
   const trimmed = row.trim().replace(/^\|/, "").replace(/\|$/, "");
   const cells: string[] = [];
@@ -77,7 +93,7 @@ function inlineMarkdown(text: string, keyPrefix: string): React.ReactNode[] {
 }
 
 function CustomMarkdownView({ content, className }: MarkdownProps) {
-  const lines = content.replace(/\r\n?/g, "\n").split("\n");
+  const lines = normalizeEscapedMarkdown(content).replace(/\r\n?/g, "\n").split("\n");
   const blocks: React.ReactNode[] = [];
   let index = 0;
 
@@ -98,10 +114,11 @@ function CustomMarkdownView({ content, className }: MarkdownProps) {
         index += 1;
       }
       if (index < lines.length) index += 1;
+      const formattedCode = formatJsonCode(code.join("\n"), fence[1]);
       blocks.push(
         <pre className="md-code-block" key={`code-${index}`}>
           {fence[1] && <span className="md-code-language">{fence[1]}</span>}
-          <code>{code.join("\n")}</code>
+          <code>{formattedCode}</code>
         </pre>,
       );
       continue;

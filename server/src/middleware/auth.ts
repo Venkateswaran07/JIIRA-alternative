@@ -5,13 +5,15 @@ import { ACCESS_COOKIE, readCookie } from "../lib/authCookies.js";
 import { measureAsync } from "../lib/performance.js";
 import type { UserRole } from "../models/User.js";
 import { OrganizationMembership } from "../models/WorkspaceAccess.js";
+import { CompanyGroupMember, CompanyMembership, WorkspaceGroupAccess } from "../models/Company.js";
+import { Organization } from "../models/Organization.js";
 
-export type AuthUser = { userId: string; organizationId?: string; membershipId?: string; role?: UserRole; email: string };
+export type AuthUser = { userId: string; companyId?: string; workspaceId?: string; organizationId?: string; membershipId?: string; workspaceAccessSource?: "direct" | "group" | "organization"; role?: UserRole; email: string };
 export type AuthRequest = Request & { user?: AuthUser };
 
-type CachedMembership = { id: string; role: UserRole; expiresAt: number };
+type CachedMembership = { id: string; role: UserRole; accessSource: "direct" | "group" | "organization"; expiresAt: number };
 const workspaceMembershipCache = new Map<string, CachedMembership>();
-const workspaceMembershipLoads = new Map<string, Promise<{ id: string; role: UserRole } | null>>();
+const workspaceMembershipLoads = new Map<string, Promise<{ id: string; role: UserRole; accessSource: "direct" | "group" | "organization" } | null>>();
 
 function membershipCacheTtlMs() {
   const configured = Number(process.env.WORKSPACE_MEMBERSHIP_CACHE_TTL_MS ?? 5000);
@@ -20,6 +22,24 @@ function membershipCacheTtlMs() {
 
 function membershipCacheKey(userId: string, organizationId: string) {
   return `${userId}:${organizationId}`;
+}
+
+const roleRank: Record<UserRole, number> = { designer: 1, engineer: 2, manager: 3, admin: 4 };
+
+export async function effectiveWorkspaceMembership(userId: string, workspaceId: string) {
+  const direct = await OrganizationMembership.findOne({ user: userId, organization: workspaceId, status: "active" });
+  if (direct) return { id: direct.id, role: direct.role as UserRole, organization: workspaceId, accessSource: "direct" as const };
+  const workspace = await Organization.findById(workspaceId);
+  if (!workspace) return null;
+  const companyMembership = await CompanyMembership.findOne({ company: workspace.company, user: userId, status: "active" });
+  if (!companyMembership) return null;
+  if (companyMembership.role === "admin") return { id: `company:${companyMembership.id}`, role: "admin" as UserRole, organization: workspaceId, accessSource: "organization" as const };
+  const groupMemberships = await CompanyGroupMember.find({ user: userId });
+  const groupIds = groupMemberships.map((item: any) => String(item.group));
+  if (!groupIds.length) return null;
+  const grants = await WorkspaceGroupAccess.find({ workspace: workspaceId, group: { $in: groupIds } });
+  const best = grants.sort((left: any, right: any) => (roleRank[right.role as UserRole] || 0) - (roleRank[left.role as UserRole] || 0))[0];
+  return best ? { id: `group:${best.id}`, role: best.role as UserRole, organization: workspaceId, accessSource: "group" as const } : null;
 }
 
 export function invalidateWorkspaceMembership(userId: string, organizationId: string) {
@@ -49,16 +69,17 @@ export async function requireWorkspace(req: AuthRequest, res: Response, next: Ne
   if (cached && cached.expiresAt > Date.now()) {
     req.user.membershipId = cached.id;
     req.user.role = cached.role;
+    req.user.workspaceAccessSource = cached.accessSource;
     return next();
   }
   if (cached) workspaceMembershipCache.delete(cacheKey);
   let membershipLoad = workspaceMembershipLoads.get(cacheKey);
   if (!membershipLoad) {
-    membershipLoad = Promise.resolve(OrganizationMembership.findOne({ user: req.user.userId, organization: req.user.organizationId, status: "active" }))
-      .then((membership) => membership ? { id: membership.id, role: membership.role as UserRole } : null);
+    membershipLoad = effectiveWorkspaceMembership(req.user.userId, req.user.organizationId)
+      .then((membership) => membership ? { id: membership.id, role: membership.role, accessSource: membership.accessSource } : null);
     workspaceMembershipLoads.set(cacheKey, membershipLoad);
   }
-  let membership: { id: string; role: UserRole } | null;
+  let membership: { id: string; role: UserRole; accessSource: "direct" | "group" | "organization" } | null;
   try {
     membership = await measureAsync("auth.workspace_membership", () => membershipLoad!, { method: req.method });
   } finally {
@@ -67,8 +88,9 @@ export async function requireWorkspace(req: AuthRequest, res: Response, next: Ne
   if (!membership) return res.status(403).json({ message: "This workspace membership is unavailable" });
   req.user.membershipId = membership.id;
   req.user.role = membership.role;
+  req.user.workspaceAccessSource = membership.accessSource;
   const ttlMs = membershipCacheTtlMs();
-  if (ttlMs > 0) workspaceMembershipCache.set(cacheKey, { id: membership.id, role: membership.role, expiresAt: Date.now() + ttlMs });
+  if (ttlMs > 0) workspaceMembershipCache.set(cacheKey, { id: membership.id, role: membership.role, accessSource: membership.accessSource, expiresAt: Date.now() + ttlMs });
   return next();
 }
 

@@ -41,6 +41,7 @@ test("authenticated PostgreSQL workspace flow", { skip: integrationEnabled ? fal
   const { postgres } = await import("./config/postgres.js");
   const { createApp } = await import("./app.js");
   const { Organization } = await import("./models/Organization.js");
+  const { Company, CompanyMembership } = await import("./models/Company.js");
   const { Project } = await import("./models/Project.js");
   const { Sprint } = await import("./models/Sprint.js");
   const { Ticket } = await import("./models/Ticket.js");
@@ -54,6 +55,7 @@ test("authenticated PostgreSQL workspace flow", { skip: integrationEnabled ? fal
   const organizationName = `Integration Workspace ${suffix}`;
   let userId: string | undefined;
   let organizationId: string | undefined;
+  let companyId: string | undefined;
   let httpServer: ReturnType<ReturnType<typeof createApp>["listen"]> | undefined;
 
   const cleanup = async () => {
@@ -63,6 +65,9 @@ test("authenticated PostgreSQL workspace flow", { skip: integrationEnabled ? fal
       const tables = ["sessions", "action_tokens", "notifications", "audit_events", "integrations", "counters", "workspace_resources", "tickets", "cycles", "sprints", "projects", "organization_memberships", "invitations"];
       for (const table of tables) await postgres.query(`DELETE FROM "${table}" WHERE organization = $1`, [organizationId]);
       await postgres.query("DELETE FROM organizations WHERE id = $1", [organizationId]);
+    }
+    if (companyId) {
+      await postgres.query("DELETE FROM companies WHERE id = $1", [companyId]);
     }
     if (userId) {
       await postgres.query("DELETE FROM sessions WHERE user_id = $1", [userId]);
@@ -74,11 +79,14 @@ test("authenticated PostgreSQL workspace flow", { skip: integrationEnabled ? fal
   try {
     const user = await User.create({ name: "Integration Admin", email, passwordHash: await bcrypt.hash(password, 4) });
     userId = String(user._id);
-    const organization = await Organization.create({ name: organizationName, slug: `integration-${suffix}`, plan: "starter", owner: user._id, onboardingCompletedAt: new Date() });
+    const company = await Company.create({ name: organizationName, slug: `integration-company-${suffix}`, owner: user._id });
+    companyId = String(company._id);
+    const organization = await Organization.create({ company: company._id, name: organizationName, slug: `integration-${suffix}`, plan: "starter", owner: user._id, onboardingCompletedAt: new Date() });
     organizationId = String(organization._id);
     user.lastActiveOrganization = organization._id;
     await user.save();
     await (await import("./models/WorkspaceAccess.js")).OrganizationMembership.create({ user: user._id, organization: organization._id, role: "admin", status: "active", skills: [], availability: 1, capacity: 32 });
+    await CompanyMembership.create({ company: company._id, user: user._id, role: "admin", status: "active" });
     const project = await Project.create({ organization: organization._id, key: `ITG${suffix.slice(0, 4).toUpperCase()}`, name: "Integration Project", status: "active", progress: 0, riskLevel: "low", members: [user._id] });
     const sprint = await Sprint.create({ organization: organization._id, name: "Integration Sprint", project: project._id, status: "active", startDate: new Date(Date.now() - 86400_000), endDate: new Date(Date.now() + 13 * 86400_000), capacity: 32, plannedPoints: 3, completedPoints: 0, velocityHistory: [], riskScore: 0 });
     const ticket = await Ticket.create({ organization: organization._id, ticketId: `${project.key}-101`, title: "Integration ticket", description: "A ticket for authenticated flow coverage", status: "Backlog", priority: "medium", storyPoints: 3, assignee: user._id, reporter: user._id, project: project._id, sprint: sprint._id, epic: "Integration", labels: [], dependencies: [], issueLinks: [], comments: [], workLogs: [], history: [], statusTransitions: [], watchers: [], attachments: [], slaPolicy: { firstResponseHours: 8, resolutionHours: 72 }, slaStatus: "healthy", rank: 0 });
@@ -104,6 +112,16 @@ test("authenticated PostgreSQL workspace flow", { skip: integrationEnabled ? fal
 
     const dashboard = await request("/dashboard");
     assert.equal(dashboard.response.status, 200);
+    const createdGroup = await request(`/companies/${company._id}/groups`, { method: "POST", body: JSON.stringify({ name: "Engineering", description: "Shared product engineering access" }) });
+    assert.equal(createdGroup.response.status, 201);
+    const groupId = createdGroup.body?.group?._id;
+    const groupMembers = await request(`/companies/${company._id}/groups/${groupId}/members`, { method: "PUT", body: JSON.stringify({ userIds: [user._id] }) });
+    assert.equal(groupMembers.response.status, 200);
+    const groupWorkspaces = await request(`/companies/${company._id}/groups/${groupId}/workspaces`, { method: "PUT", body: JSON.stringify({ grants: [{ workspace: organization._id, role: "engineer" }] }) });
+    assert.equal(groupWorkspaces.response.status, 200);
+    const groups = await request(`/companies/${company._id}/groups`);
+    assert.equal(groups.response.status, 200);
+    assert.equal(groups.body?.groups?.[0]?.members?.[0]?.email, email);
     const sla = await request("/sla");
     assert.equal(sla.response.status, 200);
     assert.ok(sla.body?.summary);
@@ -149,7 +167,7 @@ test("authenticated PostgreSQL workspace flow", { skip: integrationEnabled ? fal
     const storedInvitation = await Invitation.findById(invitationId);
     assert.equal(storedInvitation?.status, "cancelled");
 
-    const deletedOrganization = await request("/organization", { method: "DELETE", body: JSON.stringify({ confirmationName: organizationName }) });
+    const deletedOrganization = await request("/organization", { method: "DELETE", body: JSON.stringify({ confirmationName: organizationName, currentPassword: password }) });
     assert.equal(deletedOrganization.response.status, 204);
     assert.equal(await Organization.findById(organization._id), null);
   } finally {
