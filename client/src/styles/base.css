@@ -103,6 +103,9 @@ textarea {
 
 select {
   appearance: none;
+  -webkit-appearance: none;
+  -moz-appearance: none;
+  color-scheme: light dark;
   min-height: 34px;
   border: 1px solid var(--border);
   border-radius: 8px;
@@ -122,6 +125,7 @@ select:hover:not(:disabled) {
   border-color: color-mix(in srgb, var(--purple) 45%, var(--border));
 }
 
+select:focus,
 select:focus-visible {
   outline: none;
   border-color: var(--purple);
@@ -134,12 +138,98 @@ select:disabled {
 }
 
 select option {
-  background: var(--surface);
+  background-color: var(--surface);
   color: var(--text);
+  padding: 8px 12px;
+  font-size: 13px;
+
+}
+
+select option:checked {
+  background-color: color-mix(in srgb, var(--purple) 18%, var(--surface));
+  color: var(--purple-strong);
+  font-weight: 600;
+}
+
+select option:hover,
+select option:focus {
+  background-color: color-mix(in srgb, var(--purple) 25%, var(--surface));
+  color: var(--purple-strong);
 }
 
 [data-theme="dark"] select {
   background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='14' height='14' viewBox='0 0 24 24' fill='none' stroke='%23aaaaaa' stroke-width='2.25' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
+}
+
+/* Date input custom styling */
+input[type="date"] {
+  appearance: none;
+  -webkit-appearance: none;
+  color-scheme: light dark;
+  font-family: inherit;
+  font-size: 13px;
+  color: var(--text);
+  background-color: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 0 10px;
+  min-height: 34px;
+  outline: none;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease, background-color 0.15s ease;
+}
+
+input[type="date"]:hover:not(:disabled) {
+  border-color: color-mix(in srgb, var(--purple) 45%, var(--border));
+}
+
+input[type="date"]:focus {
+  border-color: var(--purple);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--purple) 22%, transparent);
+}
+
+input[type="date"]::-webkit-calendar-picker-indicator {
+  cursor: pointer;
+  opacity: 0.65;
+  transition: opacity 0.15s ease;
+}
+
+input[type="date"]::-webkit-calendar-picker-indicator:hover {
+  opacity: 1;
+}
+
+[data-theme="dark"] input[type="date"]::-webkit-calendar-picker-indicator {
+  filter: invert(0.85);
+}
+
+/* Date inputs wrapped inside buttons/labels */
+.btn input[type="date"],
+label.btn input[type="date"] {
+  border: 0 !important;
+  background: transparent !important;
+  box-shadow: none !important;
+  outline: none !important;
+  padding: 0 !important;
+  min-height: auto !important;
+  height: 100% !important;
+  font: inherit !important;
+  color: inherit !important;
+  cursor: pointer;
+}
+
+.btn:has(input[type="date"]),
+label.btn:has(input[type="date"]) {
+  position: relative;
+  cursor: pointer;
+}
+
+.btn input[type="date"]::-webkit-calendar-picker-indicator,
+label.btn input[type="date"]::-webkit-calendar-picker-indicator {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  opacity: 0;
+  cursor: pointer;
 }
 
 button {

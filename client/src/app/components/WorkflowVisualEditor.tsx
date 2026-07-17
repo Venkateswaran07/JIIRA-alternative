@@ -762,9 +762,9 @@ export function WorkflowVisualEditor({
           <div className="workflow-ui-builder-view flex-col gap card">
             {/* Quick Add Transition Bar */}
             {isLeader && (
-              <div className="quick-transition-bar flex-wrap gap items-end p-3 border-b">
-                <div className="form-group inline">
-                  <label className="text-xs font-bold text-muted">From Status</label>
+              <div className="quick-transition-bar">
+                <div className="form-group">
+                  <label>From Status</label>
                   <select
                     className="input-select sm"
                     value={quickFrom}
@@ -777,8 +777,8 @@ export function WorkflowVisualEditor({
                     ))}
                   </select>
                 </div>
-                <div className="form-group inline">
-                  <label className="text-xs font-bold text-muted">To Status</label>
+                <div className="form-group">
+                  <label>To Status</label>
                   <select
                     className="input-select sm"
                     value={quickTo}
@@ -791,8 +791,8 @@ export function WorkflowVisualEditor({
                     ))}
                   </select>
                 </div>
-                <div className="form-group inline flex-grow">
-                  <label className="text-xs font-bold text-muted">Action Label (Optional)</label>
+                <div className="form-group flex-grow">
+                  <label>Action Label (Optional)</label>
                   <input
                     type="text"
                     className="input-text sm"
@@ -912,16 +912,16 @@ export function WorkflowVisualEditor({
                     </div>
 
                     {isLeader && (
-                      <div className="step-card-footer margin-top-sm border-t pt-2 flex-between">
+                      <div className="step-card-footer">
                         <button
-                          className="btn text-btn sm"
+                          className="btn sm outline"
                           onClick={() => setEditingNode(node)}
                         >
                           <Icons.Edit2 className="w-3 h-3" /> Edit Details
                         </button>
 
                         <button
-                          className="btn text-btn primary sm"
+                          className="btn sm primary"
                           onClick={() => {
                             setQuickFrom(node.id);
                             const nextNode = nodes.find((n) => n.id !== node.id && !outgoingTrans.some((t) => t.to === n.id));

@@ -326,11 +326,9 @@
 .rv-modal-card {
   max-width: 860px;
   width: min(860px, calc(100vw - 32px));
-  max-height: calc(100vh - 40px);
   display: grid;
   grid-template-columns: 1fr 340px;
   gap: 20px;
-  overflow: hidden;
   margin: auto;
 }
 

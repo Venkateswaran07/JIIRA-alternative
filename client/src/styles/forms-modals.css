@@ -231,6 +231,24 @@
   overflow-y: auto;
 }
 
+/* Shared Modal Container & Scroll Body Helper */
+.modal-card,
+.rv-modal-card {
+  position: relative;
+  max-height: calc(100vh - 40px);
+  overflow: hidden;
+}
+
+.modal-card > form,
+.modal-card > div,
+.rv-modal-card > form,
+.rv-modal-card > div,
+.modal-scroll-body {
+  min-height: 0;
+  max-height: 100%;
+  overflow-y: auto;
+}
+
 .app-dialog-wrap {
   z-index: 120;
   background: rgb(4 8 15 / 58%);

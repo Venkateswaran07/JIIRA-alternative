@@ -167,9 +167,7 @@
 .onboarding-card select { min-height: 44px; }
 .onboarding-card textarea { min-height: 104px; resize: vertical; }
 .onboarding-project-fields { grid-template-columns: minmax(0, 1fr) 150px; }
-.capacity-input { position: relative; }
-.capacity-input input { width: 100%; padding-right: 52px; }
-.capacity-input > span { position: absolute; right: 13px; top: 50%; color: var(--muted); font-size: 10px; transform: translateY(-50%); pointer-events: none; }
+.capacity-input input { width: 100%; padding-right: 54px; }
 .onboarding-actions { margin-top: 6px; padding-top: 18px; border-top: 1px solid var(--border); }
 .onboarding-actions .btn { min-height: 42px; }
 .onboarding-actions .btn.primary { margin-left: auto; }

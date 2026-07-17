@@ -189,17 +189,8 @@
 .sla-hour-input input {
   width: 100%;
   min-height: 36px;
-  padding-right: 38px;
+  padding-right: 42px;
   background: var(--surface);
-}
-.sla-hour-input > span {
-  position: absolute;
-  right: 10px;
-  top: 50%;
-  color: var(--muted);
-  font-size: 10px;
-  transform: translateY(-50%);
-  pointer-events: none;
 }
 .sla-policy-actions {
   display: flex;

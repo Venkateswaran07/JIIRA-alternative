@@ -49,6 +49,106 @@
   width: 100%;
 }
 
+.btn.sm {
+  min-height: 30px;
+  padding: 0 10px;
+  font-size: 11px;
+}
+
+.btn.ghost {
+  background: transparent;
+  border-color: transparent;
+  color: var(--text);
+}
+
+.btn.ghost:hover {
+  background: var(--surface-2);
+  border-color: var(--border);
+}
+
+.btn.outline {
+  background: var(--surface);
+  border-color: var(--border);
+  color: var(--text);
+}
+
+.btn.outline:hover {
+  border-color: var(--purple);
+  color: var(--purple-strong);
+}
+
+.btn-group {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+
+.input-text,
+.input-select {
+  height: 36px;
+  padding: 0 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+  color: var(--text);
+  font-size: 13px;
+  font-family: inherit;
+  outline: none;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+  box-sizing: border-box;
+}
+
+.input-text:focus,
+.input-select:focus {
+  border-color: var(--purple-strong);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--purple-strong) 20%, transparent);
+}
+
+.input-text.sm,
+.input-select.sm {
+  height: 32px;
+  padding: 0 10px;
+  font-size: 12px;
+}
+
+/* Reusable Unit / Suffix Input Wrapper */
+.unit-input,
+.capacity-input,
+.sla-hour-input {
+  position: relative;
+}
+
+.unit-input input::-webkit-outer-spin-button,
+.unit-input input::-webkit-inner-spin-button,
+.capacity-input input::-webkit-outer-spin-button,
+.capacity-input input::-webkit-inner-spin-button,
+.sla-hour-input input::-webkit-outer-spin-button,
+.sla-hour-input input::-webkit-inner-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+
+.unit-input input[type="number"],
+.capacity-input input[type="number"],
+.sla-hour-input input[type="number"] {
+  -moz-appearance: textfield;
+}
+
+.unit-input > span,
+.capacity-input > span,
+.sla-hour-input > span {
+  position: absolute;
+  right: 12px;
+  top: 50%;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 600;
+  transform: translateY(-50%);
+  pointer-events: none;
+  z-index: 2;
+}
+
 .btn:disabled {
   opacity: 0.4;
   cursor: not-allowed;

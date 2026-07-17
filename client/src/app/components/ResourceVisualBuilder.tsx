@@ -1,6 +1,7 @@
 import React, { useState } from "react";
 import * as Icons from "lucide-react";
 import { WorkflowVisualEditor, WorkflowConfig } from "./WorkflowVisualEditor";
+import { ModalOverlay } from "./ui";
 
 export type ResourceKind =
   | "epic"
@@ -1030,9 +1031,18 @@ export function ResourceVisualModal({ kind, initialData, onSave, onClose }: Visu
     .join(" ");
 
   return (
-    <div className="modal-wrap" role="presentation" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
+    <ModalOverlay onClose={onClose} ariaLabel={`${initialData ? "Edit" : "Create"} ${kindTitle}`}>
       <div className="card rv-modal-card">
-        <form onSubmit={handleSubmit} style={{ overflowY: "auto", paddingRight: "8px", display: "flex", flexDirection: "column", gap: "12px" }}>
+        <button
+          type="button"
+          className="icon-btn modal-close"
+          onClick={onClose}
+          aria-label="Close modal"
+          style={{ position: "absolute", top: "12px", right: "12px", zIndex: 20 }}
+        >
+          <Icons.X size={16} />
+        </button>
+        <form onSubmit={handleSubmit} style={{ overflowY: "auto", paddingRight: "8px", display: "flex", flexDirection: "column", gap: "12px", minHeight: 0 }}>
           <div>
             <h3 style={{ margin: "0 0 4px", fontSize: "18px" }}>{initialData ? "Edit" : "Create"} {kindTitle}</h3>
             <p style={{ margin: 0, fontSize: "12px", color: "var(--muted)" }}>{featureConfig.description}</p>
@@ -1086,13 +1096,13 @@ export function ResourceVisualModal({ kind, initialData, onSave, onClose }: Visu
             ))}
           </div>
 
-          <div style={{ marginTop: "auto", paddingTop: "12px", display: "flex", justifyContent: "flex-end", gap: "10px", borderTop: "1px solid var(--border)" }}>
+          <div style={{ marginTop: "auto", paddingTop: "12px", paddingBottom: "4px", display: "flex", justifyContent: "flex-end", gap: "10px", borderTop: "1px solid var(--border)", position: "sticky", bottom: 0, background: "var(--surface)", zIndex: 10 }}>
             <button type="button" className="btn outline" onClick={onClose} disabled={saving}>Cancel</button>
             <button type="submit" className="btn primary" disabled={saving}>{saving ? "Saving..." : initialData ? "Save Changes" : "Create Resource"}</button>
           </div>
         </form>
 
-        <div style={{ background: "var(--surface-subtle)", borderRadius: "10px", padding: "16px", border: "1px solid var(--border)", display: "flex", flexDirection: "column" }}>
+        <div style={{ background: "var(--surface-subtle)", borderRadius: "10px", padding: "16px", border: "1px solid var(--border)", display: "flex", flexDirection: "column", minHeight: 0 }}>
           <h4 style={{ margin: "0 0 12px", fontSize: "13px", color: "var(--muted)", textTransform: "uppercase" }}>Live Preview</h4>
           <ResourceVisualPreview kind={kind} item={{ name, description, key, config }} />
           <div style={{ marginTop: "auto", fontSize: "11px", color: "var(--muted)", padding: "10px", background: "var(--surface)", borderRadius: "6px", border: "1px solid var(--border)" }}>
@@ -1101,6 +1111,6 @@ export function ResourceVisualModal({ kind, initialData, onSave, onClose }: Visu
           </div>
         </div>
       </div>
-    </div>
+    </ModalOverlay>
   );
 }

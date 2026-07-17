@@ -427,3 +427,54 @@ export function CardTitle({
   );
 }
 
+export function ModalOverlay({
+  onClose,
+  children,
+  className = "modal-wrap",
+  ariaLabel = "Dialog",
+}: {
+  onClose: () => void;
+  children: React.ReactNode;
+  className?: string;
+  ariaLabel?: string;
+}) {
+  React.useEffect(() => {
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        onClose();
+      }
+    };
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [onClose]);
+
+  return (
+    <div
+      className={className}
+      role="dialog"
+      aria-modal="true"
+      aria-label={ariaLabel}
+      onMouseDown={(e) => e.target === e.currentTarget && onClose()}
+    >
+      {children}
+    </div>
+  );
+}
+
+export function UnitInput({
+  unit,
+  className = "",
+  children,
+}: {
+  unit: string;
+  className?: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <div className={`unit-input ${className}`.trim()}>
+      {children}
+      <span>{unit}</span>
+    </div>
+  );
+}
+
