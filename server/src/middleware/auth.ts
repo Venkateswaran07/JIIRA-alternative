@@ -100,7 +100,8 @@ export async function requireWorkspace(req: AuthRequest, res: Response, next: Ne
 export function requireRole(roles: UserRole[]) {
   return (req: AuthRequest, res: Response, next: NextFunction) => {
     if (!req.user) return res.status(401).json({ message: "Missing authenticated user" });
-    const permission = permissionForEndpoint(req.method, req.path);
+    const fullPath = req.originalUrl ? req.originalUrl.split("?")[0] : `${req.baseUrl || ""}${req.path || ""}`;
+    const permission = permissionForEndpoint(req.method, fullPath);
     if (permission) {
       if (!req.user.permissions?.includes(permission)) return res.status(403).json({ message: "You do not have permission to perform this action", permission });
       return next();

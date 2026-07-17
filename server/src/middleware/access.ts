@@ -162,28 +162,44 @@ function endpointPattern(endpoint: string) {
 
 const endpointMatchers = [...explicitEndpointRoles].map(([endpoint, roles]) => ({ ...endpointPattern(endpoint), roles }));
 
+export function normalizeApiPath(path: string): string {
+  const clean = `/${path}`.replace(/\/+/g, "/");
+  return clean
+    .replace(/^\/api\/v1(?=\/|$)/, "")
+    .replace(/^\/api(?=\/|$)/, "")
+    .replace(/\/$/, "") || "/";
+}
+
 export function rolesForEndpoint(method: string, path: string): UserRole[] {
-  const normalizedPath = `/${path}`.replace(/\/+/g, "/").replace(/\/$/, "") || "/";
+  const normalizedPath = normalizeApiPath(path);
   return endpointMatchers.find((rule) => rule.method === method.toUpperCase() && rule.pattern.test(normalizedPath))?.roles ?? [];
 }
 
 export function hasExplicitAccessPolicy(method: string, path: string) {
-  const normalizedPath = `/${path}`.replace(/\/+/g, "/").replace(/\/$/, "") || "/";
+  const normalizedPath = normalizeApiPath(path);
   return endpointMatchers.some((rule) => rule.method === method.toUpperCase() && rule.pattern.test(normalizedPath));
 }
 
 export const catalogEndpointsWithoutAccessPolicy = Object.values(apiCatalog.groups).flat().filter((endpoint) => !explicitEndpointRoles.has(endpoint));
 
+export function getRequestPath(req: AuthRequest): string {
+  if (req.originalUrl) {
+    return req.originalUrl.split("?")[0];
+  }
+  return `${req.baseUrl || ""}${req.path || ""}`;
+}
+
 export function enforceApiAccess(req: AuthRequest, res: Response, next: NextFunction) {
   if (!req.user) return res.status(401).json({ error: { code: "UNAUTHENTICATED", message: "Authentication is required" } });
-  const permission = permissionForEndpoint(req.method, req.path);
+  const fullPath = getRequestPath(req);
+  const permission = permissionForEndpoint(req.method, fullPath);
   if (permission) {
     if (!req.user.permissions?.includes(permission)) {
       return res.status(403).json({ error: { code: "FORBIDDEN", message: "Your role does not have this permission", permission } });
     }
     return next();
   }
-  const roles = rolesForEndpoint(req.method, req.path);
+  const roles = rolesForEndpoint(req.method, fullPath);
   if (!roles.length) {
     return res.status(403).json({ error: { code: "FORBIDDEN", message: "This endpoint has no authenticated access policy", allowedRoles: [] } });
   }

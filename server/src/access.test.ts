@@ -52,3 +52,29 @@ test("every catalog endpoint has an explicit fail-closed RBAC policy", async () 
   assert.deepEqual(rolesForEndpoint("POST", "/team"), ["admin"]);
   assert.deepEqual(rolesForEndpoint("POST", "/tickets"), ["admin", "manager", "engineer", "designer"]);
 });
+
+test("RBAC resolves access policy for versioned API paths and sub-routed AI endpoints", async () => {
+  const everyone = ["admin", "manager", "engineer", "designer"];
+  assert.deepEqual(rolesForEndpoint("GET", "/api/v1/ai/conversations"), everyone);
+  assert.deepEqual(rolesForEndpoint("POST", "/api/v1/ai/chat"), everyone);
+  assert.deepEqual(rolesForEndpoint("POST", "/api/v1/analysis/sprint-risk"), ["admin", "manager"]);
+
+  const { enforceApiAccess } = await import("./middleware/access.js");
+  let nextCalled = false;
+  const mockReq = {
+    method: "GET",
+    originalUrl: "/api/v1/ai/conversations",
+    baseUrl: "/api/v1/ai",
+    path: "/conversations",
+    user: { role: "engineer", permissions: ["ai.use"] },
+  } as any;
+  const mockRes = {
+    status: (code: number) => ({ json: (body: any) => ({ code, body }) }),
+  } as any;
+
+  enforceApiAccess(mockReq, mockRes, () => {
+    nextCalled = true;
+  });
+  assert.equal(nextCalled, true);
+});
+

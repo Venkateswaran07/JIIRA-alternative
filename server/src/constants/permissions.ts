@@ -166,10 +166,10 @@ function endpointMatches(method: string, path: string, endpoint: string) {
 }
 
 export function permissionForEndpoint(method: string, path: string): Permission | undefined {
-  const normalized = `/${path}`
+  const clean = `/${path}`.replace(/\/+/g, "/");
+  const normalized = clean
     .replace(/^\/api\/v1(?=\/|$)/, "")
     .replace(/^\/api(?=\/|$)/, "")
-    .replace(/\/+/g, "/")
     .replace(/\/$/, "") || "/";
   return permissionRules.find((rule) => rule.endpoints.some((endpoint) => endpointMatches(method, normalized, endpoint)))?.permission;
 }
