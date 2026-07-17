@@ -3984,15 +3984,6 @@ function AIPage() {
 
   return (
     <section className="ai-workspace">
-      <div className="ai-workspace-topline">
-        <div>
-          <span className="ai-workspace-kicker"><Icons.Sparkles size={14} /> AI WORKSPACE</span>
-          <h1>Your work, one conversation away.</h1>
-          <p>Plan, investigate, and take action across your organization and workspaces with the same AI Agent available throughout I-TRACK.</p>
-        </div>
-        <div className="ai-agent-status"><i /><span><b>Organization-aware</b><small>{company?.name || "Organization"} · {organization?.name || "Current workspace"}</small></span></div>
-      </div>
-
       <div className="ai-workspace-grid">
         <div className="ai-workspace-main">
           <div className="ai-workspace-chat-head">
@@ -4091,22 +4082,6 @@ function AIPage() {
                 </div>
               ))}
             </div>
-          </div>
-          <div className="ai-side-card ai-side-capabilities">
-            <span className="ai-side-icon purple"><Icons.WandSparkles size={18} /></span>
-            <h3>One agent, full context</h3>
-            <p>This is the same agent in the header. Your conversation follows you between this page and the side panel.</p>
-            <div><span><Icons.Building2 size={15} /> Understand organization structure</span><span><Icons.Search size={15} /> Inspect workspace data</span><span><Icons.PencilLine size={15} /> Create and update work</span><span><Icons.ChartNoAxesCombined size={15} /> Summarize delivery signals</span></div>
-          </div>
-          <div className="ai-side-card">
-            <span className="ai-side-label">TRY ASKING</span>
-            {suggestedQuestions.map((prompt) => (
-              <button className="ai-side-prompt" key={prompt} onClick={() => void sendMessage(prompt)}><span>{prompt}</span><Icons.ArrowRight size={14} /></button>
-            ))}
-          </div>
-          <div className="ai-side-card ai-side-safety">
-            <span className="ai-side-icon lime"><Icons.ShieldCheck size={18} /></span>
-            <div><h3>You stay in control</h3><p>The agent previews sensitive changes and waits for explicit confirmation.</p></div>
           </div>
         </aside>
       </div>
