@@ -8,6 +8,7 @@ import { Badge, CardTitle, PageHead } from "../components/ui";
 import { LabelPicker } from "../components/ui";
 import { fmt } from "../../utils/ui";
 import { PasswordInput } from "./AuthPages";
+import { MiniDatePicker } from "../components/MiniDatePicker";
 
 export function CenteredForm({
   title,
@@ -74,6 +75,9 @@ export function FormPage({
   const [projectKey, setProjectKey] = useState("");
   const [keyEdited, setKeyEdited] = useState(false);
   const [keyError, setKeyError] = useState("");
+  const [dueDate, setDueDate] = useState("");
+  const [startDate, setStartDate] = useState("");
+  const [endDate, setEndDate] = useState("");
   const canCreate =
     type === "invite"
       ? role === "admin"
@@ -288,10 +292,15 @@ export function FormPage({
               <span>Story points</span>
               <input name="storyPoints" type="number" defaultValue="3" min="1" max="21" />
             </label>
-            <label className="field">
-              <span>Due date</span>
-              <input name="dueDate" type="date" required />
-            </label>
+            <div className="field">
+              <MiniDatePicker
+                name="dueDate"
+                label="Due date"
+                value={dueDate}
+                onChange={setDueDate}
+                required
+              />
+            </div>
             <div className="field full">
               <LabelPicker labels={ticketLabels} suggestions={labelOptions} onChange={setTicketLabels} />
             </div>
@@ -380,14 +389,24 @@ export function FormPage({
               <span>Capacity</span>
               <input name="capacity" type="number" defaultValue="40" min="0" />
             </label>
-            <label className="field">
-              <span>Start date</span>
-              <input name="startDate" type="date" required />
-            </label>
-            <label className="field">
-              <span>End date</span>
-              <input name="endDate" type="date" required />
-            </label>
+            <div className="field">
+              <MiniDatePicker
+                name="startDate"
+                label="Start date"
+                value={startDate}
+                onChange={setStartDate}
+                required
+              />
+            </div>
+            <div className="field">
+              <MiniDatePicker
+                name="endDate"
+                label="End date"
+                value={endDate}
+                onChange={setEndDate}
+                required
+              />
+            </div>
           </div>
         )}
         {type === "invite" && (

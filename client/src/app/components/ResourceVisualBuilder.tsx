@@ -2,6 +2,7 @@ import React, { useState } from "react";
 import * as Icons from "lucide-react";
 import { WorkflowVisualEditor, WorkflowConfig } from "./WorkflowVisualEditor";
 import { ModalOverlay } from "./ui";
+import { MiniDatePicker } from "./MiniDatePicker";
 
 export type ResourceKind =
   | "epic"
@@ -1082,20 +1083,35 @@ export function ResourceVisualModal({ kind, initialData, onSave, onClose }: Visu
           <div style={{ borderTop: "1px solid var(--border)", paddingTop: "12px", display: "grid", gap: "12px" }}>
             <span style={{ fontSize: "12px", fontWeight: 600 }}>Configuration Attributes</span>
             {featureConfig.fields.map((field) => (
-              <label key={field.key} className="field">
-                <span>{field.label}</span>
+              <div key={field.key} className="field">
                 {field.type === "select" ? (
-                  <select value={config[field.key] || ""} onChange={(e) => setConfig({ ...config, [field.key]: e.target.value })}>
-                    {field.options?.map((opt) => (
-                      <option key={opt.value} value={opt.value}>{opt.label}</option>
-                    ))}
-                  </select>
+                  <label>
+                    <span>{field.label}</span>
+                    <select value={config[field.key] || ""} onChange={(e) => setConfig({ ...config, [field.key]: e.target.value })}>
+                      {field.options?.map((opt) => (
+                        <option key={opt.value} value={opt.value}>{opt.label}</option>
+                      ))}
+                    </select>
+                  </label>
                 ) : field.type === "textarea" ? (
-                  <textarea rows={3} value={config[field.key] || ""} onChange={(e) => setConfig({ ...config, [field.key]: e.target.value })} />
+                  <label>
+                    <span>{field.label}</span>
+                    <textarea rows={3} value={config[field.key] || ""} onChange={(e) => setConfig({ ...config, [field.key]: e.target.value })} />
+                  </label>
+                ) : field.type === "date" ? (
+                  <MiniDatePicker
+                    name={field.key}
+                    label={field.label}
+                    value={config[field.key] || ""}
+                    onChange={(val) => setConfig({ ...config, [field.key]: val })}
+                  />
                 ) : (
-                  <input type={field.type || "text"} value={config[field.key] || ""} onChange={(e) => setConfig({ ...config, [field.key]: e.target.value })} />
+                  <label>
+                    <span>{field.label}</span>
+                    <input type={field.type || "text"} value={config[field.key] || ""} onChange={(e) => setConfig({ ...config, [field.key]: e.target.value })} />
+                  </label>
                 )}
-              </label>
+              </div>
             ))}
           </div>
 

@@ -3,9 +3,88 @@ import { useNavigate, useParams } from "react-router-dom";
 import * as Icons from "lucide-react";
 import { useWorkspace } from "../workspace";
 import { api } from "../../api";
-import { Badge, CardTitle, PageHead, Progress, Empty } from "../components/ui";
+import { Badge, CardTitle, PageHead, Progress, Empty, MetricCard, Avatar } from "../components/ui";
 import { fmt } from "../../utils/ui";
 
+// ── Circular gauge ────────────────────────────────────────────────────────────
+function RiskGauge({ score, tone }: { score: number; tone: string }) {
+  const r = 52;
+  const circ = 2 * Math.PI * r;
+  const dash = ((100 - score) / 100) * circ;
+  const colorMap: Record<string, string> = {
+    green: "#4cc38a",
+    yellow: "#f4c430",
+    orange: "#f28c28",
+    red: "#e95a5a",
+  };
+  const color = colorMap[tone] || "#a47bef";
+
+  return (
+    <svg width="140" height="140" viewBox="0 0 140 140" className="risk-gauge-svg">
+      <circle cx="70" cy="70" r={r} fill="none" stroke="var(--border)" strokeWidth="10" />
+      <circle
+        cx="70"
+        cy="70"
+        r={r}
+        fill="none"
+        stroke={color}
+        strokeWidth="10"
+        strokeLinecap="round"
+        strokeDasharray={`${circ - dash} ${dash}`}
+        strokeDashoffset={circ * 0.25}
+        style={{ transition: "stroke-dasharray 0.7s ease" }}
+      />
+      <text x="70" y="65" textAnchor="middle" className="gauge-score" fill="var(--text)">
+        {score}
+      </text>
+      <text x="70" y="82" textAnchor="middle" className="gauge-label" fill="var(--muted)">
+        / 100
+      </text>
+    </svg>
+  );
+}
+
+// ── Workload bar row ──────────────────────────────────────────────────────────
+function WorkloadRow({
+  name,
+  points,
+  max,
+}: {
+  name: string;
+  points: number;
+  max: number;
+}) {
+  const pct = max > 0 ? Math.round((points / max) * 100) : 0;
+  const tone = pct > 85 ? "red" : pct > 60 ? "orange" : "purple";
+  return (
+    <div className="workload-row">
+      <Avatar name={name} />
+      <div className="workload-info">
+        <span className="workload-name">{name || "Unassigned"}</span>
+        <div className="workload-bar-wrap">
+          <div
+            className={`workload-bar ${tone}`}
+            style={{ width: `${pct}%` }}
+          />
+        </div>
+      </div>
+      <span className="workload-pts">{points} pts</span>
+    </div>
+  );
+}
+
+// ── Ticket status pill ────────────────────────────────────────────────────────
+function StatusPill({ label, count, tone }: { label: string; count: number; tone: string }) {
+  return (
+    <div className={`status-pill ${tone}`}>
+      <span className="status-pill-dot" />
+      <span className="status-pill-label">{label}</span>
+      <strong className="status-pill-count">{count}</strong>
+    </div>
+  );
+}
+
+// ── Main component ────────────────────────────────────────────────────────────
 export function RiskPage() {
   const { sprintId } = useParams();
   const { dashboard, tickets, mutate, toast, role } = useWorkspace();
@@ -117,7 +196,7 @@ export function RiskPage() {
     );
   }
 
-  const displayScore = analysis ? analysis.risk.finalScore : s.riskScore;
+  const displayScore = analysis ? analysis.risk.finalScore : (s.riskScore ?? 0);
   let riskTone = "green";
   let riskLabel = "LOW RISK";
   if (displayScore > 75) {
@@ -131,6 +210,28 @@ export function RiskPage() {
     riskLabel = "MEDIUM RISK";
   }
 
+  // ── Derived sprint metrics ──────────────────────────────────────────────────
+  const totalTickets = sprintTickets.length;
+  const doneTickets = sprintTickets.filter((t: any) => t.status === "done" || t.status === "completed").length;
+  const inProgressTickets = sprintTickets.filter((t: any) => t.status === "inprogress" || t.status === "in_progress").length;
+  const blockedCount = sprintTickets.filter((t: any) => t.blocked).length;
+  const todoTickets = totalTickets - doneTickets - inProgressTickets - blockedCount;
+  const sprintPoints = sprintTickets.reduce((sum: number, t: any) => sum + (t.points || 0), 0);
+  const capacity = s.capacity || 0;
+  const utilisationPct = capacity > 0 ? Math.round((sprintPoints / capacity) * 100) : 0;
+
+  // ── Assignee workload ───────────────────────────────────────────────────────
+  const assigneeMap: Record<string, number> = {};
+  sprintTickets.forEach((t: any) => {
+    const key = t.assignee || "Unassigned";
+    assigneeMap[key] = (assigneeMap[key] || 0) + (t.points || 0);
+  });
+  const assignees = Object.entries(assigneeMap)
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 5);
+  const maxPoints = assignees[0]?.[1] || 1;
+
+  // ── Contributing factors ────────────────────────────────────────────────────
   const factors = [];
   if (analysis) {
     factors.push([
@@ -208,10 +309,44 @@ export function RiskPage() {
           Recalculate
         </button>
       </PageHead>
-      <div className="risk-hero">
-        <div className="risk-score">
+
+      {/* ── Sprint summary metrics ── */}
+      <div className="metrics" style={{ gridTemplateColumns: "repeat(4,1fr)", marginBottom: "18px" }}>
+        <MetricCard
+          label="Total Tickets"
+          value={totalTickets}
+          sub={`${doneTickets} completed`}
+          icon={Icons.TicketCheck}
+          tone="blue"
+        />
+        <MetricCard
+          label="Blocked"
+          value={blockedCount}
+          sub={blockedCount > 0 ? "needs attention" : "none blocked"}
+          icon={Icons.ShieldAlert}
+          tone={blockedCount > 0 ? "red" : "green"}
+        />
+        <MetricCard
+          label="Utilisation"
+          value={`${utilisationPct}%`}
+          sub={`${sprintPoints} / ${capacity || "?"} pts`}
+          icon={Icons.Gauge}
+          tone={utilisationPct > 90 ? "orange" : "purple"}
+        />
+        <MetricCard
+          label="Risk Score"
+          value={displayScore}
+          sub={riskLabel.toLowerCase()}
+          icon={Icons.Activity}
+          tone={riskTone === "green" ? "green" : riskTone === "yellow" ? "orange" : "red"}
+        />
+      </div>
+
+      {/* ── Hero: gauge + description ── */}
+      <div className="risk-hero" style={{ gridTemplateColumns: "auto 1fr", alignItems: "center" }}>
+        <div className="risk-score" style={{ borderRight: "1px solid var(--border)", paddingRight: "28px" }}>
           <span>RISK SCORE</span>
-          <strong>{displayScore}</strong>
+          <RiskGauge score={displayScore} tone={riskTone} />
           <Badge tone={riskTone}>{riskLabel}</Badge>
         </div>
         <div>
@@ -234,6 +369,8 @@ export function RiskPage() {
           </div>
         </div>
       </div>
+
+      {/* ── Main grid: factors + recommendation ── */}
       <div className="two-col">
         <section className="card">
           <CardTitle
@@ -276,6 +413,106 @@ export function RiskPage() {
             </>
           )}
         </section>
+      </div>
+
+      {/* ── Second row: Ticket status + Assignee workload ── */}
+      <div className="two-col" style={{ marginTop: "16px" }}>
+        {/* Ticket status breakdown */}
+        <section className="card">
+          <CardTitle title="Ticket status breakdown" sub="Distribution across all sprint tickets" />
+          <div className="status-breakdown">
+            {totalTickets === 0 ? (
+              <p style={{ color: "var(--muted)", fontSize: 13 }}>No tickets in this sprint yet.</p>
+            ) : (
+              <>
+                <div className="status-bar-stack">
+                  {doneTickets > 0 && (
+                    <div
+                      className="status-bar-seg done"
+                      style={{ flex: doneTickets }}
+                      title={`Done: ${doneTickets}`}
+                    />
+                  )}
+                  {inProgressTickets > 0 && (
+                    <div
+                      className="status-bar-seg inprogress"
+                      style={{ flex: inProgressTickets }}
+                      title={`In Progress: ${inProgressTickets}`}
+                    />
+                  )}
+                  {blockedCount > 0 && (
+                    <div
+                      className="status-bar-seg blocked"
+                      style={{ flex: blockedCount }}
+                      title={`Blocked: ${blockedCount}`}
+                    />
+                  )}
+                  {todoTickets > 0 && (
+                    <div
+                      className="status-bar-seg todo"
+                      style={{ flex: Math.max(todoTickets, 0) }}
+                      title={`To Do: ${todoTickets}`}
+                    />
+                  )}
+                </div>
+                <div className="status-pills">
+                  <StatusPill label="Done" count={doneTickets} tone="green" />
+                  <StatusPill label="In Progress" count={inProgressTickets} tone="blue" />
+                  <StatusPill label="Blocked" count={blockedCount} tone="red" />
+                  <StatusPill label="To Do" count={Math.max(todoTickets, 0)} tone="muted" />
+                </div>
+                <div className="completion-stat">
+                  <strong style={{ fontSize: 28, letterSpacing: "-0.04em" }}>
+                    {totalTickets > 0 ? Math.round((doneTickets / totalTickets) * 100) : 0}%
+                  </strong>
+                  <span style={{ color: "var(--muted)", fontSize: 12, marginLeft: 8 }}>
+                    sprint complete
+                  </span>
+                </div>
+              </>
+            )}
+          </div>
+        </section>
+
+        {/* Assignee workload */}
+        <section className="card">
+          <CardTitle title="Assignee workload" sub="Story points per team member" />
+          {assignees.length === 0 ? (
+            <p style={{ color: "var(--muted)", fontSize: 13 }}>No assignees found.</p>
+          ) : (
+            <div className="workload-list">
+              {assignees.map(([name, pts]) => (
+                <WorkloadRow key={name} name={name} points={pts} max={maxPoints} />
+              ))}
+            </div>
+          )}
+        </section>
+      </div>
+
+      {/* ── Sprint info strip ── */}
+      <div className="risk-sprint-strip">
+        <div className="risk-sprint-strip-item">
+          <Icons.Calendar size={14} />
+          <span>
+            {s.startDate ? fmt(s.startDate) : "—"} → {s.endDate ? fmt(s.endDate) : "—"}
+          </span>
+        </div>
+        <div className="risk-sprint-strip-item">
+          <Icons.Layers size={14} />
+          <span>Sprint: <b>{s.name}</b></span>
+        </div>
+        <div className="risk-sprint-strip-item">
+          <Icons.CircleDot size={14} />
+          <Badge tone={s.status === "active" ? "green" : s.status === "completed" ? "blue" : "yellow"}>
+            {s.status}
+          </Badge>
+        </div>
+        {s.goal && (
+          <div className="risk-sprint-strip-item" style={{ flex: 1 }}>
+            <Icons.Target size={14} />
+            <span style={{ color: "var(--muted)", fontSize: 12 }}>{s.goal}</span>
+          </div>
+        )}
       </div>
     </>
   );

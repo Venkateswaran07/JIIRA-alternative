@@ -45,7 +45,7 @@ export function MiniDatePicker({
 
   const daysInMonth = (y: number, m: number) => new Date(y, m + 1, 0).getDate();
   const firstWeekday = (y: number, m: number) => new Date(y, m, 1).getDay();
-  const monthNames = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+  const monthNames = ["January","February","March","April","May","June","July","August","September","October","November","December"];
   const dayNames = ["Su","Mo","Tu","We","Th","Fr","Sa"];
   const selectedDate = value ? new Date(value + "T00:00:00") : null;
 
@@ -66,100 +66,124 @@ export function MiniDatePicker({
     setOpen(false);
   };
 
+  const displayLabel = value && selectedDate && !isNaN(selectedDate.getTime())
+    ? selectedDate.toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" })
+    : "Select date";
+
   return (
-    <div className="field" ref={containerRef} style={{ position: "relative" }}>
-      <span>{label}</span>
+    <div className="mini-date-picker-wrap" ref={containerRef} style={{ position: "relative" }}>
+      {label && <span className="mini-date-picker-label">{label}</span>}
       <input type="hidden" name={name} value={value} required={required} />
+
+      {/* Trigger button */}
       <button
         type="button"
-        className="btn"
+        className="mini-date-picker-trigger"
         disabled={disabled}
         onClick={() => setOpen(o => !o)}
-        style={{
-          width: "100%",
-          textAlign: "left",
-          display: "flex",
-          alignItems: "center",
-          justifyContent: "space-between",
-          height: "40px",
-          background: "var(--surface-2, #27272a)",
-          border: "1px solid var(--border, #3f3f46)",
-          color: value ? "var(--text)" : "var(--muted)",
-          padding: "0 12px",
-          borderRadius: "8px",
-          cursor: disabled ? "not-allowed" : "pointer"
-        }}
+        aria-haspopup="dialog"
+        aria-expanded={open}
       >
-        <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
-          <Icons.CalendarDays size={15} style={{ color: "var(--muted)" }} />
-          {value && selectedDate && !isNaN(selectedDate.getTime())
-            ? selectedDate.toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" })
-            : "Select date"}
-        </div>
+        <span className="mini-date-picker-trigger-inner">
+          <Icons.CalendarDays size={15} className="mini-date-picker-icon" />
+          <span className={value ? "mini-date-picker-value" : "mini-date-picker-placeholder"}>
+            {displayLabel}
+          </span>
+        </span>
         {value && !disabled && (
           <span
             role="button"
             aria-label="Clear date"
+            className="mini-date-picker-clear"
             onClick={e => { e.stopPropagation(); onChange(""); }}
-            style={{ opacity: 0.75, cursor: "pointer", fontSize: "14px" }}
-          >✕</span>
+          >
+            <Icons.X size={13} />
+          </span>
         )}
       </button>
 
+      {/* Calendar dropdown */}
       {open && (
-        <div style={{
-          position: "absolute", bottom: "calc(100% + 6px)", left: 0, zIndex: 9999,
-          background: "var(--surface, #18181b)", border: "1px solid var(--border, #333)",
-          borderRadius: 12, boxShadow: "0 8px 32px rgba(0,0,0,0.35)",
-          padding: "12px", width: 240,
-          animation: "fadeIn .15s ease"
-        }}>
-          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 10 }}>
-            <button type="button" onClick={handlePrevMonth} style={{ background: "none", border: "none", cursor: "pointer", color: "var(--text-muted,#888)", padding: "2px 6px", borderRadius: 6, fontSize: 16 }}>‹</button>
-            <span style={{ fontWeight: 600, fontSize: 13, color: "var(--text,#e5e7eb)" }}>{monthNames[month]} {year}</span>
-            <button type="button" onClick={handleNextMonth} style={{ background: "none", border: "none", cursor: "pointer", color: "var(--text-muted,#888)", padding: "2px 6px", borderRadius: 6, fontSize: 16 }}>›</button>
+        <div className="mini-date-picker-calendar" role="dialog" aria-modal="true" aria-label="Date picker">
+          {/* Header */}
+          <div className="mini-date-picker-header">
+            <button
+              type="button"
+              className="mini-date-picker-nav"
+              onClick={handlePrevMonth}
+              aria-label="Previous month"
+            >
+              <Icons.ChevronLeft size={16} />
+            </button>
+            <span className="mini-date-picker-month-year">
+              {monthNames[month].slice(0, 3)} {year}
+            </span>
+            <button
+              type="button"
+              className="mini-date-picker-nav"
+              onClick={handleNextMonth}
+              aria-label="Next month"
+            >
+              <Icons.ChevronRight size={16} />
+            </button>
           </div>
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(7, 1fr)", gap: 2, marginBottom: 4 }}>
+
+          {/* Day-of-week headers */}
+          <div className="mini-date-picker-weekdays">
             {dayNames.map(d => (
-              <div key={d} style={{ textAlign: "center", fontSize: 10, fontWeight: 600, color: "var(--text-muted,#888)", padding: "2px 0" }}>{d}</div>
+              <div key={d} className="mini-date-picker-weekday">{d}</div>
             ))}
           </div>
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(7, 1fr)", gap: 2 }}>
+
+          {/* Day grid */}
+          <div className="mini-date-picker-grid">
             {Array.from({ length: firstWeekday(year, month) }).map((_, i) => (
               <div key={`blank-${i}`} />
             ))}
             {Array.from({ length: daysInMonth(year, month) }, (_, i) => i + 1).map(day => {
               const isToday = day === today.getDate() && month === today.getMonth() && year === today.getFullYear();
-              const isSelected = selectedDate && day === selectedDate.getDate() && month === selectedDate.getMonth() && year === selectedDate.getFullYear();
+              const isSelected = !!(selectedDate && day === selectedDate.getDate() && month === selectedDate.getMonth() && year === selectedDate.getFullYear());
               return (
                 <button
                   type="button"
                   key={day}
                   onClick={() => handleSelectDay(day)}
-                  style={{
-                    border: "none", background: isSelected ? "var(--accent,#7c3aed)" : isToday ? "var(--accent-muted,rgba(124,58,237,0.18))" : "transparent",
-                    color: isSelected ? "#fff" : isToday ? "var(--accent,#7c3aed)" : "var(--text,#e5e7eb)",
-                    borderRadius: 6, padding: "4px 0", cursor: "pointer", fontSize: 12, fontWeight: isSelected || isToday ? 700 : 400,
-                    transition: "background .12s",
-                  }}
-                  onMouseEnter={e => { if (!isSelected) (e.currentTarget as HTMLButtonElement).style.background = "var(--accent-muted,rgba(124,58,237,0.18))"; }}
-                  onMouseLeave={e => { if (!isSelected) (e.currentTarget as HTMLButtonElement).style.background = isToday ? "var(--accent-muted,rgba(124,58,237,0.18))" : "transparent"; }}
-                >{day}</button>
+                  className={[
+                    "mini-date-picker-day",
+                    isSelected ? "selected" : "",
+                    isToday && !isSelected ? "today" : "",
+                  ].filter(Boolean).join(" ")}
+                  aria-label={`${monthNames[month]} ${day}, ${year}`}
+                  aria-pressed={isSelected}
+                >
+                  {day}
+                </button>
               );
             })}
           </div>
-          <div style={{ marginTop: 10, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+
+          {/* Footer */}
+          <div className="mini-date-picker-footer">
             <button
               type="button"
-              onClick={() => { const t = new Date(); setYear(t.getFullYear()); setMonth(t.getMonth()); handleSelectDay(t.getDate()); }}
-              style={{ fontSize: 11, background: "none", border: "none", color: "var(--accent,#7c3aed)", cursor: "pointer", fontWeight: 600 }}
-            >Today</button>
+              className="mini-date-picker-today-btn"
+              onClick={() => {
+                const t = new Date();
+                setYear(t.getFullYear());
+                setMonth(t.getMonth());
+                handleSelectDay(t.getDate());
+              }}
+            >
+              Today
+            </button>
             {value && (
               <button
                 type="button"
+                className="mini-date-picker-clear-btn"
                 onClick={() => { onChange(""); setOpen(false); }}
-                style={{ fontSize: 11, background: "none", border: "none", color: "var(--text-muted,#888)", cursor: "pointer" }}
-              >Clear</button>
+              >
+                Clear
+              </button>
             )}
           </div>
         </div>

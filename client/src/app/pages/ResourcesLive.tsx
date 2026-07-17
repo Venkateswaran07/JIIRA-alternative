@@ -187,7 +187,7 @@ export function ResourcesLive({ toast }: { toast: (s: string) => void }) {
     return (
       <>
         <PageHead title={fmt(kind)} desc={ALL_RESOURCE_FEATURE_CONFIG[kind]?.description || `Manage live ${fmt(kind).toLowerCase()} definitions.`}>
-          <div className="flex gap">
+          <div className="flex gap" style={{ display: "flex", gap: "8px" }}>
             <button className={`btn ${viewMode === "grid" ? "primary" : "outline"}`} onClick={() => setViewMode("grid")}><Icons.LayoutGrid className="w-4 h-4" /> Cards View</button>
             <button className={`btn ${viewMode === "table" ? "primary" : "outline"}`} onClick={() => setViewMode("table")}><Icons.Table className="w-4 h-4" /> Table View</button>
             {kind === "workflow" && <button className="btn outline" onClick={() => setWorkflowViewMode("visual")}><Icons.GitBranch className="w-4 h-4" /> Visual Canvas</button>}

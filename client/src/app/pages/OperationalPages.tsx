@@ -109,7 +109,7 @@ export function SlaPage({ toast }: { toast: (s: string) => void }) {
               <span className="sla-section-icon"><Icons.SlidersHorizontal /></span>
               <div>
                 <h2>SLA policy</h2>
-                <p>Response and resolution targets by priority</p>
+                <p>How fast we respond and resolve by priority</p>
               </div>
             </div>
             {!isLeader && <span className="badge">View only</span>}
@@ -125,14 +125,14 @@ export function SlaPage({ toast }: { toast: (s: string) => void }) {
                   </div>
                 </div>
                 <label className="field">
-                  <span>First response</span>
+                  <span>Reply within</span>
                   <div className="sla-hour-input">
                     <input name={`${priority}-firstResponseHours`} type="number" min="0.25" step="0.25" defaultValue={policy[priority]?.firstResponseHours} disabled={!isLeader} />
                     <span>hrs</span>
                   </div>
                 </label>
                 <label className="field">
-                  <span>Resolution</span>
+                  <span>Fix within</span>
                   <div className="sla-hour-input">
                     <input name={`${priority}-resolutionHours`} type="number" min="0.25" step="0.25" defaultValue={policy[priority]?.resolutionHours} disabled={!isLeader} />
                     <span>hrs</span>
@@ -142,7 +142,7 @@ export function SlaPage({ toast }: { toast: (s: string) => void }) {
             ))}
             {isLeader && (
               <div className="sla-policy-actions">
-                <span>Changes apply to all active tickets.</span>
+                <span>Applies to all open tickets.</span>
                 <button className="btn primary" disabled={saving}>
                   {saving ? "Saving..." : "Save policy"}
                 </button>

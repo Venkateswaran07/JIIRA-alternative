@@ -195,6 +195,150 @@
   font-size: 12px;
 }
 
+/* Sprint Risk Page Custom Elements */
+.risk-gauge-svg {
+  display: block;
+  margin: 15px auto;
+}
+.gauge-score {
+  font-size: 28px;
+  font-weight: 800;
+}
+.gauge-label {
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.workload-list {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.workload-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.workload-info {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.workload-name {
+  font-size: 12px;
+  font-weight: 600;
+}
+.workload-bar-wrap {
+  height: 6px;
+  background: var(--border);
+  border-radius: 3px;
+  overflow: hidden;
+}
+.workload-bar {
+  height: 100%;
+  border-radius: 3px;
+  transition: width 0.4s ease;
+}
+.workload-bar.purple {
+  background: var(--purple);
+}
+.workload-bar.orange {
+  background: var(--orange);
+}
+.workload-bar.red {
+  background: var(--red);
+}
+.workload-pts {
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--muted);
+  min-width: 45px;
+  text-align: right;
+}
+
+.status-breakdown {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+.status-bar-stack {
+  display: flex;
+  height: 10px;
+  border-radius: 5px;
+  overflow: hidden;
+  background: var(--border);
+}
+.status-bar-seg {
+  height: 100%;
+}
+.status-bar-seg.done { background: var(--green); }
+.status-bar-seg.inprogress { background: var(--blue); }
+.status-bar-seg.blocked { background: var(--red); }
+.status-bar-seg.todo { background: var(--muted); }
+
+.status-pills {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 8px;
+}
+.status-pill {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: var(--surface-2);
+}
+.status-pill-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+}
+.status-pill.green .status-pill-dot { background: var(--green); }
+.status-pill.blue .status-pill-dot { background: var(--blue); }
+.status-pill.red .status-pill-dot { background: var(--red); }
+.status-pill.muted .status-pill-dot { background: var(--muted); }
+
+.status-pill-label {
+  font-size: 11px;
+  font-weight: 500;
+  flex: 1;
+}
+.status-pill-count {
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.completion-stat {
+  display: flex;
+  align-items: baseline;
+  margin-top: 4px;
+}
+
+.risk-sprint-strip {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 20px;
+  padding: 14px 20px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  margin-top: 16px;
+}
+.risk-sprint-strip-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  color: var(--text);
+}
+.risk-sprint-strip-item svg {
+  color: var(--muted);
+}
+
 .toast-stack {
   position: fixed;
   z-index: 100;
