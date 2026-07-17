@@ -316,7 +316,7 @@ function Shell({
         aria-label="Workspace navigation"
       >
         <div className="brand">
-          <div className="brand-mark"><img src="/logo-mark.png" alt="" /></div>
+        <div className="brand-mark"><img src="/logo-mark-soft-purple.png" alt="" /></div>
           <span>I-TRACK</span>
           <button
             className="icon-btn collapse"
@@ -7714,7 +7714,7 @@ function LandingPage() {
   return (
     <div className="landing">
       <header className="landing-nav">
-        <a className="landing-logo" href="#top" aria-label="I-TRACK home"><span><img src="/logo-mark.png" alt="" /></span>I-TRACK</a>
+        <a className="landing-logo" href="#top" aria-label="I-TRACK home"><span><img src="/logo-mark-soft-purple.png" alt="" /></span>I-TRACK</a>
         <button className="landing-menu" onClick={() => setMenuOpen(!menuOpen)} aria-label="Toggle navigation" aria-expanded={menuOpen}>
           {menuOpen ? <Icons.X /> : <Icons.Menu />}
         </button>
@@ -7751,7 +7751,7 @@ function LandingPage() {
             <div className="visual-glow"></div>
             <div className="mini-app">
               <div className="mini-sidebar">
-                <div className="mini-brand"><img src="/logo-mark.png" alt="" /></div>
+                <div className="mini-brand"><img src="/logo-mark-soft-purple.png" alt="" /></div>
                 {[Icons.LayoutDashboard, Icons.FolderKanban, Icons.Columns3, Icons.ChartNoAxesCombined].map((Icon, i) => <span className={i === 0 ? "active" : ""} key={i}><Icon /></span>)}
               </div>
               <div className="mini-main">
@@ -7785,7 +7785,7 @@ function LandingPage() {
 
         <section className="cta-section" id="pricing"><div><span className="section-kicker">YOUR NEXT SPRINT STARTS HERE</span><h2>Ready to move<br/>with clarity?</h2></div><div><p>Bring your team, your work, and your ambition. I-TRACK will help you keep the rest on track.</p><a className="landing-button dark" href="/register">Start for free <Icons.ArrowRight/></a><small>Free forever for teams up to 10</small></div></section>
       </main>
-      <footer className="landing-footer"><a className="landing-logo" href="#top"><span><img src="/logo-mark.png" alt="" /></span>I-TRACK</a><p>© {year} I-TRACK. Built for momentum.</p><div><a href="#features">Product</a><a href="#pricing">Pricing</a><a href="/login">Log in</a></div></footer>
+      <footer className="landing-footer"><a className="landing-logo" href="#top"><span><img src="/logo-mark-soft-purple.png" alt="" /></span>I-TRACK</a><p>© {year} I-TRACK. Built for momentum.</p><div><a href="#features">Product</a><a href="#pricing">Pricing</a><a href="/login">Log in</a></div></footer>
     </div>
   );
 }
@@ -7866,7 +7866,7 @@ function OnboardingFlow({ toast }: { toast: (message: string) => void }) {
   const DetailIcon = onboardingDetails.icon;
   return <div className="onboarding-shell">
     <header className="onboarding-header">
-      <a className="brand" href="/" aria-label="I-TRACK home"><span className="brand-mark"><img src="/logo-mark.png" alt="" /></span><span>I-TRACK</span></a>
+      <a className="brand" href="/" aria-label="I-TRACK home"><span className="brand-mark"><img src="/logo-mark-soft-purple.png" alt="" /></span><span>I-TRACK</span></a>
       <span className="onboarding-save"><Icons.CloudCheck /> Your progress is saved</span>
     </header>
     <nav className="onboarding-progress" aria-label="Onboarding progress">
@@ -7927,7 +7927,7 @@ function InvitationAcceptPage() {
       saveSession(session); window.location.assign("/dashboard");
     } catch (e) { setError(e instanceof Error ? e.message : "Unable to accept invitation"); } finally { setBusy(false); }
   };
-  return <div className="auth"><section className="auth-brand"><div className="brand big"><div className="brand-mark"><img src="/logo-mark.png" alt="" /></div><span>I-TRACK</span></div><div><Badge tone="lime">WORKSPACE INVITATION</Badge><h1>Work together.<br />Stay aligned.</h1><p>Review the workspace and your role before joining.</p></div></section><section className="auth-form">{!preview ? <div className="auth-message">{error || "Loading invitation…"}</div> : <form onSubmit={submit}><span className="eyebrow">INVITED WORKSPACE</span><h1>Join {preview.invitation.organization?.name}</h1><p>{preview.invitation.invitedBy?.name || "A workspace admin"} invited you as <b>{fmt(preview.invitation.role)}</b>.</p><div className="invite-summary"><span>Email <b>{preview.invitation.email}</b></span><span>Role <b>{fmt(preview.invitation.role)}</b></span></div>{!preview.accountExists && <label className="field"><span>Full name</span><input name="name" defaultValue={preview.invitation.name} required /></label>}<label className="field"><span>{preview.accountExists ? "Password to sign in" : "Create password"}</span><PasswordInput name="password" minLength={8} required /></label>{!preview.accountExists && <label className="field"><span>Confirm password</span><PasswordInput name="confirmPassword" minLength={8} required /></label>}<label className="field"><span>{otpStep === "login" ? "Login verification code" : "Invitation verification code"}</span><input name="otp" inputMode="numeric" pattern="[0-9]{6}" maxLength={6} autoComplete="one-time-code" required /></label>{error && <div className="auth-message">{error}</div>}<button className="btn primary wide" disabled={busy}>{busy ? "Please wait…" : otpStep === "login" ? "Verify login code" : "Accept invitation"}</button>{preview.accountExists && <button type="button" className="btn wide" onClick={() => nav("/login")}>Use another account</button>}</form>}</section></div>;
+  return <div className="auth"><section className="auth-brand"><div className="brand big"><div className="brand-mark"><img src="/logo-mark-soft-purple.png" alt="" /></div><span>I-TRACK</span></div><div><Badge tone="lime">WORKSPACE INVITATION</Badge><h1>Work together.<br />Stay aligned.</h1><p>Review the workspace and your role before joining.</p></div></section><section className="auth-form">{!preview ? <div className="auth-message">{error || "Loading invitation…"}</div> : <form onSubmit={submit}><span className="eyebrow">INVITED WORKSPACE</span><h1>Join {preview.invitation.organization?.name}</h1><p>{preview.invitation.invitedBy?.name || "A workspace admin"} invited you as <b>{fmt(preview.invitation.role)}</b>.</p><div className="invite-summary"><span>Email <b>{preview.invitation.email}</b></span><span>Role <b>{fmt(preview.invitation.role)}</b></span></div>{!preview.accountExists && <label className="field"><span>Full name</span><input name="name" defaultValue={preview.invitation.name} required /></label>}<label className="field"><span>{preview.accountExists ? "Password to sign in" : "Create password"}</span><PasswordInput name="password" minLength={8} required /></label>{!preview.accountExists && <label className="field"><span>Confirm password</span><PasswordInput name="confirmPassword" minLength={8} required /></label>}<label className="field"><span>{otpStep === "login" ? "Login verification code" : "Invitation verification code"}</span><input name="otp" inputMode="numeric" pattern="[0-9]{6}" maxLength={6} autoComplete="one-time-code" required /></label>{error && <div className="auth-message">{error}</div>}<button className="btn primary wide" disabled={busy}>{busy ? "Please wait…" : otpStep === "login" ? "Verify login code" : "Accept invitation"}</button>{preview.accountExists && <button type="button" className="btn wide" onClick={() => nav("/login")}>Use another account</button>}</form>}</section></div>;
 }
 
 function PasswordInput(props: Omit<React.InputHTMLAttributes<HTMLInputElement>, "type">) {
@@ -8067,7 +8067,7 @@ function AuthPageLive({ type }: { type: string }) {
     <div className="auth">
       <section className="auth-brand">
         <div className="brand big">
-          <div className="brand-mark"><img src="/logo-mark.png" alt="" /></div>
+          <div className="brand-mark"><img src="/logo-mark-soft-purple.png" alt="" /></div>
           <span>I-TRACK</span>
         </div>
         <div>
