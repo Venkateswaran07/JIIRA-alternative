@@ -39,7 +39,7 @@ export function googleLoginUrl() {
 
 function isPublicAuthPath(path: string) {
   const normalized = path.split("?", 1)[0];
-  return /^\/auth\/(login|register|refresh|logout|forgot-password|reset-password|accept-invite)$/.test(normalized);
+  return /^\/auth\/(login|register|verify-otp|resend-otp|refresh|logout|forgot-password|reset-password|accept-invite)$/.test(normalized);
 }
 
 async function refreshSession() {
@@ -108,7 +108,7 @@ export async function login(email: string, password: string) {
     method: "POST",
     body: JSON.stringify({ email, password }),
   });
-  saveSession(session);
+  if (!session.requiresOtp) saveSession(session);
   return session;
 }
 

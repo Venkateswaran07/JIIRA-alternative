@@ -98,8 +98,12 @@ test("authenticated PostgreSQL workspace flow", { skip: integrationEnabled ? fal
     assert.ok(address && typeof address !== "string");
     const baseUrl = `http://127.0.0.1:${address.port}/api/v1`;
     const loginResponse = await fetch(`${baseUrl}/auth/login`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ email, password }) });
-    const session = await readJson(loginResponse);
-    assert.equal(loginResponse.status, 200);
+    const loginChallenge = await readJson(loginResponse);
+    assert.equal(loginResponse.status, 202);
+    assert.equal(loginChallenge?.requiresOtp, true);
+    const verifyResponse = await fetch(`${baseUrl}/auth/verify-otp`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ email, purpose: "login", otp: loginChallenge.verificationCode }) });
+    const session = await readJson(verifyResponse);
+    assert.equal(verifyResponse.status, 200);
     assert.equal(typeof session?.token, "string");
 
     const request = async (path: string, init: RequestInit = {}): Promise<JsonResponse> => {

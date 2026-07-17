@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { buildInvitationEmail, buildLoginEmail, buildPasswordResetEmail, buildRegistrationEmail } from "./mail.js";
+import { buildInvitationEmail, buildLoginEmail, buildOtpEmail, buildPasswordResetEmail, buildRegistrationEmail } from "./mail.js";
 
 test("registration email contains the account recipient and sign-in link", () => {
   const message = buildRegistrationEmail({ name: "Ada Lovelace", email: "ada@example.com" });
@@ -29,6 +29,7 @@ test("invitation email includes the workspace role and invite URL", () => {
     invitedBy: "Ada Lovelace",
     role: "engineer",
     inviteUrl: "http://localhost:5173/accept-invite?token=test-token",
+    otp: "123456",
     expiresAt: new Date("2026-07-24T10:00:00.000Z"),
   });
 
@@ -36,6 +37,14 @@ test("invitation email includes the workspace role and invite URL", () => {
   assert.match(message.text, /Engineer/);
   assert.match(message.html, /Accept invitation/);
   assert.match(message.html, /accept-invite\?token=test-token/);
+  assert.match(message.text, /123456/);
+});
+
+test("OTP email contains the verification code", () => {
+  const message = buildOtpEmail({ name: "Ada Lovelace", email: "ada@example.com" }, { purpose: "login", otp: "654321" });
+  assert.match(message.subject, /verification code/);
+  assert.match(message.text, /654321/);
+  assert.match(message.html, /654321/);
 });
 
 test("password reset email includes an expiring reset link", () => {

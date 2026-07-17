@@ -6,20 +6,23 @@ export type AiMutationContract = {
   endpoint: string;
   body: string;
   prerequisites?: string;
+  response?: string;
 };
 
 const noBody = "No request body.";
 
 const contracts: Record<string, Omit<AiMutationContract, "endpoint">> = {
-  "POST /auth/register": { body: "{ name: string (min 2), email: valid email, password: string (min 8) }" },
-  "POST /auth/login": { body: "{ email: valid email, password: string (min 8), organizationId?: string }" },
+  "POST /auth/register": { body: "{ name: string (min 2), email: valid email, password: string (min 8) }", response: "Returns an OTP challenge; verify it with POST /auth/verify-otp before using the session." },
+  "POST /auth/login": { body: "{ email: valid email, password: string (min 8), organizationId?: string }", response: "Returns an OTP challenge; verify it with POST /auth/verify-otp before using the session." },
+  "POST /auth/verify-otp": { body: "{ email: valid email, otp: 6-digit string, purpose: registration|login }" },
+  "POST /auth/resend-otp": { body: "{ email: valid email, purpose: registration|login }" },
   "POST /auth/refresh": { body: "{ refreshToken: string (min 20) }" },
   "POST /auth/logout": { body: "{ refreshToken?: string }" },
   "POST /auth/forgot-password": { body: "{ email: valid email }" },
   "POST /auth/reset-password": { body: "{ token: string (min 20), password: string (min 8) }" },
   "POST /auth/change-password": { body: "{ currentPassword: string, newPassword: string (min 8) }" },
   "PATCH /auth/preferences": { body: "{ notificationPreferences: { ticketAssignments: boolean, mentionsAndComments: boolean, sprintRiskAlerts: boolean, weeklySummary: boolean } }" },
-  "POST /auth/accept-invite": { body: "Existing account: { invitationId: string }. New account: { token: string (min 20), name: string (min 2), password: string (min 8) }." },
+  "POST /auth/accept-invite": { body: "Existing account: { invitationId: string, otp: 6-digit string }. New account: { token: string (min 20), otp: 6-digit string, name: string (min 2), password: string (min 8) }." },
   "POST /workspaces": { body: "{ name: string (min 2) }" },
   "POST /workspaces/:id/switch": { body: "{ refreshToken?: string }", prerequisites: "Use the organization/workspace id from a membership returned by GET /workspaces; do not use the membership record id." },
   "POST /companies/:companyId/workspaces": { body: "{ name: string (min 2), slug?: lowercase letters, numbers, and hyphens }", prerequisites: "Use a company id returned by GET /companies. The server generates a unique slug when slug is omitted." },

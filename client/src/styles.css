@@ -4239,6 +4239,97 @@ td:first-child small {
   place-items: start center;
   padding-top: 12vh;
 }
+.app-dialog-wrap {
+  z-index: 120;
+  background: rgb(4 8 15 / 58%);
+  place-items: center;
+  padding: 20px;
+}
+.app-dialog {
+  width: min(560px, calc(100vw - 40px));
+  padding: 28px 24px 22px;
+  border: 1px solid color-mix(in srgb, var(--text) 16%, var(--border));
+  border-radius: 16px;
+  box-shadow: 0 24px 70px rgb(0 0 0 / 38%);
+  animation: app-dialog-in 140ms ease-out;
+}
+.app-dialog-brand {
+  margin-bottom: 18px;
+  color: var(--text);
+  font-size: 14px;
+  font-weight: 750;
+  letter-spacing: .01em;
+}
+.app-dialog-brand span {
+  color: var(--muted);
+  font-weight: 500;
+}
+.app-dialog h2 {
+  margin: 0 0 10px;
+  font-size: 18px;
+  line-height: 1.25;
+}
+.app-dialog-message {
+  margin: 0 0 18px;
+  color: var(--text);
+  font-size: 13px;
+  line-height: 1.55;
+  white-space: pre-wrap;
+}
+.app-dialog-fields {
+  display: grid;
+  gap: 14px;
+  margin-bottom: 22px;
+}
+.app-dialog-field {
+  display: grid;
+  gap: 6px;
+  color: var(--text);
+  font-size: 12px;
+  font-weight: 650;
+}
+.app-dialog-field b {
+  color: var(--red, #d85c5c);
+}
+.app-dialog-input {
+  width: 100%;
+  min-height: 44px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface-2);
+  color: var(--text);
+  outline: none;
+  font: inherit;
+  font-size: 14px;
+}
+.app-dialog-textarea {
+  min-height: 108px;
+  resize: vertical;
+}
+.app-dialog-field select {
+  appearance: auto;
+}
+.app-dialog-input:focus {
+  border-color: var(--purple);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--purple) 20%, transparent);
+}
+.app-dialog-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+}
+.app-dialog-actions .btn {
+  min-width: 88px;
+  min-height: 40px;
+}
+.app-dialog-confirm-button {
+  box-shadow: 0 7px 18px color-mix(in srgb, var(--purple) 20%, transparent);
+}
+@keyframes app-dialog-in {
+  from { opacity: 0; transform: translateY(8px) scale(.985); }
+  to { opacity: 1; transform: translateY(0) scale(1); }
+}
 .command {
   width: min(580px, 92vw);
   background: var(--surface);

@@ -11,6 +11,8 @@ export const admins: UserRole[] = ["admin"];
 const publicEndpoints = new Set([
   "POST /auth/register",
   "POST /auth/login",
+  "POST /auth/verify-otp",
+  "POST /auth/resend-otp",
   "POST /auth/refresh",
   "POST /auth/logout",
   "POST /auth/forgot-password",

@@ -2,7 +2,7 @@ export const apiCatalog = {
   version: "1.1.0",
   basePath: "/api/v1",
   groups: {
-    auth: ["POST /auth/register", "POST /auth/login", "POST /auth/refresh", "POST /auth/logout", "GET /auth/me", "POST /auth/forgot-password", "POST /auth/reset-password", "POST /auth/change-password", "PATCH /auth/preferences", "POST /auth/accept-invite", "GET /auth/sessions", "DELETE /auth/sessions/:id"],
+    auth: ["POST /auth/register", "POST /auth/login", "POST /auth/verify-otp", "POST /auth/resend-otp", "POST /auth/refresh", "POST /auth/logout", "GET /auth/me", "POST /auth/forgot-password", "POST /auth/reset-password", "POST /auth/change-password", "PATCH /auth/preferences", "POST /auth/accept-invite", "GET /auth/sessions", "DELETE /auth/sessions/:id"],
     workspaces: ["GET /workspaces", "POST /workspaces", "POST /workspaces/:id/switch", "POST /workspaces/:id/onboarding/complete", "GET /invitations/preview", "GET /invitations/pending"],
     organizations: ["GET /companies", "GET /companies/:companyId/workspaces", "GET /companies/:companyId/members", "POST /companies/:companyId/workspaces", "GET /companies/:companyId/groups", "POST /companies/:companyId/groups", "PATCH /companies/:companyId/groups/:id", "DELETE /companies/:companyId/groups/:id", "PUT /companies/:companyId/groups/:id/members", "PUT /companies/:companyId/groups/:id/workspaces"],
     users: ["GET /me", "GET /team", "POST /team", "GET /roles", "POST /roles", "PATCH /roles/:id", "DELETE /roles/:id", "GET /users", "GET /users/:id", "PATCH /users/:id", "POST /users/:id/deactivate", "POST /users/:id/reactivate", "DELETE /users/:id", "POST /invitations", "POST /invitations/:id/resend", "DELETE /invitations/:id"],

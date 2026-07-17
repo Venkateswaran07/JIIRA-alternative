@@ -9,12 +9,13 @@ import { clearSessionCookies, REFRESH_COOKIE, readCookie, setSessionCookies } fr
 import { ActionToken, Session } from "../models/Operational.js";
 import { User } from "../models/User.js";
 import { OrganizationMembership } from "../models/WorkspaceAccess.js";
-import { sendLoginEmail, sendPasswordResetEmail, sendRegistrationEmail } from "../services/mail.js";
+import { sendLoginEmail, sendOtpEmail, sendPasswordResetEmail, sendRegistrationEmail } from "../services/mail.js";
 import { hashToken, issueTokens, membershipsFor, pendingInvitationsFor, publicCompany, publicOrganization, publicUser, sessionResponse } from "../services/sessionAuth.js";
 
 const router = Router();
 const credentials = z.object({ email: z.string().email(), password: z.string().min(8) });
 const registerSchema = credentials.extend({ name: z.string().min(2) });
+const otpSchema = z.object({ email: z.string().email(), otp: z.string().regex(/^\d{6}$/), purpose: z.enum(["registration", "login"]) });
 const notificationPreferencesSchema = z.object({ ticketAssignments: z.boolean(), mentionsAndComments: z.boolean(), sprintRiskAlerts: z.boolean(), weeklySummary: z.boolean() });
 const googleProfileSchema = z.object({
   sub: z.string(),
@@ -22,6 +23,18 @@ const googleProfileSchema = z.object({
   email_verified: z.boolean(),
   name: z.string().min(1),
 });
+
+const OTP_TTL_MS = 10 * 60_000;
+function createOtp() { return crypto.randomInt(100000, 1000000).toString(); }
+function developmentOtp(otp: string) { return env.nodeEnv === "production" ? {} : { verificationCode: otp }; }
+
+async function issueUserOtp(user: any, purpose: "registration" | "login", organizationId?: string) {
+  const otp = createOtp();
+  await ActionToken.deleteMany({ user: user._id, kind: `${purpose}-otp`, usedAt: { $exists: false } });
+  await ActionToken.create({ user: user._id, ...(organizationId ? { organization: organizationId } : {}), kind: `${purpose}-otp`, tokenHash: hashToken(otp), expiresAt: new Date(Date.now() + OTP_TTL_MS) });
+  await sendOtpEmail({ name: user.name, email: user.email }, { purpose, otp });
+  return otp;
+}
 
 async function preferredMembership(user: any, organizationId?: unknown) {
   if (organizationId) {
@@ -49,9 +62,10 @@ router.post("/register", async (req, res) => {
   if (!parsed.success) return res.status(400).json({ message: "Name, valid email, and password are required", issues: parsed.error.issues });
   const email = parsed.data.email.toLowerCase();
   if (await User.exists({ email })) return res.status(409).json({ message: "An account with this email already exists" });
-  const user = await User.create({ name: parsed.data.name, email, passwordHash: await bcrypt.hash(parsed.data.password, 10), avatarColor: "#00AEEF" });
+  const user = await User.create({ name: parsed.data.name, email, passwordHash: await bcrypt.hash(parsed.data.password, 10), emailVerified: false, avatarColor: "#00AEEF" });
   void sendRegistrationEmail({ name: user.name, email: user.email });
-  return res.status(201).json(await sessionResponse(user, undefined, req.get("user-agent"), res));
+  const otp = await issueUserOtp(user, "registration");
+  return res.status(202).json({ requiresOtp: true, purpose: "registration", email: user.email, ...developmentOtp(otp) });
 });
 
 router.post("/login", async (req, res) => {
@@ -59,10 +73,36 @@ router.post("/login", async (req, res) => {
   if (!parsed.success) return res.status(400).json({ message: "Valid email and password are required" });
   const user = await User.findOne({ email: parsed.data.email.toLowerCase() });
   if (!user || !(await bcrypt.compare(parsed.data.password, user.passwordHash))) return res.status(401).json({ message: "Invalid credentials" });
+  if (!user.emailVerified) return res.status(403).json({ message: "Verify your email before signing in", code: "EMAIL_VERIFICATION_REQUIRED" });
   const membership = await preferredMembership(user, req.body?.organizationId);
-  const session = await sessionResponse(user, membership, req.get("user-agent"), res);
-  void sendLoginEmail({ name: user.name, email: user.email }, { ipAddress: req.ip, userAgent: req.get("user-agent") });
-  return res.json(session);
+  const organizationId = membership?.organization ? String(membership.organization?._id || membership.organization) : undefined;
+  const otp = await issueUserOtp(user, "login", organizationId);
+  return res.status(202).json({ requiresOtp: true, purpose: "login", email: user.email, organizationId, ...developmentOtp(otp) });
+});
+
+router.post("/verify-otp", async (req, res) => {
+  const parsed = otpSchema.safeParse(req.body);
+  if (!parsed.success) return res.status(400).json({ message: "Email, purpose, and a 6-digit verification code are required" });
+  const user = await User.findOne({ email: parsed.data.email.toLowerCase() });
+  if (!user) return res.status(400).json({ message: "Invalid or expired verification code" });
+  const action = await ActionToken.findOne({ user: user._id, kind: `${parsed.data.purpose}-otp`, tokenHash: hashToken(parsed.data.otp), usedAt: { $exists: false }, expiresAt: { $gt: new Date() } });
+  if (!action) return res.status(400).json({ message: "Invalid or expired verification code" });
+  action.usedAt = new Date(); await action.save();
+  if (parsed.data.purpose === "registration") { user.emailVerified = true; await user.save(); }
+  if (parsed.data.purpose === "login") void sendLoginEmail({ name: user.name, email: user.email }, { ipAddress: req.ip, userAgent: req.get("user-agent") });
+  const membership = await preferredMembership(user, parsed.data.purpose === "login" ? action.organization : undefined);
+  return res.json(await sessionResponse(user, membership, req.get("user-agent"), res));
+});
+
+router.post("/resend-otp", async (req, res) => {
+  const parsed = z.object({ email: z.string().email(), purpose: z.enum(["registration", "login"]) }).safeParse(req.body);
+  if (!parsed.success) return res.status(400).json({ message: "Email and OTP purpose are required" });
+  const user = await User.findOne({ email: parsed.data.email.toLowerCase() });
+  if (!user || (parsed.data.purpose === "registration" && user.emailVerified) || (parsed.data.purpose === "login" && !user.emailVerified)) {
+    return res.status(202).json({ message: "If the account is eligible, a new verification code has been sent" });
+  }
+  const otp = await issueUserOtp(user, parsed.data.purpose);
+  return res.status(202).json({ requiresOtp: true, purpose: parsed.data.purpose, email: user.email, ...developmentOtp(otp) });
 });
 
 router.get("/google", (_req, res) => {
@@ -119,6 +159,7 @@ router.get("/google/callback", async (req, res) => {
         name: profile.name,
         email,
         passwordHash: await bcrypt.hash(crypto.randomBytes(32).toString("base64url"), 10),
+        emailVerified: true,
         avatarColor: "#4285F4",
       });
       void sendRegistrationEmail({ name: user.name, email: user.email });

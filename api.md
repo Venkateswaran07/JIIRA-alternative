@@ -76,6 +76,8 @@ Without confirmation, destructive actions return `409`:
 | --- | --- | --- | --- |
 | `POST` | `/auth/register` | Public | No |
 | `POST` | `/auth/login` | Public | No |
+| `POST` | `/auth/verify-otp` | Public | No |
+| `POST` | `/auth/resend-otp` | Public | No |
 | `POST` | `/auth/refresh` | Public | No |
 | `POST` | `/auth/logout` | Public | No |
 | `GET` | `/auth/me` | all | No |

@@ -45,7 +45,7 @@ import {
 } from "./components/ui";
 import { cx, fmt } from "../utils/ui";
 import { CustomMarkdown } from "./components/Markdown";
-import { AppDialogHost, appConfirm, appPrompt } from "./components/AppDialog";
+import { AppDialogHost, appConfirm, appForm, appPrompt } from "./components/AppDialog";
 
 const defaultNotificationPreferences: NotificationPreferences = {
   ticketAssignments: true,
@@ -203,7 +203,15 @@ function Shell({
   };
   const acceptPendingInvitation = async () => {
     if (!selectedInvitation) return;
-    const session = await api<any>("/auth/accept-invite", { method: "POST", body: JSON.stringify({ invitationId: selectedInvitation.id }) });
+    const values = await appForm({
+      title: "Accept invitation",
+      message: "Enter the 6-digit verification code sent to your email.",
+      fields: [{ name: "otp", label: "Verification code", required: true, placeholder: "123456" }],
+      confirmLabel: "Accept invitation",
+    });
+    const otp = values?.otp?.trim();
+    if (!otp) return;
+    const session = await api<any>("/auth/accept-invite", { method: "POST", body: JSON.stringify({ invitationId: selectedInvitation.id, otp }) });
     saveSession(session);
     window.location.assign("/dashboard");
   };
@@ -5429,7 +5437,13 @@ function TicketDetailLive({ toast }: { toast: (s: string) => void }) {
   };
 
   const addComment = async () => {
-    const body = await appPrompt("Enter comment body:");
+    const values = await appForm({
+      title: "Add comment",
+      message: "Share an update with everyone following this ticket.",
+      fields: [{ name: "body", label: "Comment", type: "textarea", required: true, placeholder: "Write a comment…" }],
+      confirmLabel: "Add comment",
+    });
+    const body = values?.body?.trim();
     if (!body) return;
     try {
       await mutate(() =>
@@ -5445,7 +5459,12 @@ function TicketDetailLive({ toast }: { toast: (s: string) => void }) {
   };
 
   const editComment = async (commentId: string, currentBody: string) => {
-    const body = await appPrompt("Edit comment body:", currentBody);
+    const values = await appForm({
+      title: "Edit comment",
+      fields: [{ name: "body", label: "Comment", type: "textarea", defaultValue: currentBody, required: true }],
+      confirmLabel: "Save comment",
+    });
+    const body = values?.body?.trim();
     if (!body) return;
     try {
       await mutate(() =>
@@ -5475,8 +5494,16 @@ function TicketDetailLive({ toast }: { toast: (s: string) => void }) {
   };
 
   const addWorkLog = async () => {
-    const note = await appPrompt("Work log note:");
-    const hours = Number(await appPrompt("Hours worked:", "1", { inputType: "number" }));
+    const values = await appForm({
+      title: "Log work",
+      fields: [
+        { name: "note", label: "Work note", type: "textarea", required: true, placeholder: "What did you work on?" },
+        { name: "hours", label: "Hours worked", type: "number", defaultValue: "1", required: true },
+      ],
+      confirmLabel: "Add work log",
+    });
+    const note = values?.note?.trim();
+    const hours = Number(values?.hours);
     if (!note || !hours) return;
     try {
       await mutate(() =>
@@ -5496,8 +5523,16 @@ function TicketDetailLive({ toast }: { toast: (s: string) => void }) {
     currentNote: string,
     currentHours: number,
   ) => {
-    const note = await appPrompt("Edit note:", currentNote);
-    const hours = Number(await appPrompt("Edit hours:", String(currentHours), { inputType: "number" }));
+    const values = await appForm({
+      title: "Edit work log",
+      fields: [
+        { name: "note", label: "Work note", type: "textarea", defaultValue: currentNote, required: true },
+        { name: "hours", label: "Hours worked", type: "number", defaultValue: String(currentHours), required: true },
+      ],
+      confirmLabel: "Save work log",
+    });
+    const note = values?.note?.trim();
+    const hours = Number(values?.hours);
     if (!note || !hours) return;
     try {
       await mutate(() =>
@@ -5558,12 +5593,28 @@ function TicketDetailLive({ toast }: { toast: (s: string) => void }) {
   };
 
   const addIssueLink = async () => {
-    const type = await appPrompt(
-      "Link type: blocks, is-blocked-by, relates-to, or duplicates",
-      "relates-to",
-    );
-    if (!type || !["blocks", "is-blocked-by", "relates-to", "duplicates"].includes(type)) return;
-    const targetKey = await appPrompt("Ticket key to link (for example ITR-102)");
+    const values = await appForm({
+      title: "Link ticket",
+      fields: [
+        {
+          name: "type",
+          label: "Link type",
+          type: "select",
+          defaultValue: "relates-to",
+          required: true,
+          options: [
+            { label: "Relates to", value: "relates-to" },
+            { label: "Blocks", value: "blocks" },
+            { label: "Is blocked by", value: "is-blocked-by" },
+            { label: "Duplicates", value: "duplicates" },
+          ],
+        },
+        { name: "targetKey", label: "Ticket key", required: true, placeholder: "For example ITR-102" },
+      ],
+      confirmLabel: "Add link",
+    });
+    const type = values?.type;
+    const targetKey = values?.targetKey?.trim();
     if (!targetKey) return;
     const target = (dashboard?.tickets || []).find(
       (ticket: any) => ticket.ticketId.toLowerCase() === targetKey.trim().toLowerCase(),
@@ -5973,9 +6024,17 @@ function GroupsLive({ toast }: { toast: (s: string) => void }) {
   }, [load]);
 
   const create = async () => {
-    const name = await appPrompt("Group name (for example Engineering)");
+    const values = await appForm({
+      title: "Create group",
+      fields: [
+        { name: "name", label: "Group name", required: true, placeholder: "For example Engineering" },
+        { name: "description", label: "Description", type: "textarea", placeholder: "What is this group for?" },
+      ],
+      confirmLabel: "Create group",
+    });
+    const name = values?.name?.trim();
     if (!name || !companyId) return;
-    const description = (await appPrompt("Group description", "")) || "";
+    const description = values?.description?.trim() || "";
     try {
       await api(`/companies/${companyId}/groups`, { method: "POST", body: JSON.stringify({ name, description }) });
       await load();
@@ -6005,9 +6064,28 @@ function GroupsLive({ toast }: { toast: (s: string) => void }) {
 
   const setWorkspaceAccess = async (group: any) => {
     const currentNames = (group.workspaceAccess || []).map((grant: any) => workspaces.find((workspace: any) => String(workspace._id) === String(grant.workspace))?.name).filter(Boolean).join(", ");
-    const names = await appPrompt("Workspace names this group can access, separated by commas", currentNames);
-    if (names === null || !companyId) return;
-    const role = await appPrompt("Access role: manager, engineer, or designer", "engineer");
+    const values = await appForm({
+      title: "Workspace access",
+      fields: [
+        { name: "names", label: "Workspaces", defaultValue: currentNames, required: true, placeholder: "Separate names with commas" },
+        {
+          name: "role",
+          label: "Access role",
+          type: "select",
+          defaultValue: "engineer",
+          required: true,
+          options: [
+            { label: "Engineer", value: "engineer" },
+            { label: "Manager", value: "manager" },
+            { label: "Designer", value: "designer" },
+          ],
+        },
+      ],
+      confirmLabel: "Save access",
+    });
+    const names = values?.names;
+    if (names === undefined || !companyId) return;
+    const role = values?.role;
     if (!role || !["manager", "engineer", "designer"].includes(role)) return toast("Choose a valid workspace role");
     const requested = names.split(",").map((name) => name.trim().toLowerCase()).filter(Boolean);
     const missing = requested.filter((name) => !workspaces.some((workspace: any) => workspace.name.toLowerCase() === name));
@@ -6104,16 +6182,18 @@ function OrganizationLive({ toast }: { toast: (s: string) => void }) {
   };
 
   const remove = async () => {
-    const confirmation = await appPrompt(
-      `Type ${org.name} to permanently delete this workspace.`,
-    );
-    if (confirmation !== org.name) return;
-    const currentPassword = await appPrompt(
-      "Enter your current password to confirm permanent deletion.",
-      "",
-      { inputType: "password" },
-    );
-    if (!currentPassword) return;
+    const values = await appForm({
+      title: "Delete workspace permanently",
+      message: `This cannot be undone. Type ${org.name} and enter your password to continue.`,
+      fields: [
+        { name: "confirmationName", label: `Type ${org.name}`, required: true },
+        { name: "currentPassword", label: "Current password", type: "password", required: true },
+      ],
+      confirmLabel: "Delete permanently",
+    });
+    const confirmation = values?.confirmationName;
+    const currentPassword = values?.currentPassword;
+    if (confirmation !== org.name || !currentPassword) return;
     try {
       await api("/organization", {
         method: "DELETE",
@@ -6910,17 +6990,28 @@ const resourceIcons: Record<string, React.ComponentType<any>> = {
 };
 
 async function collectResourceDefinition(kind: string, current?: any) {
-  const name = await appPrompt(`${current ? "Edit" : "Name for"} ${fmt(kind)}`, current?.name || "");
-  if (!name) return null;
-  const description = await appPrompt("Description", current?.description || "") ?? current?.description ?? "";
-  const key = await appPrompt("Key (optional)", current?.key || "") ?? current?.key ?? "";
+  const fields = [
+    { name: "name", label: `${current ? "Name" : "Name for"} ${fmt(kind)}`, defaultValue: current?.name || "", required: true },
+    { name: "description", label: "Description", type: "textarea" as const, defaultValue: current?.description || "" },
+    { name: "key", label: "Key (optional)", defaultValue: current?.key || "" },
+    ...(resourceFeatureConfig[kind]?.fields || []).map((field) => ({
+      name: field.key,
+      label: field.label,
+      defaultValue: String(current?.config?.[field.key] ?? field.initial ?? ""),
+      type: field.key.toLowerCase().includes("date") ? "date" as const : field.key === "progress" ? "number" as const : "text" as const,
+    })),
+  ];
+  const values = await appForm({
+    title: `${current ? "Edit" : "Create"} ${fmt(kind)}`,
+    fields,
+    confirmLabel: current ? "Save changes" : `Create ${fmt(kind)}`,
+  });
+  if (!values?.name?.trim()) return null;
   const config = { ...(current?.config || {}) };
   for (const field of resourceFeatureConfig[kind]?.fields || []) {
-    const value = await appPrompt(field.label, String(config[field.key] ?? field.initial ?? ""));
-    if (value === null) return null;
-    config[field.key] = value.trim();
+    config[field.key] = String(values[field.key] ?? "").trim();
   }
-  return { name: name.trim(), description, key: key.trim() || undefined, status: current?.status || "active", order: current?.order || 0, config };
+  return { name: values.name.trim(), description: values.description?.trim() || "", key: values.key?.trim() || undefined, status: current?.status || "active", order: current?.order || 0, config };
 }
 
 function ResourcesLive({ toast }: { toast: (s: string) => void }) {
@@ -7170,17 +7261,30 @@ function IntegrationsLive({ toast }: { toast: (s: string) => void }) {
 
   const create = async () => {
     if (!isAdmin) return toast("Only admins can create integrations");
-    const kind = await appPrompt(
-      "Integration type: webhook or api-token",
-      "webhook",
-    );
-    if (!kind || !["webhook", "api-token"].includes(kind)) return;
-    const name = await appPrompt("Integration name");
-    if (!name) return;
-    const url =
-      kind === "webhook"
-        ? (await appPrompt("Webhook URL")) || undefined
-        : undefined;
+    const values = await appForm({
+      title: "Create integration",
+      fields: [
+        {
+          name: "kind",
+          label: "Integration type",
+          type: "select",
+          defaultValue: "webhook",
+          required: true,
+          options: [
+            { label: "Webhook", value: "webhook" },
+            { label: "API token", value: "api-token" },
+          ],
+        },
+        { name: "name", label: "Integration name", required: true },
+        { name: "url", label: "Webhook URL", placeholder: "https://…" },
+      ],
+      message: "API token integrations do not use the webhook URL.",
+      confirmLabel: "Create integration",
+    });
+    const kind = values?.kind;
+    const name = values?.name?.trim();
+    if (!kind || !["webhook", "api-token"].includes(kind) || !name) return;
+    const url = kind === "webhook" ? values?.url?.trim() || undefined : undefined;
     try {
       let createdToken = "";
       await mutate(async () => {
@@ -7193,11 +7297,13 @@ function IntegrationsLive({ toast }: { toast: (s: string) => void }) {
       });
 
       if (createdToken) {
-        await appPrompt(
-          "Copy this token now. It will not be shown again.",
-          createdToken,
-          { title: "Integration token" },
-        );
+        await appForm({
+          title: "Integration token",
+          message: "Copy this token now. It will not be shown again.",
+          fields: [{ name: "token", label: "Token", defaultValue: createdToken }],
+          confirmLabel: "Done",
+          cancelLabel: "Close",
+        });
       }
       toast("Integration created");
     } catch (err) {
@@ -7724,7 +7830,19 @@ function OnboardingFlow({ toast }: { toast: (message: string) => void }) {
       }
     } catch (requestError) { setError(requestError instanceof Error ? requestError.message : "Unable to continue"); } finally { setBusy(false); }
   };
-  const acceptInvitation = async (invitationId: string) => { const session = await api<any>("/auth/accept-invite", { method: "POST", body: JSON.stringify({ invitationId }) }); saveSession(session); window.location.assign("/dashboard"); };
+  const acceptInvitation = async (invitationId: string) => {
+    const values = await appForm({
+      title: "Accept invitation",
+      message: "Enter the 6-digit verification code sent to your email.",
+      fields: [{ name: "otp", label: "Verification code", required: true, placeholder: "123456" }],
+      confirmLabel: "Accept invitation",
+    });
+    const otp = values?.otp?.trim();
+    if (!otp) return;
+    const session = await api<any>("/auth/accept-invite", { method: "POST", body: JSON.stringify({ invitationId, otp }) });
+    saveSession(session);
+    window.location.assign("/dashboard");
+  };
   const finish = async () => {
     if (!organization || busy) return;
     setBusy(true); setError("");
@@ -7790,9 +7908,26 @@ function OnboardingFlow({ toast }: { toast: (message: string) => void }) {
 function InvitationAcceptPage() {
   const [params] = useSearchParams(); const token = params.get("token") || ""; const nav = useNavigate();
   const [preview, setPreview] = useState<any>(null); const [error, setError] = useState(""); const [busy, setBusy] = useState(false);
+  const [otpStep, setOtpStep] = useState<"login" | "invite" | null>(null);
   useEffect(() => { if (token) api<any>(`/invitations/preview?token=${encodeURIComponent(token)}`).then(setPreview).catch((e) => setError(e.message)); else setError("Invitation token is missing"); }, [token]);
-  const submit = async (event: React.FormEvent<HTMLFormElement>) => { event.preventDefault(); setBusy(true); setError(""); const values = new FormData(event.currentTarget); try { if (preview.accountExists && !getToken()) await login(preview.invitation.email, String(values.get("password"))); const password = String(values.get("password") || ""); if (!preview.accountExists && password !== String(values.get("confirmPassword") || "")) throw new Error("Passwords do not match"); const session = await api<any>("/auth/accept-invite", { method: "POST", body: JSON.stringify({ token, ...(!preview.accountExists ? { name: values.get("name"), password } : {}) }) }); saveSession(session); window.location.assign("/dashboard"); } catch (e) { setError(e instanceof Error ? e.message : "Unable to accept invitation"); } finally { setBusy(false); } };
-  return <div className="auth"><section className="auth-brand"><div className="brand big"><div className="brand-mark"><img src="/logo-mark.png" alt="" /></div><span>I-TRACK</span></div><div><Badge tone="lime">WORKSPACE INVITATION</Badge><h1>Work together.<br />Stay aligned.</h1><p>Review the workspace and your role before joining.</p></div></section><section className="auth-form">{!preview ? <div className="auth-message">{error || "Loading invitation…"}</div> : <form onSubmit={submit}><span className="eyebrow">INVITED WORKSPACE</span><h1>Join {preview.invitation.organization?.name}</h1><p>{preview.invitation.invitedBy?.name || "A workspace admin"} invited you as <b>{fmt(preview.invitation.role)}</b>.</p><div className="invite-summary"><span>Email <b>{preview.invitation.email}</b></span><span>Role <b>{fmt(preview.invitation.role)}</b></span></div>{!preview.accountExists && <label className="field"><span>Full name</span><input name="name" defaultValue={preview.invitation.name} required /></label>}<label className="field"><span>{preview.accountExists ? "Password to sign in" : "Create password"}</span><PasswordInput name="password" minLength={8} required /></label>{!preview.accountExists && <label className="field"><span>Confirm password</span><PasswordInput name="confirmPassword" minLength={8} required /></label>}{error && <div className="auth-message">{error}</div>}<button className="btn primary wide" disabled={busy}>{busy ? "Joining…" : "Accept invitation"}</button>{preview.accountExists && <button type="button" className="btn wide" onClick={() => nav("/login")}>Use another account</button>}</form>}</section></div>;
+  const submit = async (event: React.FormEvent<HTMLFormElement>) => {
+    event.preventDefault(); setBusy(true); setError(""); const values = new FormData(event.currentTarget);
+    try {
+      if (preview.accountExists && otpStep === "login") {
+        const session = await api<any>("/auth/verify-otp", { method: "POST", body: JSON.stringify({ email: preview.invitation.email, otp: values.get("otp"), purpose: "login" }) });
+        saveSession(session); setOtpStep("invite"); return;
+      }
+      if (preview.accountExists && !getToken()) {
+        const session = await login(preview.invitation.email, String(values.get("password")));
+        if (session.requiresOtp) { setOtpStep("login"); setError("We sent a login code to your email. Enter it to continue."); return; }
+      }
+      const password = String(values.get("password") || "");
+      if (!preview.accountExists && password !== String(values.get("confirmPassword") || "")) throw new Error("Passwords do not match");
+      const session = await api<any>("/auth/accept-invite", { method: "POST", body: JSON.stringify({ token, otp: values.get("otp"), ...(!preview.accountExists ? { name: values.get("name"), password } : {}) }) });
+      saveSession(session); window.location.assign("/dashboard");
+    } catch (e) { setError(e instanceof Error ? e.message : "Unable to accept invitation"); } finally { setBusy(false); }
+  };
+  return <div className="auth"><section className="auth-brand"><div className="brand big"><div className="brand-mark"><img src="/logo-mark.png" alt="" /></div><span>I-TRACK</span></div><div><Badge tone="lime">WORKSPACE INVITATION</Badge><h1>Work together.<br />Stay aligned.</h1><p>Review the workspace and your role before joining.</p></div></section><section className="auth-form">{!preview ? <div className="auth-message">{error || "Loading invitation…"}</div> : <form onSubmit={submit}><span className="eyebrow">INVITED WORKSPACE</span><h1>Join {preview.invitation.organization?.name}</h1><p>{preview.invitation.invitedBy?.name || "A workspace admin"} invited you as <b>{fmt(preview.invitation.role)}</b>.</p><div className="invite-summary"><span>Email <b>{preview.invitation.email}</b></span><span>Role <b>{fmt(preview.invitation.role)}</b></span></div>{!preview.accountExists && <label className="field"><span>Full name</span><input name="name" defaultValue={preview.invitation.name} required /></label>}<label className="field"><span>{preview.accountExists ? "Password to sign in" : "Create password"}</span><PasswordInput name="password" minLength={8} required /></label>{!preview.accountExists && <label className="field"><span>Confirm password</span><PasswordInput name="confirmPassword" minLength={8} required /></label>}<label className="field"><span>{otpStep === "login" ? "Login verification code" : "Invitation verification code"}</span><input name="otp" inputMode="numeric" pattern="[0-9]{6}" maxLength={6} autoComplete="one-time-code" required /></label>{error && <div className="auth-message">{error}</div>}<button className="btn primary wide" disabled={busy}>{busy ? "Please wait…" : otpStep === "login" ? "Verify login code" : "Accept invitation"}</button>{preview.accountExists && <button type="button" className="btn wide" onClick={() => nav("/login")}>Use another account</button>}</form>}</section></div>;
 }
 
 function PasswordInput(props: Omit<React.InputHTMLAttributes<HTMLInputElement>, "type">) {
@@ -7819,6 +7954,7 @@ function AuthPageLive({ type }: { type: string }) {
   const [error, setError] = useState("");
   const [resetLink, setResetLink] = useState("");
   const [busy, setBusy] = useState(false);
+  const [otpChallenge, setOtpChallenge] = useState<{ purpose: "registration" | "login"; email: string } | null>(null);
   const token = searchParams.get("token") || "";
   const tokenFlow = type === "reset-password" || type === "accept-invite";
   useEffect(() => {
@@ -7832,6 +7968,15 @@ function AuthPageLive({ type }: { type: string }) {
     "reset-password": "Choose a new password",
     "accept-invite": "Join your workspace",
   };
+  const resendOtp = async () => {
+    if (!otpChallenge) return;
+    setBusy(true); setError("");
+    try {
+      const result = await api<any>("/auth/resend-otp", { method: "POST", body: JSON.stringify({ email: otpChallenge.email, purpose: otpChallenge.purpose }) });
+      if (result.requiresOtp) setError("A new 6-digit verification code has been sent to your email.");
+      else setError(result.message || "If eligible, a new verification code has been sent.");
+    } catch (err) { setError(err instanceof Error ? err.message : "Unable to resend the code"); } finally { setBusy(false); }
+  };
   const submit = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
     setBusy(true);
@@ -7839,8 +7984,23 @@ function AuthPageLive({ type }: { type: string }) {
     setResetLink("");
     const data = new FormData(e.currentTarget);
     try {
+      if (otpChallenge) {
+        const session = await api<any>("/auth/verify-otp", {
+          method: "POST",
+          body: JSON.stringify({ email: otpChallenge.email, otp: data.get("otp"), purpose: otpChallenge.purpose }),
+        });
+        saveSession(session);
+        nav(session.next || "/dashboard");
+        location.reload();
+        return;
+      }
       if (type === "login") {
         const session = await login(String(data.get("email")), String(data.get("password")));
+        if (session.requiresOtp) {
+          setOtpChallenge({ purpose: "login", email: session.email });
+          setError("We sent a 6-digit verification code to your email.");
+          return;
+        }
         nav(session.next || "/dashboard");
         location.reload();
         return;
@@ -7854,6 +8014,11 @@ function AuthPageLive({ type }: { type: string }) {
             password: data.get("password"),
           }),
         });
+        if (session.requiresOtp) {
+          setOtpChallenge({ purpose: "registration", email: session.email });
+          setError("We sent a 6-digit verification code to your email.");
+          return;
+        }
         saveSession(session);
         nav(session.next || "/onboarding/workspace");
         location.reload();
@@ -7919,6 +8084,7 @@ function AuthPageLive({ type }: { type: string }) {
             Plan focused work, protect capacity, and turn delivery signals into
             confident decisions.
           </p>
+          {otpChallenge && <div className="auth-message">Enter the 6-digit code sent to {otpChallenge.email}.</div>}
         </div>
         <div className="auth-quote">
           <p>Live workspace data, secured by your organization account.</p>
@@ -7971,6 +8137,12 @@ function AuthPageLive({ type }: { type: string }) {
               />
             </label>
           )}
+          {otpChallenge && (
+            <label className="field">
+              <span>Verification code</span>
+              <input name="otp" inputMode="numeric" pattern="[0-9]{6}" maxLength={6} autoComplete="one-time-code" required />
+            </label>
+          )}
           {tokenFlow && (
             <label className="field">
               <span>Confirm password</span>
@@ -7997,9 +8169,12 @@ function AuthPageLive({ type }: { type: string }) {
               Open password reset page
             </a>
           )}
+          {otpChallenge && <button type="button" className="auth-switch" onClick={resendOtp} disabled={busy}>Resend verification code</button>}
           <button className="btn primary wide" disabled={busy || (tokenFlow && !token)}>
             {busy
               ? "Please wait…"
+              : otpChallenge
+                ? "Verify code"
               : type === "login"
                 ? "Sign in"
                 : type === "forgot-password"

@@ -14,7 +14,7 @@ export function swaggerPageHtml() {
 <body>
   <div class="auth-helper">
     <strong>Most endpoints require an I-TRACK JWT bearer token.</strong>
-    Run <code>POST /auth/login</code> first, then copy the returned <code>token</code> into Swagger's Authorize dialog. The OpenAI-compatible API key stays in <code>server/.env</code>; do not paste it here as the bearer token.
+    Run <code>POST /auth/login</code>, then verify the returned challenge with <code>POST /auth/verify-otp</code> and copy that response's <code>token</code> into Swagger's Authorize dialog. The OpenAI-compatible API key stays in <code>server/.env</code>; do not paste it here as the bearer token.
   </div>
   <div id="swagger-ui"></div>
   <script src="https://unpkg.com/swagger-ui-dist@5/swagger-ui-bundle.js"></script>
@@ -30,7 +30,7 @@ export function swaggerPageHtml() {
         return request;
       },
       responseInterceptor: function(response) {
-        if (response.url.endsWith("/auth/login") && response.status === 200 && response.text) {
+        if (response.url.endsWith("/auth/verify-otp") && response.status === 200 && response.text) {
           try {
             var body = JSON.parse(response.text);
             if (body.token) {

@@ -2,7 +2,7 @@ import { apiCatalog } from "./apiCatalog.js";
 import { isConfirmationRequired } from "./aiAccess.js";
 import { rolesForEndpoint } from "./middleware/access.js";
 
-const publicAuthPaths = new Set(["/auth/register", "/auth/login", "/auth/refresh", "/auth/logout", "/auth/forgot-password", "/auth/reset-password", "/auth/accept-invite", "/invitations/preview"]);
+const publicAuthPaths = new Set(["/auth/register", "/auth/login", "/auth/verify-otp", "/auth/resend-otp", "/auth/refresh", "/auth/logout", "/auth/forgot-password", "/auth/reset-password", "/auth/accept-invite", "/invitations/preview"]);
 
 const aiExecuteRequestSchema = {
   type: "object",
