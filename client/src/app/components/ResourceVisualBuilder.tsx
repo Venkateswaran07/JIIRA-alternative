@@ -3,6 +3,7 @@ import * as Icons from "lucide-react";
 import { WorkflowVisualEditor, WorkflowConfig } from "./WorkflowVisualEditor";
 import { ModalOverlay } from "./ui";
 import { MiniDatePicker } from "./MiniDatePicker";
+import { useWorkspace } from "../workspace";
 
 export type ResourceKind =
   | "epic"
@@ -40,7 +41,7 @@ export interface FeatureConfig {
     key: string;
     label: string;
     initial?: string;
-    type?: "text" | "textarea" | "select" | "date" | "number" | "color";
+    type?: "text" | "textarea" | "select" | "person" | "date" | "number" | "color";
     options?: { label: string; value: string }[];
   }[];
   presets: {
@@ -99,7 +100,7 @@ export const ALL_RESOURCE_FEATURE_CONFIG: Record<ResourceKind, FeatureConfig> = 
     fields: [
       { key: "startDate", label: "Start Date", type: "date" },
       { key: "endDate", label: "Target Completion Date", type: "date" },
-      { key: "owner", label: "Epic Owner / Lead", initial: "Unassigned" },
+      { key: "owner", label: "Epic Owner / Lead", initial: "Unassigned", type: "person" },
       {
         key: "color",
         label: "Theme Color",
@@ -217,14 +218,7 @@ export const ALL_RESOURCE_FEATURE_CONFIG: Record<ResourceKind, FeatureConfig> = 
         key: "owner",
         label: "Release Manager",
         initial: "Unassigned",
-        type: "select",
-        options: [
-          { label: "Unassigned", value: "Unassigned" },
-          { label: "Elena Rostova", value: "Elena Rostova" },
-          { label: "Alex Rivers", value: "Alex Rivers" },
-          { label: "Marcus Vance", value: "Marcus Vance" },
-          { label: "Sarah Chen", value: "Sarah Chen" },
-        ],
+        type: "person",
       },
       {
         key: "status",
@@ -1003,14 +997,23 @@ interface VisualModalProps {
 }
 
 export function ResourceVisualModal({ kind, initialData, onSave, onClose }: VisualModalProps) {
+  const { dashboard } = useWorkspace();
   const featureConfig = ALL_RESOURCE_FEATURE_CONFIG[kind];
+  const workspacePeople = (dashboard?.users || [])
+    .map((person: any) => String(person.name || person.email || "").trim())
+    .filter(Boolean)
+    .filter((person: string, index: number, people: string[]) => people.indexOf(person) === index)
+    .sort((a: string, b: string) => a.localeCompare(b));
   const [name, setName] = useState(initialData?.name || "");
   const [description, setDescription] = useState(initialData?.description || "");
   const [key, setKey] = useState(initialData?.key || "");
   const [config, setConfig] = useState<Record<string, string>>(() => {
     const initial: Record<string, string> = {};
     featureConfig.fields.forEach((f) => {
-      initial[f.key] = String(initialData?.config?.[f.key] ?? f.initial ?? "");
+      const value = String(initialData?.config?.[f.key] ?? f.initial ?? "");
+      initial[f.key] = f.type === "person" && value !== "Unassigned" && !workspacePeople.includes(value)
+        ? "Unassigned"
+        : value;
     });
     return initial;
   });
@@ -1021,7 +1024,17 @@ export function ResourceVisualModal({ kind, initialData, onSave, onClose }: Visu
     setName(preset.name);
     setDescription(preset.description);
     if (preset.key) setKey(preset.key);
-    setConfig({ ...preset.config });
+    setConfig(Object.fromEntries(
+      featureConfig.fields.map((field) => {
+        const value = String(preset.config[field.key] ?? field.initial ?? "");
+        return [
+          field.key,
+          field.type === "person" && value !== "Unassigned" && !workspacePeople.includes(value)
+            ? "Unassigned"
+            : value,
+        ];
+      }),
+    ));
   };
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -1080,16 +1093,26 @@ export function ResourceVisualModal({ kind, initialData, onSave, onClose }: Visu
             <textarea rows={2} value={description} onChange={(e) => setDescription(e.target.value)} placeholder="Usage details or scope notes..." />
           </label>
 
-          <div style={{ borderTop: "1px solid var(--border)", paddingTop: "12px", display: "grid", gap: "12px" }}>
+          <div className="rv-config-fields" style={{ borderTop: "1px solid var(--border)", paddingTop: "12px", display: "grid" }}>
             <span style={{ fontSize: "12px", fontWeight: 600 }}>Configuration Attributes</span>
             {featureConfig.fields.map((field) => (
-              <div key={field.key} className="field">
+              <div key={field.key} className="field rv-config-field">
                 {field.type === "select" ? (
                   <label>
                     <span>{field.label}</span>
                     <select value={config[field.key] || ""} onChange={(e) => setConfig({ ...config, [field.key]: e.target.value })}>
                       {field.options?.map((opt) => (
                         <option key={opt.value} value={opt.value}>{opt.label}</option>
+                      ))}
+                    </select>
+                  </label>
+                ) : field.type === "person" ? (
+                  <label>
+                    <span>{field.label}</span>
+                    <select value={config[field.key] || "Unassigned"} onChange={(e) => setConfig({ ...config, [field.key]: e.target.value })}>
+                      <option value="Unassigned">Unassigned</option>
+                      {workspacePeople.map((person: string) => (
+                        <option key={person} value={person}>{person}</option>
                       ))}
                     </select>
                   </label>
