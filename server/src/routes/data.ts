@@ -455,11 +455,6 @@ router.post("/tickets/:id/comments", requireRole(["admin", "manager", "engineer"
 router.get("/sla", async (req: AuthRequest, res) => {
   const organization = await Organization.findById(orgId(req));
   const tickets = await Ticket.find({ organization: orgId(req), archivedAt: { $exists: false } }).populate(ticketPopulation);
-  const now = new Date();
-  await Promise.all(tickets.map(async (ticket) => {
-    const nextStatus = applySlaState(ticket, now).slaStatus;
-    return ticket.isModified("slaStatus") || ticket.slaStatus !== nextStatus ? ticket.save() : undefined;
-  }));
   const summary = {
     breached: tickets.filter((ticket) => ticket.slaStatus === "breached").length,
     dueSoon: tickets.filter((ticket) => ticket.slaStatus === "due_soon").length,

@@ -13,7 +13,7 @@ export const hashToken = (token: string) => crypto.createHash("sha256").update(t
 
 export function publicUser(user: any) {
   if (!user) return null;
-  return { id: user.id, _id: user.id, name: user.name, email: user.email, avatarColor: user.avatarColor, notificationPreferences: user.notificationPreferences };
+  return { id: user.id, _id: user.id, name: user.name, email: user.email, avatarColor: user.avatarColor, notificationPreferences: user.notificationPreferences, uiPreferences: user.uiPreferences };
 }
 
 export function publicOrganization(org: any) {

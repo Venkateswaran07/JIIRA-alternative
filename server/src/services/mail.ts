@@ -32,6 +32,15 @@ export type OtpMailDetails = {
   expiresInMinutes?: number;
 };
 
+export type SlaAlertMailDetails = {
+  recipient: UserMailRecipient;
+  ticketKey: string;
+  ticketTitle: string;
+  state: "due_soon" | "breached";
+  deadline: Date;
+  href: string;
+};
+
 let transporter: Transporter | undefined;
 let warnedAboutMissingConfiguration = false;
 
@@ -155,8 +164,26 @@ export function buildPasswordResetEmail(user: UserMailRecipient, resetUrl: strin
   };
 }
 
+export function buildSlaAlertEmail(details: SlaAlertMailDetails): MailMessage {
+  const stateLabel = details.state === "breached" ? "breached" : "is due soon";
+  const ticketUrl = `${appUrl()}${details.href}`;
+  return {
+    subject: `[${details.ticketKey}] SLA ${stateLabel}`,
+    text: `Hi ${details.recipient.name},\n\n${details.ticketKey} — ${details.ticketTitle} ${stateLabel}.\nDeadline: ${formatDate(details.deadline)}\n\nOpen ticket: ${ticketUrl}`,
+    html: renderMailTemplate("sla-alert.html", {
+      name: escapeHtml(details.recipient.name),
+      ticketKey: escapeHtml(details.ticketKey),
+      ticketTitle: escapeHtml(details.ticketTitle),
+      stateLabel: escapeHtml(stateLabel),
+      deadline: escapeHtml(formatDate(details.deadline)),
+      ticketUrl: escapeHtml(ticketUrl),
+    }),
+  };
+}
+
 export const sendRegistrationEmail = (user: UserMailRecipient) => sendTransactionalMail(user, buildRegistrationEmail(user));
 export const sendLoginEmail = (user: UserMailRecipient, details?: LoginMailDetails) => sendTransactionalMail(user, buildLoginEmail(user, details));
 export const sendInvitationEmail = (details: InvitationMailDetails) => sendTransactionalMail(details.recipient, buildInvitationEmail(details));
 export const sendOtpEmail = (user: UserMailRecipient, details: OtpMailDetails) => sendTransactionalMail(user, buildOtpEmail(user, details));
 export const sendPasswordResetEmail = (user: UserMailRecipient, resetUrl: string) => sendTransactionalMail(user, buildPasswordResetEmail(user, resetUrl));
+export const sendSlaAlertEmail = (details: SlaAlertMailDetails) => sendTransactionalMail(details.recipient, buildSlaAlertEmail(details));

@@ -1,5 +1,5 @@
 import React, { createContext, useContext, useEffect, useState, useRef, useCallback } from "react";
-import * as Icons from "lucide-react";
+import { AlertCircle, Bot, Boxes, Building2, ChartNoAxesCombined, Check, CircleSlash2, FilePlus2, ListChecks, PanelsTopLeft, SendHorizonal, ShieldAlert, Sparkles, Ticket, Timer, Trash2, User, UserPlus, UsersRound, WandSparkles, X } from "lucide-react";
 import { api, apiFetch } from "../../api";
 import { useWorkspace } from "../workspace";
 import { CustomMarkdown } from "./Markdown";
@@ -69,6 +69,7 @@ const aiActionPrompts = [
   { label: "Manage workspace resources", icon: "Boxes", prompt: "Help me manage workspace resources. Show available resource types and ask what I want to create, update, or delete." },
   { label: "Show reports", icon: "ChartNoAxesCombined", prompt: "Show reports and summarize delivery, workload, risk, and velocity insights." },
 ];
+const actionIcons = { Boxes, Building2, ChartNoAxesCombined, CircleSlash2, FilePlus2, ListChecks, PanelsTopLeft, Ticket, Timer, UserPlus, UsersRound };
 
 export function aiActivityLabel(activity: AiToolActivity) {
   const path = activity.path.split("?")[0] || "/request";
@@ -420,21 +421,21 @@ export function AiAgentPanel({ open, onClose }: { open: boolean; onClose: () => 
           title="Drag to resize panel (Double-click to reset width)"
         />
         <div className="ai-panel-head">
-          <div className="ai-panel-icon"><Icons.Bot size={20} /></div>
+          <div className="ai-panel-icon"><Bot size={20} /></div>
           <div>
             <b>I-TRACK AI Agent</b>
             <small>{company?.name || "Organization"} · {organization?.name || "Current workspace"}</small>
           </div>
           <div className="ai-panel-actions">
             <button className="icon-btn" onClick={() => setActionsOpen((value) => !value)} title="AI actions" aria-haspopup="menu" aria-expanded={actionsOpen}>
-              <Icons.WandSparkles size={16} />
+              <WandSparkles size={16} />
             </button>
-            <button className="icon-btn" onClick={clearChat} title="Clear chat"><Icons.Trash2 size={16} /></button>
-            <button className="icon-btn" onClick={onClose} title="Close (Ctrl+J)"><Icons.X size={18} /></button>
+            <button className="icon-btn" onClick={clearChat} title="Clear chat"><Trash2 size={16} /></button>
+            <button className="icon-btn" onClick={onClose} title="Close (Ctrl+J)"><X size={18} /></button>
             {actionsOpen && (
               <div className="ai-actions-menu" role="menu">
                 {visibleActions.map((action) => {
-                  const Icon = (Icons as any)[action.icon];
+                  const Icon = actionIcons[action.icon as keyof typeof actionIcons] || Sparkles;
                   return (
                     <button key={action.label} role="menuitem" onClick={() => runAction(action.prompt)}>
                       <Icon size={15} />
@@ -449,7 +450,7 @@ export function AiAgentPanel({ open, onClose }: { open: boolean; onClose: () => 
         <div className="ai-chat-body" ref={bodyRef}>
           {messages.length === 0 && (
             <div className="ai-welcome">
-              <div className="ai-welcome-icon"><Icons.Sparkles size={28} /></div>
+              <div className="ai-welcome-icon"><Sparkles size={28} /></div>
               <h3>Hey{user?.name ? `, ${user.name.split(" ")[0]}` : ""}!</h3>
               <p>I can work across your organization, access groups, workspaces, projects, and tickets. Just ask in natural language.</p>
               <div className="ai-quick-actions">
@@ -462,7 +463,7 @@ export function AiAgentPanel({ open, onClose }: { open: boolean; onClose: () => 
           {messages.map((msg) => (
             <div className={cx("ai-msg", msg.role)} key={msg.id}>
               <div className="ai-msg-avatar">
-                {msg.role === "assistant" ? <Icons.Bot size={16} /> : <Icons.User size={16} />}
+                {msg.role === "assistant" ? <Bot size={16} /> : <User size={16} />}
               </div>
               <div>
                 <div className="ai-msg-bubble">
@@ -470,7 +471,7 @@ export function AiAgentPanel({ open, onClose }: { open: boolean; onClose: () => 
                 </div>
                 {msg.requiresConfirmation && msg.pendingAction && (
                   <div className="ai-confirm-bar">
-                    <p><Icons.ShieldAlert size={14} /> Confirmation Required</p>
+                    <p><ShieldAlert size={14} /> Confirmation Required</p>
                     <span>{msg.pendingAction.description}</span>
                     <div>
                       <button className="btn-confirm" onClick={() => confirmMessage(msg)}>Yes, proceed</button>
@@ -484,15 +485,15 @@ export function AiAgentPanel({ open, onClose }: { open: boolean; onClose: () => 
           {loading && (
             <div className="ai-typing">
               <div className="ai-msg-avatar" style={{ background: "linear-gradient(135deg, var(--purple), var(--blue))", color: "#fff", width: 30, height: 30, borderRadius: 9, display: "flex", alignItems: "center", justifyContent: "center" }}>
-                <Icons.Bot size={16} />
+                <Bot size={16} />
               </div>
               {toolActivities.length ? (
                 <div className="ai-request-activity" aria-live="polite">
                   {toolActivities.map((activity) => (
                     <div className={cx("ai-request-row", activity.status)} key={activity.id}>
                       <span className="ai-request-indicator">
-                        {activity.status === "complete" && <Icons.Check size={13} />}
-                        {activity.status === "error" && <Icons.AlertCircle size={13} />}
+                        {activity.status === "complete" && <Check size={13} />}
+                        {activity.status === "error" && <AlertCircle size={13} />}
                       </span>
                       <span>{aiActivityLabel(activity)}</span>
                       {activity.status === "running" && <span className="ai-request-ellipsis" aria-hidden="true">...</span>}
@@ -513,7 +514,7 @@ export function AiAgentPanel({ open, onClose }: { open: boolean; onClose: () => 
             rows={1}
           />
           <button className="ai-send-btn" disabled={!input.trim() || loading} onClick={() => sendMessage(input)}>
-            <Icons.SendHorizonal size={18} />
+            <SendHorizonal size={18} />
           </button>
         </div>
       </aside>

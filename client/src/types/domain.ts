@@ -7,6 +7,7 @@ export type NotificationPreferences = {
   mentionsAndComments: boolean;
   sprintRiskAlerts: boolean;
   weeklySummary: boolean;
+  slaAlerts: boolean;
 };
 
 export type Ticket = {

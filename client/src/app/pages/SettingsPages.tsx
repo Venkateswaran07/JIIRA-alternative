@@ -14,6 +14,7 @@ const defaultNotificationPreferences: NotificationPreferences = {
   mentionsAndComments: true,
   sprintRiskAlerts: true,
   weeklySummary: false,
+  slaAlerts: true,
 };
 
 const notificationPreferenceOptions: { key: keyof NotificationPreferences; label: string }[] = [

@@ -546,9 +546,7 @@
 
 /* Calendar popup */
 .mini-date-picker-calendar {
-  position: absolute;
-  top: calc(100% + 6px);
-  left: 0;
+  position: fixed;
   z-index: 9999;
   background: var(--surface);
   border: 1px solid var(--border);
@@ -557,6 +555,44 @@
   padding: 16px;
   width: 270px;
   animation: mdp-pop 0.15s cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.skeleton {
+  display: grid;
+  gap: 10px;
+  width: min(520px, 100%);
+}
+
+.skeleton span {
+  display: block;
+  min-height: 14px;
+  border-radius: var(--radius-sm);
+  background: linear-gradient(90deg, var(--surface-subtle) 25%, var(--surface) 50%, var(--surface-subtle) 75%);
+  background-size: 200% 100%;
+  animation: skeleton-shimmer 1.4s ease-in-out infinite;
+}
+
+.skeleton span:first-child { min-height: 24px; width: 60%; }
+.skeleton span:last-child { width: 80%; }
+
+@keyframes skeleton-shimmer {
+  to { background-position: -200% 0; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .skeleton span { animation: none; }
+}
+
+.toast.error { border-color: var(--danger); }
+.toast.warning { border-color: var(--warning); }
+.toast.info { border-color: var(--primary); }
+.toast-action {
+  border: 0;
+  background: transparent;
+  color: var(--primary);
+  font-weight: 700;
+  cursor: pointer;
+  min-height: 44px;
 }
 
 @keyframes mdp-pop {

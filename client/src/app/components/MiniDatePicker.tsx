@@ -1,4 +1,5 @@
-import React, { useEffect, useState, useRef } from "react";
+import React, { useEffect, useLayoutEffect, useState, useRef } from "react";
+import { createPortal } from "react-dom";
 import * as Icons from "lucide-react";
 
 export function MiniDatePicker({
@@ -21,17 +22,65 @@ export function MiniDatePicker({
   const [year, setYear] = useState(today.getFullYear());
   const [month, setMonth] = useState(today.getMonth());
   const containerRef = useRef<HTMLDivElement>(null);
+  const triggerRef = useRef<HTMLButtonElement>(null);
+  const calendarRef = useRef<HTMLDivElement>(null);
+  const [calendarPosition, setCalendarPosition] = useState({ top: 0, left: 0 });
 
   useEffect(() => {
     if (!open) return;
     const handler = (e: MouseEvent) => {
-      if (containerRef.current && !containerRef.current.contains(e.target as Node)) {
+      const target = e.target as Node;
+      if (
+        containerRef.current &&
+        !containerRef.current.contains(target) &&
+        !calendarRef.current?.contains(target)
+      ) {
         setOpen(false);
       }
     };
     document.addEventListener("mousedown", handler);
     return () => document.removeEventListener("mousedown", handler);
   }, [open]);
+
+  useLayoutEffect(() => {
+    if (!open) return;
+
+    const positionCalendar = () => {
+      const trigger = triggerRef.current;
+      const calendar = calendarRef.current;
+      if (!trigger || !calendar) return;
+
+      const triggerRect = trigger.getBoundingClientRect();
+      const calendarRect = calendar.getBoundingClientRect();
+      const gap = 6;
+      const viewportPadding = 12;
+      const roomBelow = window.innerHeight - triggerRect.bottom;
+      const openAbove =
+        roomBelow < calendarRect.height + gap + viewportPadding &&
+        triggerRect.top > roomBelow;
+
+      const top = openAbove
+        ? Math.max(viewportPadding, triggerRect.top - calendarRect.height - gap)
+        : Math.min(
+            triggerRect.bottom + gap,
+            window.innerHeight - calendarRect.height - viewportPadding,
+          );
+      const left = Math.min(
+        Math.max(viewportPadding, triggerRect.left),
+        window.innerWidth - calendarRect.width - viewportPadding,
+      );
+
+      setCalendarPosition({ top, left });
+    };
+
+    positionCalendar();
+    window.addEventListener("resize", positionCalendar);
+    window.addEventListener("scroll", positionCalendar, true);
+    return () => {
+      window.removeEventListener("resize", positionCalendar);
+      window.removeEventListener("scroll", positionCalendar, true);
+    };
+  }, [open, month, year]);
 
   useEffect(() => {
     if (value) {
@@ -77,6 +126,7 @@ export function MiniDatePicker({
 
       {/* Trigger button */}
       <button
+        ref={triggerRef}
         type="button"
         className="mini-date-picker-trigger"
         disabled={disabled}
@@ -103,8 +153,14 @@ export function MiniDatePicker({
       </button>
 
       {/* Calendar dropdown */}
-      {open && (
-        <div className="mini-date-picker-calendar" role="dialog" aria-modal="true" aria-label="Date picker">
+      {open && createPortal(
+        <div
+          ref={calendarRef}
+          className="mini-date-picker-calendar"
+          role="dialog"
+          aria-label="Date picker"
+          style={calendarPosition}
+        >
           {/* Header */}
           <div className="mini-date-picker-header">
             <button
@@ -186,7 +242,8 @@ export function MiniDatePicker({
               </button>
             )}
           </div>
-        </div>
+        </div>,
+        document.body,
       )}
     </div>
   );

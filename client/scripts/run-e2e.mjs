@@ -1,10 +1,6 @@
 import { spawnSync } from "node:child_process";
 
-if (!process.env.E2E_BASE_URL) {
-  console.log("Playwright browser tests skipped: set E2E_BASE_URL to run them.");
-  process.exit(0);
-}
-
-const command = process.platform === "win32" ? "playwright.cmd" : "playwright";
-const result = spawnSync(command, ["test"], { cwd: process.cwd(), env: process.env, stdio: "inherit" });
+const playwrightCli = new URL("../node_modules/@playwright/test/cli.js", import.meta.url);
+const result = spawnSync(process.execPath, [playwrightCli.pathname.replace(/^\/([A-Z]:)/, "$1"), "test"], { cwd: process.cwd(), env: process.env, stdio: "inherit" });
+if (result.error) console.error(result.error.message);
 process.exitCode = result.status ?? 1;

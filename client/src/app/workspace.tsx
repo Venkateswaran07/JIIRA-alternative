@@ -1,491 +1,200 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useMemo } from "react";
+import { useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useLocation, useNavigate } from "react-router-dom";
 import { ApiError, api, clearSession } from "../api";
 import { resourceKinds } from "../constants/resources";
-import type { Ticket } from "../types/domain";
 import { ErrorState, LoadingState } from "./components/ui";
+import { queryFn, queryKeys } from "./query";
 
-let tickets: Ticket[] = [];
-let projects: {
-  key: string;
-  name: string;
-  description: string;
-  progress: number;
-  risk: string;
-  members: number;
-  sprint: string;
-}[] = [];
-let people: {
-  name: string;
-  email: string;
-  role: string;
-  skills: string[];
-  load: number;
-  color: string;
-}[] = [];
-let velocity: { n: string; v: number }[] = [];
-let risk: { n: string; v: number }[] = [];
-const serverData: any = {
-  user: null,
-  company: null,
-  organization: null,
-  dashboard: null,
-  notifications: [],
-  resources: {},
-  labelOptions: [],
-  integrations: [],
-  auditLogs: [],
-  sessions: [],
-  reports: null,
-  sla: null,
-};
-const WorkspaceContext = React.createContext<{
-  user: any;
-  company: any;
-  organization: any;
-  memberships: any[];
-  pendingInvitations: any[];
-  dashboard: any;
-  notifications: any[];
-  reports: any;
-  sla: any;
-  sessions: any[];
-  auditLogs: any[];
-  integrations: any[];
-  resources: Record<string, any[]>;
-  labelOptions: string[];
-  projects: any[];
-  tickets: any[];
-  people: any[];
-  velocity: any[];
-  risk: any[];
-  role: string;
-  loading: boolean;
-  error: string;
+type WorkspaceValue = {
+  user: any; company: any; organization: any; memberships: any[]; pendingInvitations: any[];
+  dashboard: any; notifications: any[]; reports: any; sla: any; sessions: any[];
+  auditLogs: any[]; integrations: any[]; resources: Record<string, any[]>; labelOptions: string[];
+  projects: any[]; tickets: any[]; people: any[]; velocity: any[]; risk: any[];
+  role: string; loading: boolean; error: string;
   refetch: () => Promise<void>;
-  updateData: (updater: (prev: any) => any) => void;
-  mutate: (
-    apiCall: () => Promise<any>,
-    optimisticUpdate?: (prev: any) => any,
-    rollback?: () => void,
-  ) => Promise<any>;
-  toast: (s: string) => void;
-} | null>(null);
+  updateData: (updater: (previous: any) => any) => void;
+  mutate: (apiCall: () => Promise<any>, optimisticUpdate?: (previous: any) => any, rollback?: () => void) => Promise<any>;
+  toast: (message: string) => void;
+};
+
+const WorkspaceContext = React.createContext<WorkspaceValue | null>(null);
 
 export function useWorkspace() {
   const context = React.useContext(WorkspaceContext);
-  if (!context)
-    throw new Error("useWorkspace must be used within a WorkspaceProvider");
+  if (!context) throw new Error("useWorkspace must be used within a WorkspaceProvider");
   return context;
 }
 
-export function ApiGate({
-  children,
-  toast,
-}: {
-  children: React.ReactNode;
-  toast: (s: string) => void;
-}) {
-  const location = useLocation();
-  const navigate = useNavigate();
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState("");
-  const [workspace, setWorkspace] = useState<any>({
-    user: null,
-    company: null,
-    organization: null,
-    memberships: [],
-    pendingInvitations: [],
-    dashboard: null,
-    notifications: [],
-    reports: null,
-    sla: null,
-    sessions: [],
-    auditLogs: [],
-    integrations: [],
-    resources: {},
-    labelOptions: [],
-    projects: [],
-    tickets: [],
-    people: [],
-    velocity: [],
-    risk: [],
-  });
+const emptyDashboard = { summary: {}, projects: [], sprints: [], cycles: [], tickets: [], users: [] };
 
-  const publicPath = (location.pathname === "/" && window.location.pathname === "/") || [
-    "/login",
-    "/auth/google/callback",
-    "/register",
-    "/forgot-password",
-    "/reset-password",
-    "/accept-invite",
-  ].includes(location.pathname);
-
-  const loadData = async () => {
-    try {
-      const me = await api<any>("/auth/me");
-      if (!me.organization || location.pathname.startsWith("/onboarding") || String(me.next || "").startsWith("/onboarding")) {
-        setWorkspace((previous: any) => ({ ...previous, user: me.user, company: me.company, organization: me.organization, memberships: me.memberships || [], pendingInvitations: me.pendingInvitations || [] }));
-        setLoading(false);
-        if (!location.pathname.startsWith("/onboarding")) navigate(me.pendingInvitations?.length && !me.organization ? "/onboarding/workspace" : (me.next || "/onboarding/workspace"), { replace: true });
-        return;
-      }
-      const slug = String(me.organization.slug || "");
-      const currentPrefix = window.location.pathname.split("/").filter(Boolean)[0] || "";
-      localStorage.setItem("itrack_workspace_slug", slug);
-      if (slug && currentPrefix !== slug) {
-        const target = `/${slug}${location.pathname === "/" ? "/dashboard" : location.pathname}${window.location.search}${window.location.hash}`;
-        window.location.replace(target);
-        return;
-      }
-      const isReports = location.pathname.startsWith("/reports");
-      const isSla = location.pathname.startsWith("/sla");
-      const isSessions = location.pathname.startsWith("/sessions") || location.pathname.startsWith("/settings");
-      const isAuditLogs = location.pathname.startsWith("/audit-logs");
-      const isIntegrations = location.pathname.startsWith("/integrations");
-      const isResources = location.pathname.startsWith("/resources") || location.pathname.startsWith("/organization");
-
-      const dashboardPromise = api<any>("/dashboard");
-      const notificationsPromise = api<any>("/notifications").catch(() => ({ notifications: [] }));
-      const labelResourcesPromise = api<any>("/resources/label").catch(() => ({ resources: [] }));
-
-      const reportsPromise = isReports
-        ? api<any>("/reports").catch(() => null)
-        : Promise.resolve(null);
-
-      const slaPromise = isSla
-        ? api<any>("/sla").catch(() => null)
-        : Promise.resolve(null);
-
-      const sessionsPromise = isSessions
-        ? api<any>("/auth/sessions").catch(() => ({ sessions: [] }))
-        : Promise.resolve({ sessions: [] });
-
-      const auditLogsPromise = isAuditLogs
-        ? api<any>("/audit-logs").catch(() => ({ events: [] }))
-        : Promise.resolve({ events: [] });
-
-      const apiTokensPromise = isIntegrations
-        ? api<any>("/integrations/api-token").catch(() => ({ integrations: [] }))
-        : Promise.resolve({ integrations: [] });
-
-      const webhooksPromise = isIntegrations
-        ? api<any>("/integrations/webhook").catch(() => ({ integrations: [] }))
-        : Promise.resolve({ integrations: [] });
-
-      const [
-        dashboardResponse,
-        notificationsData,
-        labelResourcesData,
-        reportsData,
-        slaData,
-        sessionsData,
-        auditLogsData,
-        apiTokens,
-        webhooks,
-      ] = await Promise.all([
-        dashboardPromise,
-        notificationsPromise,
-        labelResourcesPromise,
-        reportsPromise,
-        slaPromise,
-        sessionsPromise,
-        auditLogsPromise,
-        apiTokensPromise,
-        webhooksPromise,
-      ]);
-
-      // Treat an empty response as an empty dashboard so one failed or
-      // partially deployed endpoint cannot crash every authenticated page.
-      const dashboard = dashboardResponse && typeof dashboardResponse === "object"
-        ? dashboardResponse
-        : { summary: {}, projects: [], sprints: [], cycles: [], tickets: [], users: [] };
-
-      let resourcesObj = {
-        ...(serverData.resources || {}),
-        label: labelResourcesData.resources || serverData.resources?.label || [],
-      };
-      if (isResources) {
-        const resourcePairs = await Promise.all(
-          resourceKinds.map(async (kind) => [
-            kind,
-            (
-              await api<any>(`/resources/${kind}`).catch(() => ({
-                resources: [],
-              }))
-            ).resources,
-          ]),
-        );
-        resourcesObj = Object.fromEntries(resourcePairs);
-      }
-
-      const labelOptions = Array.from(
-        new Set<string>(
-          [
-            ...(resourcesObj.label || []).map((resource: any) =>
-              String(resource.name || resource.key || "").trim(),
-            ),
-            ...(dashboard.tickets || []).flatMap((ticket: any) =>
-              Array.isArray(ticket.labels) ? ticket.labels : [],
-            ),
-          ]
-            .map((label) => String(label).trim())
-            .filter(Boolean),
-        ),
-      ).sort((a, b) => a.localeCompare(b));
-
-      const parsedPeople = (dashboard.users || []).map((u: any) => ({
-        name: u.name,
-        email: u.email,
-        role: u.role,
-        skills: u.skills || [],
-        load: u.capacity,
-        color: u.avatarColor || "#A47BEF",
-      }));
-
-      const parsedProjects = (dashboard.projects || []).map((p: any) => ({
-        id: p._id || p.id,
-        key: p.key,
-        name: p.name,
-        description: p.description,
-        progress: p.progress,
-        status: p.status,
-        risk: p.riskLevel,
-        members: p.members?.length || 0,
-        sprint: p.activeSprint,
-      }));
-
-      const parsedTickets = (dashboard.tickets || []).map((t: any) => ({
-        id: t._id,
-        key: t.ticketId,
-        title: t.title,
-        status: t.status,
-        priority: t.priority,
-        points: t.storyPoints,
-        assignee: t.assignee?.name || "Unassigned",
-        assigneeId: String(t.assignee?._id || t.assignee || ""),
-        project: t.project?.name || "",
-        labels: t.labels || [],
-        blocked: t.blocked,
-        rank: t.rank ?? 0,
-        watched: (t.watchers || []).some(
-          (w: any) => String(w._id || w) === String(me.user.id),
-        ),
-        slaStatus: t.slaStatus,
-        firstResponseDueAt: t.firstResponseDueAt,
-        resolutionDueAt: t.resolutionDueAt,
-        firstRespondedAt: t.firstRespondedAt,
-        resolvedAt: t.resolvedAt,
-        sprintId:
-          t.sprint?._id || (typeof t.sprint === "string" ? t.sprint : ""),
-        sprintName: t.sprint?.name || "",
-      }));
-
-      const activeSprint =
-        (dashboard.sprints || []).find((s: any) => s.status === "active") ||
-        dashboard.sprints?.[0];
-
-      const parsedVelocity = (activeSprint?.velocityHistory || []).map(
-        (v: number, i: number) => ({ n: `S${i + 1}`, v }),
-      );
-
-      let parsedRisk = (dashboard.sprints || [])
-        .slice(-5)
-        .map((s: any) => ({ n: s.name, v: s.riskScore }));
-      if (!parsedRisk.length) parsedRisk = [{ n: "Current", v: 0 }];
-
-      const stateVal = {
-        user: me.user,
-        company: me.company,
-        organization: me.organization,
-        memberships: me.memberships || [],
-        pendingInvitations: me.pendingInvitations || [],
-        dashboard,
-        notifications: notificationsData.notifications || [],
-        reports: isReports ? reportsData?.reports : serverData.reports,
-        sla: isSla ? slaData : serverData.sla,
-        sessions: isSessions ? sessionsData.sessions || [] : serverData.sessions || [],
-        auditLogs: isAuditLogs ? auditLogsData.events || [] : serverData.auditLogs || [],
-        integrations: isIntegrations
-          ? [
-              ...(apiTokens.integrations || []),
-              ...(webhooks.integrations || []),
-            ]
-          : serverData.integrations || [],
-        resources: resourcesObj,
-        labelOptions,
-        projects: parsedProjects,
-        tickets: parsedTickets,
-        people: parsedPeople,
-        velocity: parsedVelocity,
-        risk: parsedRisk,
-      };
-
-      setWorkspace(stateVal);
-      // Synchronize globals as well for non-react components
-      tickets = parsedTickets;
-      projects = parsedProjects;
-      people = parsedPeople;
-      velocity = parsedVelocity;
-      risk = parsedRisk;
-      Object.assign(serverData, {
-        user: me.user,
-        company: me.company,
-        organization: me.organization,
-        dashboard,
-        notifications: notificationsData.notifications || [],
-        reports: isReports ? reportsData?.reports : serverData.reports,
-        sla: isSla ? slaData : serverData.sla,
-        sessions: isSessions ? sessionsData.sessions || [] : serverData.sessions || [],
-        auditLogs: isAuditLogs ? auditLogsData.events || [] : serverData.auditLogs || [],
-        integrations: isIntegrations
-          ? [
-              ...(apiTokens.integrations || []),
-              ...(webhooks.integrations || []),
-            ]
-          : serverData.integrations || [],
-        resources: resourcesObj,
-        labelOptions,
-      });
-
-      setLoading(false);
-    } catch (e) {
-      if ((e instanceof ApiError && e.status === 401) || (e instanceof Error && e.message.includes("401"))) {
-        clearSession();
-        window.location.replace("/login");
-      } else {
-        setError(e instanceof Error ? e.message : "Unable to load workspace");
-        setLoading(false);
-      }
-    }
-  };
-
-  useEffect(() => {
-    if (publicPath) {
-      setLoading(false);
-      return;
-    }
-    loadData();
-  }, [location.pathname, publicPath, navigate]);
-
-  const mutate = async (
-    apiCall: () => Promise<any>,
-    optimisticUpdate?: (prev: any) => any,
-    rollback?: () => void,
-  ) => {
-    const previousState = { ...workspace };
-    if (optimisticUpdate) {
-      setWorkspace((prev: any) => {
-        const next = optimisticUpdate(prev);
-        // Sync globals too
-        tickets = next.tickets;
-        projects = next.projects;
-        people = next.people;
-        velocity = next.velocity;
-        risk = next.risk;
-        Object.assign(serverData, {
-          user: next.user,
-          company: next.company,
-          organization: next.organization,
-          dashboard: next.dashboard,
-          notifications: next.notifications,
-          reports: next.reports,
-          sla: next.sla,
-          sessions: next.sessions,
-          auditLogs: next.auditLogs,
-          integrations: next.integrations,
-        resources: next.resources,
-        labelOptions: next.labelOptions,
-        });
-        return next;
-      });
-    }
-    try {
-      const result = await apiCall();
-      await loadData();
-      return result;
-    } catch (err) {
-      if (rollback) {
-        rollback();
-      } else {
-        setWorkspace(previousState);
-        tickets = previousState.tickets;
-        projects = previousState.projects;
-        people = previousState.people;
-        velocity = previousState.velocity;
-        risk = previousState.risk;
-        Object.assign(serverData, previousState);
-      }
-      throw err;
-    }
-  };
-
-  const updateData = (updater: (prev: any) => any) => {
-    setWorkspace((prev: any) => {
-      const next = updater(prev);
-      tickets = next.tickets;
-      projects = next.projects;
-      people = next.people;
-      velocity = next.velocity;
-      risk = next.risk;
-      Object.assign(serverData, {
-        user: next.user,
-        company: next.company,
-        organization: next.organization,
-        dashboard: next.dashboard,
-        notifications: next.notifications,
-        reports: next.reports,
-        sla: next.sla,
-        sessions: next.sessions,
-        auditLogs: next.auditLogs,
-        integrations: next.integrations,
-          resources: next.resources,
-          labelOptions: next.labelOptions,
-      });
-      return next;
-    });
-  };
-
-  const val = {
-    ...workspace,
-    role: workspace.user?.role || "admin",
-    loading,
-    error,
-    refetch: loadData,
-    updateData,
-    mutate,
-    toast,
-  };
-
-  if (loading) {
-    return <LoadingState label="Loading workspace…" />;
-  }
-
-  if (error) {
-    return (
-      <ErrorState
-        title="Couldn’t load workspace"
-        body={error}
-        action={
-          <button
-            className="btn primary"
-            onClick={() => {
-              setError("");
-              setLoading(true);
-              void loadData();
-            }}
-          >
-            Try again
-          </button>
-        }
-      />
-    );
-  }
-
-  return (
-    <WorkspaceContext.Provider value={val}>
-      {children}
-    </WorkspaceContext.Provider>
-  );
+function parseDashboard(dashboard: any, userId: string) {
+  const people = (dashboard.users || []).map((user: any) => ({
+    name: user.name, email: user.email, role: user.role, skills: user.skills || [],
+    load: user.capacity, color: user.avatarColor || "#A47BEF",
+  }));
+  const projects = (dashboard.projects || []).map((project: any) => ({
+    id: project._id || project.id, key: project.key, name: project.name,
+    description: project.description, progress: project.progress, status: project.status,
+    risk: project.riskLevel, members: project.members?.length || 0, sprint: project.activeSprint,
+  }));
+  const tickets = (dashboard.tickets || []).map((ticket: any) => ({
+    id: ticket._id, key: ticket.ticketId, title: ticket.title, status: ticket.status,
+    priority: ticket.priority, points: ticket.storyPoints, assignee: ticket.assignee?.name || "Unassigned",
+    assigneeId: String(ticket.assignee?._id || ticket.assignee || ""), project: ticket.project?.name || "",
+    labels: ticket.labels || [], blocked: ticket.blocked, rank: ticket.rank ?? 0,
+    watched: (ticket.watchers || []).some((watcher: any) => String(watcher._id || watcher) === userId),
+    slaStatus: ticket.slaStatus, firstResponseDueAt: ticket.firstResponseDueAt,
+    resolutionDueAt: ticket.resolutionDueAt, firstRespondedAt: ticket.firstRespondedAt,
+    resolvedAt: ticket.resolvedAt, sprintId: ticket.sprint?._id || (typeof ticket.sprint === "string" ? ticket.sprint : ""),
+    sprintName: ticket.sprint?.name || "",
+  }));
+  const activeSprint = (dashboard.sprints || []).find((sprint: any) => sprint.status === "active") || dashboard.sprints?.[0];
+  const velocity = (activeSprint?.velocityHistory || []).map((value: number, index: number) => ({ n: `S${index + 1}`, v: value }));
+  const risk = (dashboard.sprints || []).slice(-5).map((sprint: any) => ({ n: sprint.name, v: sprint.riskScore }));
+  return { people, projects, tickets, velocity, risk: risk.length ? risk : [{ n: "Current", v: 0 }] };
 }
 
+export function ApiGate({ children, toast }: { children: React.ReactNode; toast: (message: string) => void }) {
+  const location = useLocation();
+  const navigate = useNavigate();
+  const queryClient = useQueryClient();
+  const publicPath = (location.pathname === "/" && window.location.pathname === "/") || [
+    "/login", "/auth/google/callback", "/register", "/forgot-password", "/reset-password", "/accept-invite",
+  ].includes(location.pathname);
+
+  const session = useQuery({
+    queryKey: queryKeys.session,
+    queryFn: queryFn<any>("/auth/me"),
+    enabled: !publicPath,
+  });
+  const me = session.data;
+  const hasWorkspace = Boolean(me?.organization);
+  const dashboardQuery = useQuery({
+    queryKey: queryKeys.dashboard(me?.organization?.id),
+    queryFn: queryFn<any>("/dashboard"),
+    enabled: !publicPath && hasWorkspace,
+  });
+  const notificationsQuery = useQuery({
+    queryKey: queryKeys.notifications,
+    queryFn: queryFn<any>("/notifications"),
+    enabled: !publicPath && hasWorkspace,
+  });
+  const labelQuery = useQuery({
+    queryKey: queryKeys.resources("label"),
+    queryFn: queryFn<any>("/resources/label"),
+    enabled: !publicPath && hasWorkspace,
+  });
+
+  const routeQueries = useQueries({
+    queries: [
+      { queryKey: queryKeys.reports, queryFn: queryFn<any>("/reports"), enabled: hasWorkspace && location.pathname.startsWith("/reports") },
+      { queryKey: queryKeys.sla, queryFn: queryFn<any>("/sla"), enabled: hasWorkspace && location.pathname.startsWith("/sla") },
+      { queryKey: queryKeys.sessions, queryFn: queryFn<any>("/auth/sessions"), enabled: hasWorkspace && (location.pathname.startsWith("/sessions") || location.pathname.startsWith("/settings")) },
+      { queryKey: queryKeys.auditLogs, queryFn: queryFn<any>("/audit-logs"), enabled: hasWorkspace && location.pathname.startsWith("/audit-logs") },
+      { queryKey: queryKeys.integrations("api-token"), queryFn: queryFn<any>("/integrations/api-token"), enabled: hasWorkspace && location.pathname.startsWith("/integrations") },
+      { queryKey: queryKeys.integrations("webhook"), queryFn: queryFn<any>("/integrations/webhook"), enabled: hasWorkspace && location.pathname.startsWith("/integrations") },
+      ...resourceKinds.filter((kind) => kind !== "label").map((kind) => ({
+        queryKey: queryKeys.resources(kind),
+        queryFn: queryFn<any>(`/resources/${kind}`),
+        enabled: hasWorkspace && (location.pathname.startsWith("/resources") || location.pathname.startsWith("/organization")),
+      })),
+    ],
+  });
+
+  useEffect(() => {
+    if (!me) return;
+    if (!me.organization || location.pathname.startsWith("/onboarding") || String(me.next || "").startsWith("/onboarding")) {
+      if (!location.pathname.startsWith("/onboarding")) navigate(me.pendingInvitations?.length && !me.organization ? "/onboarding/workspace" : (me.next || "/onboarding/workspace"), { replace: true });
+      return;
+    }
+    const slug = String(me.organization.slug || "");
+    const prefix = window.location.pathname.split("/").filter(Boolean)[0] || "";
+    localStorage.setItem("itrack_workspace_slug", slug);
+    if (slug && prefix !== slug) window.location.replace(`/${slug}${location.pathname === "/" ? "/dashboard" : location.pathname}${window.location.search}${window.location.hash}`);
+  }, [location.pathname, me, navigate]);
+
+  useEffect(() => {
+    if (session.error instanceof ApiError && session.error.status === 401) {
+      clearSession();
+      window.location.replace("/login");
+    }
+  }, [session.error]);
+
+  const value = useMemo<WorkspaceValue>(() => {
+    const dashboard = dashboardQuery.data && typeof dashboardQuery.data === "object" ? dashboardQuery.data : emptyDashboard;
+    const parsed = parseDashboard(dashboard, String(me?.user?.id || ""));
+    const resources = Object.fromEntries(resourceKinds.map((kind, index) => [
+      kind,
+      kind === "label" ? labelQuery.data?.resources || [] : routeQueries[6 + resourceKinds.filter((item) => item !== "label").indexOf(kind)]?.data?.resources || [],
+    ]));
+    const labelOptions = Array.from(new Set<string>([
+      ...(resources.label || []).map((resource: any) => String(resource.name || resource.key || "").trim()),
+      ...(dashboard.tickets || []).flatMap((ticket: any) => Array.isArray(ticket.labels) ? ticket.labels : []),
+    ].filter(Boolean))).sort((left, right) => left.localeCompare(right));
+
+    const updateData = (updater: (previous: any) => any) => {
+      queryClient.setQueryData(queryKeys.dashboard(me?.organization?.id), (previous: any) => {
+        const parsedPrevious = parseDashboard(previous || emptyDashboard, String(me?.user?.id || ""));
+        const next = updater({ ...parsedPrevious, dashboard: previous || emptyDashboard });
+        if (next.dashboard !== previous) return next.dashboard;
+        const nextTickets = Array.isArray(next.tickets) ? next.tickets : parsedPrevious.tickets;
+        const nextProjects = Array.isArray(next.projects) ? next.projects : parsedPrevious.projects;
+        return {
+          ...(previous || emptyDashboard),
+          tickets: (previous?.tickets || []).map((ticket: any) => {
+            const update = nextTickets.find((item: any) => String(item.id) === String(ticket._id));
+            return update ? { ...ticket, status: update.status, priority: update.priority, rank: update.rank, blocked: update.blocked, labels: update.labels } : ticket;
+          }),
+          projects: (previous?.projects || []).map((project: any) => {
+            const update = nextProjects.find((item: any) => String(item.id) === String(project._id));
+            return update ? { ...project, status: update.status, progress: update.progress, riskLevel: update.risk } : project;
+          }),
+        };
+      });
+    };
+    const mutate = async (apiCall: () => Promise<any>, optimisticUpdate?: (previous: any) => any, rollback?: () => void) => {
+      const key = queryKeys.dashboard(me?.organization?.id);
+      const snapshot = queryClient.getQueryData(key);
+      if (optimisticUpdate) updateData(optimisticUpdate);
+      try {
+        const result = await apiCall();
+        if (result?.ticket) {
+          queryClient.setQueryData(key, (previous: any) => ({
+            ...(previous || emptyDashboard),
+            tickets: (previous?.tickets || []).map((ticket: any) => String(ticket._id) === String(result.ticket._id) ? result.ticket : ticket),
+          }));
+          queryClient.setQueryData(queryKeys.ticket(String(result.ticket._id)), result);
+        } else if (result?.project) {
+          queryClient.setQueryData(key, (previous: any) => ({
+            ...(previous || emptyDashboard),
+            projects: (previous?.projects || []).map((project: any) => String(project._id) === String(result.project._id) ? result.project : project),
+          }));
+        }
+        return result;
+      } catch (error) {
+        queryClient.setQueryData(key, snapshot);
+        rollback?.();
+        throw error;
+      }
+    };
+    return {
+      user: me?.user, company: me?.company, organization: me?.organization,
+      memberships: me?.memberships || [], pendingInvitations: me?.pendingInvitations || [],
+      dashboard, notifications: notificationsQuery.data?.notifications || [],
+      reports: routeQueries[0].data?.reports || null, sla: routeQueries[1].data || null,
+      sessions: routeQueries[2].data?.sessions || [], auditLogs: routeQueries[3].data?.events || [],
+      integrations: [...(routeQueries[4].data?.integrations || []), ...(routeQueries[5].data?.integrations || [])],
+      resources, labelOptions, ...parsed, role: me?.user?.role || "admin",
+      loading: false, error: "",
+      refetch: async () => { await queryClient.invalidateQueries({ queryKey: ["dashboard"] }); },
+      updateData, mutate, toast,
+    };
+  }, [dashboardQuery.data, labelQuery.data, me, notificationsQuery.data, queryClient, routeQueries, toast]);
+
+  if (publicPath) return <WorkspaceContext.Provider value={value}>{children}</WorkspaceContext.Provider>;
+  if (session.isPending || (hasWorkspace && dashboardQuery.isPending)) return <LoadingState label="Loading workspace…" />;
+  const error = session.error || dashboardQuery.error;
+  if (error) return <ErrorState title="Couldn’t load workspace" body={error instanceof Error ? error.message : "Unable to load workspace"} action={<button className="btn primary" onClick={() => void queryClient.invalidateQueries()}>Try again</button>} />;
+  return <WorkspaceContext.Provider value={value}>{children}</WorkspaceContext.Provider>;
+}

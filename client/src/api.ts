@@ -1,6 +1,10 @@
 const API_BASE = (import.meta.env.VITE_API_BASE_URL || "/api/v1").replace(/\/+$/, "");
 
 let refreshPromise: Promise<boolean> | null = null;
+const DEFAULT_TIMEOUT_MS = 15_000;
+const RETRYABLE_STATUS = new Set([502, 503, 504]);
+
+export type ApiRequestOptions = RequestInit & { timeoutMs?: number };
 
 export class ApiError extends Error {
   constructor(
@@ -56,15 +60,29 @@ async function refreshSession() {
   return refreshPromise;
 }
 
-export async function apiFetch(path: string, options: RequestInit = {}) {
+function requestSignal(signal: AbortSignal | null | undefined, timeoutMs: number) {
+  const timeoutSignal = AbortSignal.timeout(timeoutMs);
+  return signal ? AbortSignal.any([signal, timeoutSignal]) : timeoutSignal;
+}
+
+export async function apiFetch(path: string, options: ApiRequestOptions = {}) {
   const canRefresh = !isPublicAuthPath(path);
+  const { timeoutMs = DEFAULT_TIMEOUT_MS, ...fetchOptions } = options;
   const request = () => {
-    const headers = new Headers(options.headers);
-    if (options.body && !headers.has("Content-Type")) headers.set("Content-Type", "application/json");
-    return fetch(`${API_BASE}${path}`, { ...options, headers, credentials: "include" });
+    const headers = new Headers(fetchOptions.headers);
+    if (fetchOptions.body && !headers.has("Content-Type")) headers.set("Content-Type", "application/json");
+    return fetch(`${API_BASE}${path}`, {
+      ...fetchOptions,
+      headers,
+      credentials: "include",
+      signal: requestSignal(fetchOptions.signal, timeoutMs),
+    });
   };
 
   let response = await request();
+  if ((!fetchOptions.method || fetchOptions.method === "GET") && RETRYABLE_STATUS.has(response.status)) {
+    response = await request();
+  }
   if (response.status === 401 && canRefresh && await refreshSession()) {
     response = await request();
   }
@@ -77,7 +95,7 @@ export async function apiFetch(path: string, options: RequestInit = {}) {
   return response;
 }
 
-export async function api<T>(path: string, options: RequestInit = {}): Promise<T> {
+export async function api<T>(path: string, options: ApiRequestOptions = {}): Promise<T> {
   const response = await apiFetch(path, options);
   if (!response.ok) {
     const body = await response.json().catch(() => ({}));

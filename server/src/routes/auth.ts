@@ -17,7 +17,15 @@ router.use(authRateLimit);
 const credentials = z.object({ email: z.string().email(), password: z.string().min(8) });
 const registerSchema = credentials.extend({ name: z.string().min(2) });
 const otpSchema = z.object({ email: z.string().email(), otp: z.string().regex(/^\d{6}$/), purpose: z.enum(["registration", "login"]) });
-const notificationPreferencesSchema = z.object({ ticketAssignments: z.boolean(), mentionsAndComments: z.boolean(), sprintRiskAlerts: z.boolean(), weeklySummary: z.boolean() });
+const notificationPreferencesSchema = z.object({ ticketAssignments: z.boolean(), mentionsAndComments: z.boolean(), sprintRiskAlerts: z.boolean(), weeklySummary: z.boolean(), slaAlerts: z.boolean() });
+const uiPreferencesSchema = z.object({
+  theme: z.enum(["light", "dark", "system"]),
+  density: z.enum(["comfortable", "compact"]),
+  favoriteProjects: z.array(z.string()).max(100),
+  pinnedResources: z.array(z.string()).max(100),
+  dashboardWidgets: z.array(z.object({ id: z.string().min(1).max(80), visible: z.boolean() })).max(50),
+  recentEntities: z.array(z.object({ type: z.string().max(40), id: z.string().max(100), label: z.string().max(200), href: z.string().startsWith("/") })).max(20),
+});
 const googleProfileSchema = z.object({
   sub: z.string(),
   email: z.string().email(),
@@ -227,6 +235,12 @@ router.post("/forgot-password", async (req, res) => {
 router.post("/reset-password", async (req, res) => { const parsed = z.object({ token: z.string().min(20), password: z.string().min(8) }).safeParse(req.body); if (!parsed.success) return res.status(400).json({ message: "Token and a valid password are required" }); const action = await ActionToken.findOne({ tokenHash: hashToken(parsed.data.token), kind: "password-reset", usedAt: { $exists: false }, expiresAt: { $gt: new Date() } }); if (!action) return res.status(400).json({ message: "Invalid or expired reset token" }); await User.updateOne({ _id: action.user }, { passwordHash: await bcrypt.hash(parsed.data.password, 10) }); action.usedAt = new Date(); await action.save(); await Session.updateMany({ user: action.user, revokedAt: { $exists: false } }, { revokedAt: new Date() }); return res.json({ ok: true }); });
 router.post("/change-password", requireAuth, async (req: AuthRequest, res) => { const parsed = z.object({ currentPassword: z.string(), newPassword: z.string().min(8) }).safeParse(req.body); if (!parsed.success) return res.status(400).json({ message: "Current and new passwords are required" }); const user = await User.findById(req.user!.userId); if (!user || !(await bcrypt.compare(parsed.data.currentPassword, user.passwordHash))) return res.status(401).json({ message: "Current password is incorrect" }); user.passwordHash = await bcrypt.hash(parsed.data.newPassword, 10); await user.save(); await Session.updateMany({ user: user._id, revokedAt: { $exists: false } }, { revokedAt: new Date() }); return res.json({ ok: true }); });
 router.patch("/preferences", requireAuth, async (req: AuthRequest, res) => { const parsed = z.object({ notificationPreferences: notificationPreferencesSchema }).safeParse(req.body); if (!parsed.success) return res.status(400).json({ message: "Notification preferences are invalid" }); const user = await User.findByIdAndUpdate(req.user!.userId, { notificationPreferences: parsed.data.notificationPreferences }, { new: true }); return user ? res.json({ user: publicUser(user) }) : res.status(404).json({ message: "User not found" }); });
+router.patch("/ui-preferences", requireAuth, async (req: AuthRequest, res) => {
+  const parsed = uiPreferencesSchema.safeParse(req.body);
+  if (!parsed.success) return res.status(400).json({ message: "UI preferences are invalid" });
+  const user = await User.findByIdAndUpdate(req.user!.userId, { uiPreferences: parsed.data }, { new: true });
+  return user ? res.json({ user: publicUser(user) }) : res.status(404).json({ message: "User not found" });
+});
 router.get("/sessions", requireAuth, async (req: AuthRequest, res) => res.json({ sessions: await Session.find({ user: req.user!.userId, revokedAt: { $exists: false } }).select("-tokenHash") }));
 router.delete("/sessions/:id", requireAuth, async (req: AuthRequest, res) => { const result = await Session.updateOne({ _id: req.params.id, user: req.user!.userId }, { revokedAt: new Date() }); return result.matchedCount ? res.status(204).send() : res.status(404).json({ message: "Session not found" }); });
 

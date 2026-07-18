@@ -3,6 +3,34 @@ import { NavLink, useSearchParams } from "react-router-dom";
 import * as Icons from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 
+export function Button({ className = "", tone = "default", busy = false, children, disabled, ...props }: React.ButtonHTMLAttributes<HTMLButtonElement> & { tone?: "default" | "primary" | "danger"; busy?: boolean }) {
+  return <button className={`btn ${tone === "default" ? "" : tone} ${className}`.trim()} disabled={disabled || busy} aria-busy={busy || undefined} {...props}>{busy ? "Working…" : children}</button>;
+}
+
+export function IconButton({ label, className = "", onClick, ...props }: React.ButtonHTMLAttributes<HTMLButtonElement> & { label: string }) {
+  return <button type="button" className={`icon-btn ${className}`.trim()} aria-label={label} title={label} onClick={onClick} {...props} />;
+}
+
+export function FormField({ label, error, helper, children }: { label: string; error?: string; helper?: string; children: React.ReactNode }) {
+  const id = React.useId();
+  return <label className="form-field"><span>{label}</span>{React.isValidElement(children) ? React.cloneElement(children as React.ReactElement<any>, { "aria-describedby": error || helper ? id : undefined, "aria-invalid": Boolean(error) || undefined }) : children}{(error || helper) && <small id={id} className={error ? "field-error" : "field-helper"}>{error || helper}</small>}</label>;
+}
+
+export const Input = React.forwardRef<HTMLInputElement, React.InputHTMLAttributes<HTMLInputElement>>(function Input(props, ref) {
+  return <input ref={ref} {...props} />;
+});
+export const Textarea = React.forwardRef<HTMLTextAreaElement, React.TextareaHTMLAttributes<HTMLTextAreaElement>>(function Textarea(props, ref) {
+  return <textarea ref={ref} {...props} />;
+});
+
+export function Card({ as: Element = "section", className = "", ...props }: React.HTMLAttributes<HTMLElement> & { as?: "section" | "article" | "div" }) {
+  return <Element className={`card ${className}`.trim()} {...props} />;
+}
+
+export function Skeleton({ className = "", lines = 1 }: { className?: string; lines?: number }) {
+  return <div className={`skeleton ${className}`.trim()} aria-hidden="true">{Array.from({ length: lines }, (_, index) => <span key={index} />)}</div>;
+}
+
 export function PageHead({
   eyebrow,
   title,
@@ -194,7 +222,7 @@ export function ViewToggle({
 export function LoadingState({ label = "Loading…" }: { label?: string }) {
   return (
     <div className="state-panel loading-state" role="status" aria-live="polite">
-      <span className="loading-spinner" aria-hidden="true" />
+      <Skeleton lines={3} />
       <b>{label}</b>
     </div>
   );

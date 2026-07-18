@@ -40,6 +40,7 @@ function registerLegacyRoutes(app: express.Express) {
 export function registerRoutes(app: express.Express) {
   app.get("/api/health", (_req, res) => res.json({ ok: true, service: "itrack-api" }));
   app.use("/internal/outbox", internalRoutes);
+  app.use("/internal", internalRoutes);
   registerVersionedRoutes(app);
   registerLegacyRoutes(app);
 }

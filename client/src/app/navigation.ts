@@ -9,6 +9,7 @@ import {
   Columns3,
   FolderKanban,
   GitBranch,
+  GitFork,
   KeyRound,
   LayoutDashboard,
   ListFilter,
@@ -45,6 +46,7 @@ export const nav: NavGroup[] = [
     items: [
       ["/backlog", ListTodo, "Backlog"],
       ["/projects", FolderKanban, "Projects"],
+      ["/work-model", GitFork, "Work model"],
       ["/resources/epic", Map, "Epic"],
     ],
   },

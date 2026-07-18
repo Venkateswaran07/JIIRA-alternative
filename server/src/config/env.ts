@@ -33,6 +33,7 @@ export const env = {
   supabaseServiceRoleKey: process.env.SUPABASE_SERVICE_ROLE_KEY,
   attachmentBucket: process.env.ATTACHMENT_BUCKET ?? "ticket-attachments",
   outboxWorkerSecret: process.env.OUTBOX_WORKER_SECRET,
+  slaEmailEnabled: /^(1|true|yes)$/i.test(process.env.SLA_EMAIL_ENABLED ?? ""),
   s3Endpoint: process.env.S3_ENDPOINT,
   s3Region: process.env.S3_REGION ?? "auto",
   s3Bucket: process.env.S3_BUCKET,

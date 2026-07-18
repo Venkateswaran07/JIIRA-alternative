@@ -1,0 +1,19 @@
+<!doctype html>
+<html lang="en">
+  <head><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>SLA alert</title></head>
+  <body style="margin:0;background:#f5f5f5;color:#1a1a1a;font-family:Inter,system-ui,-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif">
+    <table role="presentation" width="100%" cellspacing="0" cellpadding="0">
+      <tr><td align="center" style="padding:32px 16px">
+        <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="max-width:600px;background:#fff;border:1px solid #ddd;border-radius:12px">
+          <tr><td style="padding:32px">
+            <p>Hi {{name}},</p>
+            <h1 style="font-size:22px;margin:16px 0">{{ticketKey}} SLA {{stateLabel}}</h1>
+            <p style="line-height:1.6">{{ticketTitle}}</p>
+            <p><strong>Deadline:</strong> {{deadline}}</p>
+            <p style="margin-top:28px"><a href="{{ticketUrl}}" style="background:#0052cc;color:#fff;text-decoration:none;padding:12px 18px;border-radius:6px;display:inline-block">Open ticket</a></p>
+          </td></tr>
+        </table>
+      </td></tr>
+    </table>
+  </body>
+</html>

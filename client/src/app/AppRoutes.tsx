@@ -1,5 +1,6 @@
 import React from "react";
 import { Route, Routes, Navigate } from "react-router-dom";
+import { LoadingState } from "./components/ui";
 
 // Pages
 import { DashboardLive } from "./pages/Dashboard";
@@ -13,12 +14,15 @@ import { RiskPage } from "./pages/RiskPage";
 import { TicketList } from "./pages/TicketPages";
 import { TicketDetailLive } from "./pages/TicketDetailLive";
 import { Team, UserDetail } from "./pages/TeamPages";
-import { Reports } from "./pages/Reports";
-import { AIPage } from "./pages/AIPage";
-import { ResourcesLive } from "./pages/ResourcesLive";
 import { OrganizationLive, GroupsLive } from "./pages/OrganizationPages";
-import { Settings, Sessions } from "./pages/SettingsPages";
 import { useWorkspace } from "./workspace";
+
+const Reports = React.lazy(() => import("./pages/Reports").then((module) => ({ default: module.Reports })));
+const AIPage = React.lazy(() => import("./pages/AIPage").then((module) => ({ default: module.AIPage })));
+const ResourcesLive = React.lazy(() => import("./pages/ResourcesLive").then((module) => ({ default: module.ResourcesLive })));
+const WorkModelPage = React.lazy(() => import("./pages/WorkModelPage").then((module) => ({ default: module.WorkModelPage })));
+const Settings = React.lazy(() => import("./pages/SettingsPages").then((module) => ({ default: module.Settings })));
+const Sessions = React.lazy(() => import("./pages/SettingsPages").then((module) => ({ default: module.Sessions })));
 
 function AdminOnly({ children }: { children: React.ReactNode }) {
   const { role } = useWorkspace();
@@ -39,6 +43,7 @@ export function AppRoutes({
   toast: (s: string) => void;
 }) {
   return (
+    <React.Suspense fallback={<LoadingState label="Loading page…" />}>
     <Routes>
       <Route path="/" element={<Navigate to="/dashboard" replace />} />
       <Route path="/dashboard" element={<DashboardLive />} />
@@ -47,6 +52,7 @@ export function AppRoutes({
       <Route path="/projects" element={<Projects />} />
       <Route path="/projects/new" element={<FormPage type="project" toast={toast} />} />
       <Route path="/projects/:projectId/*" element={<ProjectDetail />} />
+      <Route path="/work-model" element={<WorkModelPage />} />
       <Route path="/backlog" element={<BacklogLive toast={toast} />} />
       <Route path="/board" element={<Board toast={toast} />} />
       <Route path="/cycles" element={<CyclesLive toast={toast} />} />
@@ -84,5 +90,6 @@ export function AppRoutes({
       <Route path="/offline" element={<ErrorPage code="Offline" />} />
       <Route path="*" element={<ErrorPage code="404" />} />
     </Routes>
+    </React.Suspense>
   );
 }

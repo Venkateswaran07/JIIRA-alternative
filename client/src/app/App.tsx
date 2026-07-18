@@ -14,7 +14,8 @@ import { AppRoutes } from "./AppRoutes";
 export function App() {
   const [theme, setTheme] = useState(localStorage.getItem("theme") || "system");
   const [density, setDensity] = useState(localStorage.getItem("density") || "comfortable");
-  const [toasts, setToasts] = useState<any[]>([]);
+  type ToastInput = string | { message: string; tone?: "success" | "error" | "warning" | "info"; action?: { label: string; run: () => void }; durationMs?: number };
+  const [toasts, setToasts] = useState<Array<{ id: string; message: string; tone: string; action?: { label: string; run: () => void } }>>([]);
   const toastSequence = React.useRef(0);
 
   useEffect(() => {
@@ -28,10 +29,11 @@ export function App() {
     return () => media.removeEventListener("change", apply);
   }, [theme, density]);
 
-  const toast = (message: string) => {
+  const toast = (input: ToastInput) => {
     const id = `${Date.now()}-${toastSequence.current++}`;
-    setToasts((t) => [...t, { id, message }]);
-    setTimeout(() => setToasts((t) => t.filter((x) => x.id !== id)), 2600);
+    const item = typeof input === "string" ? { message: input, tone: "success" } : { tone: "info", ...input };
+    setToasts((current) => [...current, { id, ...item }]);
+    setTimeout(() => setToasts((current) => current.filter((toastItem) => toastItem.id !== id)), item.durationMs ?? (item.action ? 10_000 : 4_000));
   };
 
   const dismissToast = (id: string) => setToasts((items) => items.filter((item) => item.id !== id));
@@ -44,7 +46,7 @@ export function App() {
     "dashboard", "my-work", "notifications", "projects", "resources", "backlog",
     "board", "cycles", "sprints", "sla", "sprint-risk", "sprints-risk", "sprint risk",
     "tickets", "team", "reports", "ai", "organization", "sessions", "settings",
-    "audit-logs", "integrations", "import", "groups", "403", "500", "offline"
+    "audit-logs", "integrations", "import", "groups", "work-model", "403", "500", "offline"
   ]);
 
   let basename = "/";
@@ -84,9 +86,10 @@ export function App() {
         </Routes>
         <div className="toast-stack" aria-live="polite" aria-atomic="true">
           {toasts.map((t) => (
-            <div className="toast" key={t.id} role="status">
-              <Icons.CheckCircle2 size={18} />
+            <div className={`toast ${t.tone}`} key={t.id} role={t.tone === "error" ? "alert" : "status"}>
+              {t.tone === "error" ? <Icons.AlertCircle size={18} /> : <Icons.CheckCircle2 size={18} />}
               <span>{t.message}</span>
+              {t.action && <button className="toast-action" type="button" onClick={() => { t.action?.run(); dismissToast(t.id); }}>{t.action.label}</button>}
               <button className="toast-dismiss" type="button" onClick={() => dismissToast(t.id)} aria-label="Dismiss notification" title="Dismiss">
                 <Icons.X size={15} />
               </button>

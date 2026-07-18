@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { buildInvitationEmail, buildLoginEmail, buildOtpEmail, buildPasswordResetEmail, buildRegistrationEmail } from "./mail.js";
+import { buildInvitationEmail, buildLoginEmail, buildOtpEmail, buildPasswordResetEmail, buildRegistrationEmail, buildSlaAlertEmail } from "./mail.js";
 
 test("registration email contains the account recipient and sign-in link", () => {
   const message = buildRegistrationEmail({ name: "Ada Lovelace", email: "ada@example.com" });
@@ -57,4 +57,19 @@ test("password reset email includes an expiring reset link", () => {
   assert.match(message.text, /within 60 minutes/);
   assert.match(message.html, /Reset password/);
   assert.match(message.html, /reset-password\?token=reset-token/);
+});
+
+test("SLA email identifies the ticket, state, deadline, and safe navigation URL", () => {
+  const message = buildSlaAlertEmail({
+    recipient: { name: "Asha", email: "asha@example.com" },
+    ticketKey: "OPS-42",
+    ticketTitle: "Restore checkout",
+    state: "breached",
+    deadline: new Date("2026-07-18T10:00:00.000Z"),
+    href: "/acme/tickets/ticket-42",
+  });
+  assert.match(message.subject, /OPS-42/);
+  assert.match(message.text, /breached/);
+  assert.match(message.text, /ticket-42/);
+  assert.doesNotMatch(message.html, /<script/i);
 });
