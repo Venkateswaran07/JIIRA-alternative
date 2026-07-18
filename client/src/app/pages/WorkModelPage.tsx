@@ -49,19 +49,21 @@ function WorkItems({
   const hiddenCount = tickets.length - 4;
 
   return (
-    <div className="work-model-item-list" id={`${groupId}-items`}>
-      {visibleTickets.map((ticket: any) => (
-        <NavLink className="work-model-item" key={recordId(ticket)} to={`/tickets/${recordId(ticket)}`}>
-          <span className={`work-model-item-type ${String(ticket.issueType || "task").toLowerCase()}`}>
-            {ticket.issueType || "Task"}
-          </span>
-          <span>
-            <strong>{ticket.ticketId || "Ticket"}</strong>
-            <small>{ticket.title}</small>
-          </span>
-          <Icons.ChevronRight size={14} />
-        </NavLink>
-      ))}
+    <div className="work-model-item-list">
+      <div className="work-model-ticket-items" id={`${groupId}-items`}>
+        {visibleTickets.map((ticket: any) => (
+          <NavLink className="work-model-item" key={recordId(ticket)} to={`/tickets/${recordId(ticket)}`}>
+            <span className={`work-model-item-type ${String(ticket.issueType || "task").toLowerCase()}`}>
+              {ticket.issueType || "Task"}
+            </span>
+            <span>
+              <strong>{ticket.ticketId || "Ticket"}</strong>
+              <small>{ticket.title}</small>
+            </span>
+            <Icons.ChevronRight size={14} />
+          </NavLink>
+        ))}
+      </div>
       {hiddenCount > 0 && (
         <button
           className="work-model-more"
