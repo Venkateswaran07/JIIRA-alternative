@@ -74,14 +74,15 @@ export function Projects() {
       <FilterBar placeholder="Search projects…" />
       {view === "list" ? (
         <div className="card no-pad">
-          <table className="table">
+          {sorted.length ? <table className="table">
+            <caption className="sr-only">Workspace projects</caption>
             <thead>
               <tr>
-                <th>Project</th>
-                <th>Key</th>
-                <th>Status</th>
-                <th>Progress</th>
-                <th>Members</th>
+                <th scope="col">Project</th>
+                <th scope="col">Key</th>
+                <th scope="col">Status</th>
+                <th scope="col">Progress</th>
+                <th scope="col">Members</th>
               </tr>
             </thead>
             <tbody>
@@ -89,6 +90,15 @@ export function Projects() {
                 <tr
                   key={p.key}
                   onClick={() => nav(`/projects/${p.key}`)}
+                  onKeyDown={(event) => {
+                    if (event.key === "Enter" || event.key === " ") {
+                      event.preventDefault();
+                      nav(`/projects/${p.key}`);
+                    }
+                  }}
+                  tabIndex={0}
+                  role="link"
+                  aria-label={`Open project ${p.name}`}
                   style={{ cursor: "pointer" }}
                 >
                   <td>
@@ -107,7 +117,7 @@ export function Projects() {
                 </tr>
               ))}
             </tbody>
-          </table>
+          </table> : <Empty title="No projects found" body="Create a project or clear the filters to see your workspace initiatives." action={isLeader ? { label: "New project", to: "/projects/new" } : undefined} />}
         </div>
       ) : (
         <div className="project-grid">
@@ -116,6 +126,15 @@ export function Projects() {
               className="project-card"
               key={p.key}
               onClick={() => nav(`/projects/${p.key}`)}
+              onKeyDown={(event) => {
+                if ((event.key === "Enter" || event.key === " ") && event.target === event.currentTarget) {
+                  event.preventDefault();
+                  nav(`/projects/${p.key}`);
+                }
+              }}
+              tabIndex={0}
+              role="link"
+              aria-label={`Open project ${p.name}`}
             >
               <div className="project-top">
                 <span className={`project-icon p${i % 4}`}>
@@ -149,6 +168,7 @@ export function Projects() {
               </div>
             </article>
           ))}
+          {!sorted.length && <Empty title="No projects found" body="Create a project or clear the filters to see your workspace initiatives." action={isLeader ? { label: "New project", to: "/projects/new" } : undefined} />}
         </div>
       )}
     </>

@@ -119,6 +119,8 @@ export function AIPage() {
                 onKeyDown={(event) => { if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); submit(); } }}
                 placeholder="Ask about your work, or tell the agent what to do…"
                 rows={2}
+                aria-label="Ask I-Track AI"
+                aria-busy={loading}
               />
               <button className="ai-workspace-send" onClick={submit} disabled={!input.trim() || loading} aria-label="Send message"><Icons.ArrowUp size={18} /></button>
             </div>

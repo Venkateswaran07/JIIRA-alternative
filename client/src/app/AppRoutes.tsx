@@ -42,7 +42,7 @@ export function AppRoutes({
     <Routes>
       <Route path="/" element={<Navigate to="/dashboard" replace />} />
       <Route path="/dashboard" element={<DashboardLive />} />
-      <Route path="/my-work" element={<MyWork />} />
+      <Route path="/my-work" element={<MyWork toast={toast} />} />
       <Route path="/notifications" element={<Notifications toast={toast} />} />
       <Route path="/projects" element={<Projects />} />
       <Route path="/projects/new" element={<FormPage type="project" toast={toast} />} />

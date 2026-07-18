@@ -50,6 +50,7 @@ th {
   position: sticky;
   top: 0;
   z-index: 1;
+  white-space: nowrap;
 }
 
 th,
@@ -64,6 +65,35 @@ tbody tr {
 
 tbody tr:hover {
   background: #a47bef0a;
+}
+
+tbody tr[role="button"]:focus-visible,
+tbody tr[tabindex]:focus-visible {
+  outline: 3px solid var(--focus-ring);
+  outline-offset: -3px;
+}
+
+.pagination {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: 14px;
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.pagination > div {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.pagination-page {
+  min-width: 58px;
+  color: var(--text);
+  text-align: center;
+  font-weight: 650;
 }
 
 tbody tr:focus-within {

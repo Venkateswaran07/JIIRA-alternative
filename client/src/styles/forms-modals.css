@@ -358,10 +358,34 @@
   gap: 8px;
   font-size: 11px;
   box-shadow: 0 10px 30px #0005;
+  max-width: min(420px, calc(100vw - 32px));
 }
 
 .toast svg {
   color: var(--lime);
+}
+
+.toast > span {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.toast-dismiss {
+  width: 26px;
+  height: 26px;
+  display: inline-grid;
+  place-items: center;
+  flex: none;
+  margin-left: auto;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: #ffffffaa;
+}
+
+.toast-dismiss:hover {
+  background: #ffffff18;
+  color: #fff;
 }
 
 .modal-wrap {

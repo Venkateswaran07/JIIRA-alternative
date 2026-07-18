@@ -6,8 +6,9 @@ import { api } from "../../api";
 import { PageHead, Empty, FilterBar, ViewToggle, MetricCard } from "../components/ui";
 import { TicketTable } from "./TicketPages";
 import { Board } from "./SprintPages";
+import { matchesTicket } from "./TicketPages";
 
-export function MyWork() {
+export function MyWork({ toast }: { toast: (message: string) => void }) {
   const [view, setView] = useState("list");
   const [scope, setScope] = useState("assigned");
   const [summary, setSummary] = useState<any>(null);
@@ -15,6 +16,9 @@ export function MyWork() {
   const [params] = useSearchParams();
   const currentUserId = String(user?._id || user?.id || "");
   const requestedScope = params.get("scope") || "assigned";
+  const query = params.get("q") || "";
+  const selectedLabel = params.get("label") || "";
+  const filter = params.get("filter") || "";
 
   useEffect(() => {
     api<any>("/my-work").then(setSummary).catch(() => setSummary(null));
@@ -41,6 +45,9 @@ export function MyWork() {
       : scope === "completed"
         ? completedTickets
         : assignedTickets;
+  const filteredTickets = visibleTickets.filter((ticket) =>
+    matchesTicket(ticket, query, selectedLabel) && (filter !== "open" || ticket.status !== "Done"),
+  );
 
   return (
     <>
@@ -114,10 +121,10 @@ export function MyWork() {
       <FilterBar placeholder="Search my work…" labelOptions={labelOptions} />
       {view === "list" ? (
         <section className="card no-pad">
-          {visibleTickets.length ? <TicketTable rows={visibleTickets} /> : <Empty title="No work in this view" body="Try another focus or clear your filters." />}
+          {filteredTickets.length ? <TicketTable rows={filteredTickets} /> : <Empty title="No work in this view" body="Try another focus or clear your filters." />}
         </section>
       ) : (
-        <Board toast={() => {}} ticketFilter={(ticket) => visibleTickets.some((item) => item.id === ticket.id)} />
+        <Board toast={toast} ticketFilter={(ticket) => filteredTickets.some((item) => item.id === ticket.id)} />
       )}
     </>
   );

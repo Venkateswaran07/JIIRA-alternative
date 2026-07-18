@@ -4,7 +4,7 @@ import * as Icons from "lucide-react";
 import { useWorkspace } from "../workspace";
 import { api } from "../../api";
 import { appPrompt, appForm, appConfirm } from "../components/AppDialog";
-import { Avatar, Badge, CardTitle, PageHead, Empty, FilterBar, LabelChips, LabelPicker } from "../components/ui";
+import { Avatar, Badge, CardTitle, PageHead, Empty, ErrorState, FilterBar, LabelChips, LabelPicker, LoadingState, Pagination } from "../components/ui";
 import { fmt } from "../../utils/ui";
 import type { Ticket } from "../../types/domain";
 
@@ -102,15 +102,16 @@ export function TicketTable({ rows }: { rows?: Ticket[] }) {
   return (
     <div className="table-wrap">
       <table>
+        <caption className="sr-only">Workspace tickets</caption>
         <thead>
           <tr>
-            <th>Ticket</th>
-            <th>Epic</th>
-            <th>Status</th>
-            <th>Priority</th>
-            <th>SLA</th>
-            <th>Assignee</th>
-            <th>Points</th>
+            <th scope="col">Ticket</th>
+            <th scope="col">Epic</th>
+            <th scope="col">Status</th>
+            <th scope="col">Priority</th>
+            <th scope="col">SLA</th>
+            <th scope="col">Assignee</th>
+            <th scope="col">Points</th>
           </tr>
         </thead>
         <tbody>
@@ -120,8 +121,17 @@ export function TicketTable({ rows }: { rows?: Ticket[] }) {
               <tr
                 className="epic-group-row"
                 onClick={() => toggleEpic(epic)}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter" || event.key === " ") {
+                    event.preventDefault();
+                    toggleEpic(epic);
+                  }
+                }}
                 style={{ cursor: "pointer" }}
                 aria-label={`Toggle ${epic} group`}
+                aria-expanded={!collapsed[epic]}
+                role="button"
+                tabIndex={0}
               >
                 <td colSpan={7} style={{ padding: "8px 14px" }}>
                   <span className="epic-group-header">
@@ -202,16 +212,54 @@ export function TicketList() {
   const [rows, setRows] = useState<Ticket[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
+  const [cursor, setCursor] = useState<string | null>(null);
+  const [cursorHistory, setCursorHistory] = useState<string[]>([]);
+  const [total, setTotal] = useState(0);
+  const [nextCursor, setNextCursor] = useState<string | null>(null);
+  const [reloadKey, setReloadKey] = useState(0);
   const isLeader = role === "admin" || role === "manager";
   useEffect(() => {
     let active = true;
-    const query = new URLSearchParams({ limit: "50", q: params.get("q") || "", label: params.get("label") || "", sort: params.get("sort") === "desc" ? "-createdAt" : "createdAt" });
+    const query = new URLSearchParams({ limit: "50", q: params.get("q") || "", label: params.get("label") || "", filter: params.get("filter") || "", sort: params.get("sort") === "desc" ? "-title" : "title" });
+    if (cursor) query.set("cursor", cursor);
     if (!query.get("q")) query.delete("q");
     if (!query.get("label")) query.delete("label");
+    if (!query.get("filter")) query.delete("filter");
     setLoading(true); setError("");
-    void api<any>(`/tickets?${query.toString()}`).then((result) => { if (active) setRows(result.items || result.tickets || []); }).catch((requestError) => { if (active) { setRows([]); setError(requestError instanceof Error ? requestError.message : "Unable to load tickets"); } }).finally(() => { if (active) setLoading(false); });
+    void api<any>(`/tickets?${query.toString()}`).then((result) => {
+      if (!active) return;
+      setRows(result.items || result.tickets || []);
+      setTotal(Number(result.total) || 0);
+      setNextCursor(result.nextCursor || null);
+    }).catch((requestError) => {
+      if (active) {
+        setRows([]);
+        setTotal(0);
+        setNextCursor(null);
+        setError(requestError instanceof Error ? requestError.message : "Unable to load tickets");
+      }
+    }).finally(() => { if (active) setLoading(false); });
     return () => { active = false; };
+  }, [params, cursor, reloadKey]);
+
+  useEffect(() => {
+    setCursor(null);
+    setCursorHistory([]);
   }, [params]);
+
+  const page = cursorHistory.length + 1;
+  const retry = () => setReloadKey((key) => key + 1);
+  const goNext = () => {
+    if (!nextCursor) return;
+    setCursorHistory((history) => [...history, cursor || ""]);
+    setCursor(nextCursor);
+  };
+  const goPrevious = () => {
+    const previous = cursorHistory.at(-1);
+    if (previous === undefined) return;
+    setCursorHistory((history) => history.slice(0, -1));
+    setCursor(previous || null);
+  };
   return (
     <>
       <PageHead
@@ -230,8 +278,11 @@ export function TicketList() {
         labelOptions={labelOptions}
       />
       <section className="card no-pad">
-        {loading ? <div className="empty-state"><Icons.LoaderCircle className="spin" /><p>Loading tickets…</p></div> : error ? <div className="empty-state"><Icons.CircleAlert /><p>{error}</p></div> : <TicketTable rows={rows} />}
+        {loading ? <LoadingState label="Loading tickets…" /> : error ? <ErrorState title="Unable to load tickets" body={error} action={<button className="btn primary" type="button" onClick={retry}><Icons.RotateCcw size={15} /> Try again</button>} /> : rows.length ? <TicketTable rows={rows} /> : <Empty title="No tickets found" body="Try a different search or clear the filters to see more work." action={{ label: "Clear filters", to: "/tickets" }} />}
       </section>
+      {!loading && !error && (total > 0 || cursorHistory.length > 0) && (
+        <Pagination current={page} total={total} limit={50} hasNext={Boolean(nextCursor)} hasPrevious={cursorHistory.length > 0} onNext={goNext} onPrevious={goPrevious} />
+      )}
     </>
   );
 }

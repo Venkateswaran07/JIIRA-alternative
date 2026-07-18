@@ -92,6 +92,15 @@ export function Team() {
               className="card person-card"
               key={u._id}
               onClick={() => nav(`/team/${u._id}`)}
+              onKeyDown={(event) => {
+                if ((event.key === "Enter" || event.key === " ") && event.target === event.currentTarget) {
+                  event.preventDefault();
+                  nav(`/team/${u._id}`);
+                }
+              }}
+              tabIndex={0}
+              role="link"
+              aria-label={`Open ${u.name}'s profile`}
               style={{ cursor: "pointer" }}
             >
               <Avatar name={u.name} color={u.avatarColor || "#A47BEF"} />
@@ -149,6 +158,7 @@ export function Team() {
             </article>
           );
         })}
+        {!sorted.length && <Empty title="No team members found" body="Invite teammates or clear the filters to see your workspace directory." action={isAdmin ? { label: "Invite member", to: "/team/invite" } : undefined} />}
       </div>
     </>
   );

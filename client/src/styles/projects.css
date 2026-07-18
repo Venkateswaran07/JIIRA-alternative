@@ -13,6 +13,17 @@
   transition: 0.2s;
 }
 
+.project-card:focus-visible,
+.person-card:focus-visible {
+  outline: 3px solid var(--focus-ring);
+  outline-offset: 2px;
+}
+
+.project-grid > .empty-state-container,
+.team-grid > .empty-state-container {
+  grid-column: 1 / -1;
+}
+
 .project-card:hover {
   transform: translateY(-3px);
   box-shadow: var(--shadow);

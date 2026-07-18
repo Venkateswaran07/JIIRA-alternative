@@ -28,9 +28,13 @@ export function PageHead({
 export function FilterBar({
   placeholder = "Search…",
   labelOptions = [],
+  sortAscLabel = "A–Z",
+  sortDescLabel = "Z–A",
 }: {
   placeholder?: string;
   labelOptions?: string[];
+  sortAscLabel?: string;
+  sortDescLabel?: string;
 }) {
   const [params, setParams] = useSearchParams();
   const availableLabels = normalizeLabels(labelOptions).sort((a, b) =>
@@ -49,7 +53,7 @@ export function FilterBar({
     setParams(next);
   };
   return (
-    <div className="filterbar">
+    <div className="filterbar" role="search" aria-label="Filter results">
       <label>
         <Icons.Search />
         <input
@@ -96,8 +100,8 @@ export function FilterBar({
           onChange={(event) => set("sort", event.target.value)}
           aria-label="Sort"
         >
-          <option value="asc">Sort: Oldest</option>
-          <option value="desc">Sort: Newest</option>
+          <option value="asc">Sort: {sortAscLabel}</option>
+          <option value="desc">Sort: {sortDescLabel}</option>
         </select>
       </label>
       <button
@@ -112,7 +116,7 @@ export function FilterBar({
         {params.get("view") === "grid" ? <Icons.List /> : <Icons.LayoutGrid />}
       </button>
       {hasFilters && (
-        <button className="text-btn filter-clear" onClick={clearFilters}>
+        <button className="text-btn filter-clear" onClick={clearFilters} title="Clear search, filters, and sorting">
           <Icons.RotateCcw />
           Clear filters
         </button>
@@ -212,6 +216,45 @@ export function ErrorState({
       {body && <p>{body}</p>}
       {action}
     </div>
+  );
+}
+
+export function Pagination({
+  current,
+  total,
+  limit,
+  hasNext,
+  hasPrevious,
+  onNext,
+  onPrevious,
+}: {
+  current: number;
+  total: number;
+  limit: number;
+  hasNext: boolean;
+  hasPrevious: boolean;
+  onNext: () => void;
+  onPrevious: () => void;
+}) {
+  const first = total === 0 ? 0 : (current - 1) * limit + 1;
+  const last = Math.min(current * limit, total);
+  return (
+    <nav className="pagination" aria-label="Pagination">
+      <span>
+        {total ? <><b>{first}–{last}</b> of {total}</> : "No results"}
+      </span>
+      <div>
+        <button className="btn sm" type="button" onClick={onPrevious} disabled={!hasPrevious} aria-label="Previous page">
+          <Icons.ChevronLeft size={15} />
+          Previous
+        </button>
+        <span className="pagination-page" aria-current="page">Page {current}</span>
+        <button className="btn sm" type="button" onClick={onNext} disabled={!hasNext} aria-label="Next page">
+          Next
+          <Icons.ChevronRight size={15} />
+        </button>
+      </div>
+    </nav>
   );
 }
 export function Badge({

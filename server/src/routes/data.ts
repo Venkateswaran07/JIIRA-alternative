@@ -308,7 +308,7 @@ router.route("/sprints/:id")
 
 router.route("/tickets")
   .get(async (req: AuthRequest, res) => {
-    const querySchema = listQuerySchema.extend({ cursor: z.string().max(500).optional(), q: z.string().trim().max(100).optional(), status: z.enum(ticketStatuses).optional(), priority: z.enum(priorityLevels).optional(), project: z.string().optional(), sprint: z.string().optional(), assignee: z.string().optional(), label: z.string().optional() });
+    const querySchema = listQuerySchema.extend({ cursor: z.string().max(500).optional(), q: z.string().trim().max(100).optional(), status: z.enum(ticketStatuses).optional(), priority: z.enum(priorityLevels).optional(), project: z.string().optional(), sprint: z.string().optional(), assignee: z.string().optional(), label: z.string().optional(), filter: z.enum(["open"]).optional() });
     const query = parseOr400(querySchema, req.query, res);
     if (!query) return;
     const page = query.cursor ? decodeTicketCursor(query.cursor) : query.page;
@@ -325,6 +325,7 @@ router.route("/tickets")
       ...orgFilter(req),
       ...(visibleProjectIds ? { project: { $in: visibleProjectIds } } : {}),
       ...(query.status && { status: query.status }),
+      ...(query.filter === "open" && { status: { $ne: "Done" } }),
       ...(query.priority && { priority: query.priority }),
       ...(query.project && { project: visibleProjectIds ? { $in: visibleProjectIds.filter((id) => String(id) === query.project) } : query.project }),
       ...(query.sprint && { sprint: query.sprint }),

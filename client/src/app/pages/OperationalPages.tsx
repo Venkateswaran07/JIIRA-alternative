@@ -220,7 +220,7 @@ export function AuditLogsLive() {
           Export CSV
         </button>
       </PageHead>
-      <FilterBar placeholder="Search actions or entities…" />
+      <FilterBar placeholder="Search actions or entities…" sortAscLabel="Oldest" sortDescLabel="Newest" />
       <section className="card no-pad">
         {filtered.length ? (
           <table>

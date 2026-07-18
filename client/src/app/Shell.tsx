@@ -187,6 +187,14 @@ export function Shell({
             >
               {collapsed ? <Icons.PanelLeftOpen size={19} /> : <Icons.PanelLeftClose size={19} />}
             </button>
+            <button
+              className="icon-btn mobile-sidebar-close"
+              onClick={() => setMobile(false)}
+              aria-label="Close navigation"
+              title="Close navigation"
+            >
+              <Icons.X size={19} />
+            </button>
           </div>
           <div className="company-context-wrap">
             <button className="company-context" onClick={() => { setWorkspaceMenu(false); setCompanyMenu(!companyMenu); }} aria-haspopup="menu" aria-expanded={companyMenu}>
@@ -256,7 +264,7 @@ export function Shell({
                 <span className="nav-group-title">{group.group}</span>
                 {group.items.map(([path, Icon, name]) => {
                   return (
-                    <NavLink className="nav-item" to={path} key={path}>
+                    <NavLink className="nav-item" to={path} key={path} onClick={() => setMobile(false)}>
                       <Icon size={18} />
                       <span>{name}</span>
                     </NavLink>
@@ -282,14 +290,14 @@ export function Shell({
             <button ref={searchButton} className="search-trigger" onClick={() => setSearch(true)} aria-label="Search workspace"><Icons.Search size={16} /><span>Search workspace…</span><kbd>⌘K</kbd></button>
             <button className="icon-btn" onClick={() => setAiPanel(!aiPanel)} aria-label="AI Assistant" title="AI Assistant"><Icons.Sparkles size={18} /></button>
             <div style={{ position: "relative" }}>
-              <button className="icon-btn" onClick={() => setNotificationMenu(!notificationMenu)} aria-label="Notifications" title="Notifications">
+              <button className="icon-btn" onClick={() => setNotificationMenu(!notificationMenu)} aria-label={unreadCount ? `Notifications, ${unreadCount} unread` : "Notifications"} title="Notifications" aria-haspopup="dialog" aria-expanded={notificationMenu}>
                 <Icons.Bell size={18} />
                 {unreadCount > 0 && <span className="notification-badge" />}
               </button>
               {notificationMenu && (
-                <section ref={notificationMenuRef} className="card header-notifications" aria-label="Recent notifications">
+                <section ref={notificationMenuRef} className="card header-notifications" role="dialog" aria-modal="false" aria-labelledby="header-notifications-title">
                   <header>
-                    <h2>Notifications</h2>
+                    <h2 id="header-notifications-title">Notifications</h2>
                     <button className="btn text-btn" onClick={markAllNotificationsRead}>Mark all read</button>
                   </header>
                   <div className="notification-list">
@@ -301,7 +309,7 @@ export function Shell({
                           <div>
                             <b>{n.title}</b>
                             <p>{n.body}</p>
-                            <small>{new Date(n.createdAt).toLocaleDateString()}</small>
+                            <time dateTime={n.createdAt} title={new Date(n.createdAt).toLocaleString()}>{new Date(n.createdAt).toLocaleDateString()}</time>
                           </div>
                         </a>
                       );

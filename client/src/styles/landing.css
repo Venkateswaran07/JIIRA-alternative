@@ -22,6 +22,10 @@
   border-radius: 14px;
   box-shadow: 0 7px 22px color-mix(in srgb, var(--text) 5%, transparent);
 }
+.dashboard-grid > .card:hover {
+  transform: none;
+  box-shadow: 0 7px 22px color-mix(in srgb, var(--text) 5%, transparent);
+}
 .metric {
   position: relative;
   min-height: 110px;
@@ -125,6 +129,7 @@
   animation: state-spin .8s linear infinite;
 }
 .error-state > svg { width: 28px; color: var(--red); }
+.error-state .btn { margin-top: 4px; }
 @keyframes state-spin { to { transform: rotate(360deg); } }
 .work-metrics .metric { min-height: 102px; }
 .work-scope-bar {
@@ -165,7 +170,7 @@
 .queue-summary b { font-size: 12px; }
 .queue-summary small { color: var(--muted); font-size: 10px; }
 tbody tr:focus-visible {
-  outline: 3px solid color-mix(in srgb, var(--purple) 45%, transparent);
+  outline: 3px solid var(--focus-ring);
   outline-offset: -3px;
 }
 .scope-tabs { display: flex; gap: 4px; overflow: auto; }

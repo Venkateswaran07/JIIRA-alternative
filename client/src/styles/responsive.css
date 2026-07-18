@@ -519,6 +519,14 @@
   .settings-nav button {
     white-space: nowrap;
   }
+  .pagination {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+  .pagination > div {
+    width: 100%;
+    justify-content: space-between;
+  }
 }
 @media (prefers-reduced-motion: reduce) {
   *,

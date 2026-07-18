@@ -176,8 +176,8 @@ export function FormPage({
             title: values.get("title"),
             description: values.get("description"),
             project: values.get("project"),
-            sprint: values.get("sprint"),
-            assignee: values.get("assignee"),
+            ...(values.get("sprint") ? { sprint: values.get("sprint") } : {}),
+            ...(values.get("assignee") ? { assignee: values.get("assignee") } : {}),
             priority: values.get("priority"),
             storyPoints: Number(values.get("storyPoints")),
             dueDate: values.get("dueDate"),
@@ -270,15 +270,16 @@ export function FormPage({
             </label>
             <label className="field">
               <span>Project</span>
-              <select name="project" required>
+              <select name="project" required disabled={!projects.length} aria-describedby="ticket-project-hint">
                 {projects.map((project: any) => (
                   <option key={project._id} value={project._id}>{project.name}</option>
                 ))}
               </select>
+              {!projects.length && <small id="ticket-project-hint">Create a project before adding a ticket.</small>}
             </label>
             <label className="field">
               <span>Sprint</span>
-              <select name="sprint" required>
+              <select name="sprint">
                 <option value="">Backlog</option>
                 {sprints.map((sprint: any) => (
                   <option key={sprint._id} value={sprint._id}>{sprint.name}</option>
@@ -296,7 +297,7 @@ export function FormPage({
             </label>
             <label className="field">
               <span>Assignee</span>
-              <select name="assignee" required>
+              <select name="assignee">
                 <option value="">Unassigned</option>
                 {users.map((user: any) => (
                   <option key={user._id} value={user._id}>{user.name}</option>
@@ -474,13 +475,13 @@ export function FormPage({
             </label>
           </div>
         )}
-        {formError && <div className="auth-message">{formError}</div>}
+        {formError && <div className="auth-message" role="alert" aria-live="assertive">{formError}</div>}
         <div className="form-actions">
           <button type="button" className="btn" onClick={() => nav(-1)}>
             Cancel
           </button>
-          <button type="submit" className="btn primary" disabled={busy}>
-            {type === "invite" ? "Send invitation" : `Create ${type}`}
+          <button type="submit" className="btn primary" disabled={busy || (type === "ticket" && !projects.length)}>
+            {busy ? "Saving…" : type === "invite" ? "Send invitation" : `Create ${type}`}
           </button>
         </div>
       </form>

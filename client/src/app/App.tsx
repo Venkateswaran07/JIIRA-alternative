@@ -15,6 +15,7 @@ export function App() {
   const [theme, setTheme] = useState(localStorage.getItem("theme") || "system");
   const [density, setDensity] = useState(localStorage.getItem("density") || "comfortable");
   const [toasts, setToasts] = useState<any[]>([]);
+  const toastSequence = React.useRef(0);
 
   useEffect(() => {
     document.documentElement.dataset.density = density;
@@ -28,10 +29,12 @@ export function App() {
   }, [theme, density]);
 
   const toast = (message: string) => {
-    const id = Date.now();
+    const id = `${Date.now()}-${toastSequence.current++}`;
     setToasts((t) => [...t, { id, message }]);
     setTimeout(() => setToasts((t) => t.filter((x) => x.id !== id)), 2600);
   };
+
+  const dismissToast = (id: string) => setToasts((items) => items.filter((item) => item.id !== id));
 
   // Determine basename dynamically
   const rawParts = window.location.pathname.split("/").filter(Boolean);
@@ -83,7 +86,10 @@ export function App() {
           {toasts.map((t) => (
             <div className="toast" key={t.id} role="status">
               <Icons.CheckCircle2 size={18} />
-              {t.message}
+              <span>{t.message}</span>
+              <button className="toast-dismiss" type="button" onClick={() => dismissToast(t.id)} aria-label="Dismiss notification" title="Dismiss">
+                <Icons.X size={15} />
+              </button>
             </div>
           ))}
         </div>

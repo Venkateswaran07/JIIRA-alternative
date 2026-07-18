@@ -39,14 +39,20 @@ export function Notifications({ toast }: { toast: (s: string) => void }) {
           Mark all read
         </button>
       </PageHead>
-      <div className="tabs">
+      <div className="tabs" role="tablist" aria-label="Notification filters">
         <button
+          type="button"
+          role="tab"
+          aria-selected={!unreadOnly}
           className={!unreadOnly ? "active" : ""}
           onClick={() => setUnreadOnly(false)}
         >
           All <Badge tone="purple">{notifications.length}</Badge>
         </button>
         <button
+          type="button"
+          role="tab"
+          aria-selected={unreadOnly}
           className={unreadOnly ? "active" : ""}
           onClick={() => setUnreadOnly(true)}
         >
@@ -75,7 +81,7 @@ export function Notifications({ toast }: { toast: (s: string) => void }) {
                 <span>
                   <b>{item.title}</b>
                   <p>{item.body}</p>
-                  <small>{new Date(item.createdAt).toLocaleString()}</small>
+                  <time dateTime={item.createdAt} title={new Date(item.createdAt).toLocaleString()}>{new Date(item.createdAt).toLocaleString()}</time>
                 </span>
               </>
             );

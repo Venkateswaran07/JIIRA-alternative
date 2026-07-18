@@ -699,7 +699,8 @@
   white-space: nowrap;
 }
 
-.notification-item small {
+.notification-item small,
+.notification-item time {
   color: var(--muted);
   font-size: 9px;
 }
