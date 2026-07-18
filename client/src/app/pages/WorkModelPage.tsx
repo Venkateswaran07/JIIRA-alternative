@@ -52,7 +52,11 @@ function WorkItems({
     <div className="work-model-item-list">
       <div className="work-model-ticket-items" id={`${groupId}-items`}>
         {visibleTickets.map((ticket: any) => (
-          <NavLink className="work-model-item" key={recordId(ticket)} to={`/tickets/${recordId(ticket)}`}>
+          <NavLink
+            className="work-model-item"
+            key={recordId(ticket)}
+            to={`/tickets/${encodeURIComponent(ticket.ticketId)}`}
+          >
             <span className={`work-model-item-type ${String(ticket.issueType || "task").toLowerCase()}`}>
               {ticket.issueType || "Task"}
             </span>
