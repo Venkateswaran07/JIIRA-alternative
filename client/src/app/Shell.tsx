@@ -2,7 +2,7 @@ import React, { useEffect, useState } from "react";
 import { useLocation, useNavigate, NavLink } from "react-router-dom";
 import * as Icons from "lucide-react";
 import { useWorkspace } from "./workspace";
-import { api, clearSession, saveSession } from "../api";
+import { api, clearSession } from "../api";
 import { appForm, appPrompt } from "./components/AppDialog";
 import { nav } from "./navigation";
 import { Badge } from "./components/ui";
@@ -57,11 +57,9 @@ export function Shell({
   const effectiveRole = currentUser?.role || role;
 
   const switchWorkspace = async (organizationId: string) => {
-    const session = await api<any>(`/workspaces/${organizationId}/switch`, {
+    await api<any>(`/workspaces/${organizationId}/switch`, {
       method: "POST",
-      body: JSON.stringify({ refreshToken: localStorage.getItem("itrack_refresh_token") }),
     });
-    saveSession(session);
     window.location.assign("/dashboard");
   };
 
@@ -75,11 +73,10 @@ export function Shell({
     });
     const otp = values?.otp?.trim();
     if (!otp) return;
-    const session = await api<any>("/auth/accept-invite", {
+    await api<any>("/auth/accept-invite", {
       method: "POST",
       body: JSON.stringify({ invitationId: selectedInvitation.id, otp }),
     });
-    saveSession(session);
     window.location.assign("/dashboard");
   };
 
@@ -299,14 +296,14 @@ export function Shell({
                     {recentNotifications.map((n: any) => {
                       const Icon = n.type === "risk" ? Icons.Activity : n.type === "mention" ? Icons.AtSign : Icons.Ticket;
                       return (
-                        <div className={cx("notification-item", !n.readAt && "unread")} key={n._id} onClick={() => void markNotificationRead(n)}>
+                        <a className={cx("notification-item", !n.readAt && "unread")} key={n._id} href={n.href || "/notifications"} onClick={() => { void markNotificationRead(n); setNotificationMenu(false); }}>
                           <span className={cx("notif-icon", n.type)}><Icon size={14} /></span>
                           <div>
                             <b>{n.title}</b>
                             <p>{n.body}</p>
                             <small>{new Date(n.createdAt).toLocaleDateString()}</small>
                           </div>
-                        </div>
+                        </a>
                       );
                     })}
                     {!recentNotifications.length && <div className="notifications-empty"><Icons.CheckCircle size={28} /><b>All caught up</b><span>You have no notifications.</span></div>}

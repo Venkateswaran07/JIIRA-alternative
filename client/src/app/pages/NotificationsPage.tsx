@@ -67,8 +67,8 @@ export function Notifications({ toast }: { toast: (s: string) => void }) {
                   : item.type === "webhook"
                     ? Icons.Webhook
                     : Icons.Ticket;
-            return (
-              <div className={!item.readAt ? "unread" : ""} key={item._id}>
+            const content = (
+              <>
                 <span className={`notif-icon ${item.type}`}>
                   <Icon />
                 </span>
@@ -77,11 +77,22 @@ export function Notifications({ toast }: { toast: (s: string) => void }) {
                   <p>{item.body}</p>
                   <small>{new Date(item.createdAt).toLocaleString()}</small>
                 </span>
+              </>
+            );
+            return (
+              <div className={!item.readAt ? "unread notification-item" : "notification-item"} key={item._id}>
+                {item.href ? (
+                  <a href={item.href} onClick={() => { if (!item.readAt) void markRead(item._id); }}>
+                    {content}
+                  </a>
+                ) : (
+                  <div className="notification-content">{content}</div>
+                )}
                 {!item.readAt && (
                   <button
                     className="icon-btn"
                     aria-label={`Mark ${item.title} read`}
-                    onClick={() => markRead(item._id)}
+                    onClick={() => { void markRead(item._id); }}
                   >
                     <Icons.Check />
                   </button>

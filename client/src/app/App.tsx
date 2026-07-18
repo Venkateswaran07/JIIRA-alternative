@@ -12,14 +12,19 @@ import { OnboardingFlow } from "./pages/OnboardingFlow";
 import { AppRoutes } from "./AppRoutes";
 
 export function App() {
-  const [theme, setTheme] = useState(localStorage.getItem("theme") || "light");
+  const [theme, setTheme] = useState(localStorage.getItem("theme") || "system");
   const [density, setDensity] = useState(localStorage.getItem("density") || "comfortable");
   const [toasts, setToasts] = useState<any[]>([]);
 
   useEffect(() => {
-    document.documentElement.dataset.theme = theme;
     document.documentElement.dataset.density = density;
     localStorage.setItem("theme", theme);
+    localStorage.setItem("density", density);
+    const media = window.matchMedia("(prefers-color-scheme: dark)");
+    const apply = () => { document.documentElement.dataset.theme = theme === "system" ? (media.matches ? "dark" : "light") : theme; };
+    apply();
+    if (theme === "system") media.addEventListener("change", apply);
+    return () => media.removeEventListener("change", apply);
   }, [theme, density]);
 
   const toast = (message: string) => {
@@ -69,7 +74,7 @@ export function App() {
             path="/*"
             element={
               <Shell theme={theme} setTheme={setTheme} toast={toast}>
-                <AppRoutes density={density} setDensity={setDensity} toast={toast} />
+                <AppRoutes theme={theme} setTheme={setTheme} density={density} setDensity={setDensity} toast={toast} />
               </Shell>
             }
           />

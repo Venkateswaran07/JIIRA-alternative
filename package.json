@@ -9,10 +9,15 @@
     "dev:client": "npm --prefix client run dev",
     "seed": "npm --prefix server run seed",
     "typecheck": "npm --prefix server run typecheck && npm --prefix client run typecheck",
+    "lint": "eslint .",
     "build": "npm --prefix server run build && npm --prefix client run build",
+    "test:e2e": "npm --prefix client run test:e2e",
     "start": "concurrently \"npm run dev:server\" \"npm run dev:client\""
   },
   "devDependencies": {
-    "concurrently": "^10.0.3"
+    "@eslint/js": "9.39.5",
+    "concurrently": "^10.0.3",
+    "eslint": "9.39.5",
+    "typescript-eslint": "^8.26.0"
   }
 }

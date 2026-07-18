@@ -10,13 +10,19 @@ OpenAPI JSON: `http://localhost:4000/api/v1/openapi.json`
 
 ## Authentication
 
-Most endpoints require an I-TRACK JWT access token:
+Browser clients authenticate with short-lived HttpOnly access cookies and a
+rotating refresh cookie. Cookies are sent automatically for same-origin
+requests; clients must not store session tokens in localStorage.
+
+External clients may authenticate with an API token or a legacy JWT bearer token:
 
 ```http
 Authorization: Bearer <token>
 ```
 
-Get a token with `POST /auth/login`. Public auth endpoints are listed below as `Public`.
+Use `POST /auth/login` followed by `POST /auth/verify-otp`; the response sets the
+session cookies. API tokens are created under the integrations endpoints and are
+shown only once. Public auth endpoints are listed below as `Public`.
 
 Roles:
 
@@ -274,7 +280,17 @@ organization-group workspace grants.
 
 ### Ticket list filters
 
-`GET /tickets` accepts `page`, `limit` (maximum `100`), `search`, and `sort`, plus the optional filters `status`, `priority`, `project`, `sprint`, `assignee`, and `label`. Search matches ticket titles, ticket ids, and labels. Responses include `{ tickets, meta: { page, limit, total, pages } }`.
+`GET /tickets` accepts `cursor`, `limit` (maximum `100`), `q`, and `sort`, plus the optional filters `status`, `priority`, `project`, `sprint`, `assignee`, and `label`. Search matches ticket titles, ticket ids, and labels. Responses include `{ items, nextCursor, total }`; `tickets` and `meta` remain in the response during the compatibility period.
+
+### Attachments
+
+Production attachments use signed Supabase Storage uploads:
+
+1. `POST /tickets/:id/attachments/presign` with `{ name, mimeType, size }`.
+2. Upload the file directly to the returned signed URL.
+3. `POST /tickets/:id/attachments/:attachmentId/complete`.
+
+The download endpoint returns an authorized signed URL for Supabase-backed files.
 
 ### AI ticket planning
 

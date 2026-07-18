@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
-import { ApiError, api, clearSession, getToken } from "../api";
+import { ApiError, api, clearSession } from "../api";
 import { resourceKinds } from "../constants/resources";
 import type { Ticket } from "../types/domain";
 import { ErrorState, LoadingState } from "./components/ui";
@@ -244,10 +244,12 @@ export function ApiGate({
       }));
 
       const parsedProjects = (dashboard.projects || []).map((p: any) => ({
+        id: p._id || p.id,
         key: p.key,
         name: p.name,
         description: p.description,
         progress: p.progress,
+        status: p.status,
         risk: p.riskLevel,
         members: p.members?.length || 0,
         sprint: p.activeSprint,
@@ -360,11 +362,6 @@ export function ApiGate({
 
   useEffect(() => {
     if (publicPath) {
-      setLoading(false);
-      return;
-    }
-    if (!getToken()) {
-      window.location.replace("/login");
       setLoading(false);
       return;
     }

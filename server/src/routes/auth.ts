@@ -1,18 +1,19 @@
 import bcrypt from "bcryptjs";
 import crypto from "node:crypto";
-import jwt from "jsonwebtoken";
 import { Router } from "express";
 import { z } from "zod";
 import { env } from "../config/env.js";
 import { effectiveWorkspaceMembership, requireAuth, type AuthRequest } from "../middleware/auth.js";
-import { clearSessionCookies, REFRESH_COOKIE, readCookie, setSessionCookies } from "../lib/authCookies.js";
+import { clearOAuthPkceCookie, clearOAuthStateCookie, clearSessionCookies, OAUTH_PKCE_COOKIE, OAUTH_STATE_COOKIE, REFRESH_COOKIE, readCookie, setOAuthPkceCookie, setOAuthStateCookie, setSessionCookies } from "../lib/authCookies.js";
 import { ActionToken, Session } from "../models/Operational.js";
 import { User } from "../models/User.js";
 import { OrganizationMembership } from "../models/WorkspaceAccess.js";
 import { sendLoginEmail, sendOtpEmail, sendPasswordResetEmail, sendRegistrationEmail } from "../services/mail.js";
+import { authRateLimit } from "../middleware/rateLimits.js";
 import { hashToken, issueTokens, membershipsFor, pendingInvitationsFor, publicCompany, publicOrganization, publicUser, sessionResponse } from "../services/sessionAuth.js";
 
 const router = Router();
+router.use(authRateLimit);
 const credentials = z.object({ email: z.string().email(), password: z.string().min(8) });
 const registerSchema = credentials.extend({ name: z.string().min(2) });
 const otpSchema = z.object({ email: z.string().email(), otp: z.string().regex(/^\d{6}$/), purpose: z.enum(["registration", "login"]) });
@@ -109,7 +110,11 @@ router.get("/google", (_req, res) => {
   if (!env.googleClientId || !env.googleClientSecret) {
     return res.status(503).json({ message: "Google sign-in is not configured" });
   }
-  const state = jwt.sign({ purpose: "google-oauth" }, env.jwtSecret, { expiresIn: "10m" });
+  const state = crypto.randomBytes(32).toString("base64url");
+  const verifier = crypto.randomBytes(32).toString("base64url");
+  const challenge = crypto.createHash("sha256").update(verifier).digest("base64url");
+  setOAuthStateCookie(res, state);
+  setOAuthPkceCookie(res, verifier);
   const query = new URLSearchParams({
     client_id: env.googleClientId,
     redirect_uri: env.googleRedirectUri,
@@ -118,6 +123,8 @@ router.get("/google", (_req, res) => {
     access_type: "online",
     prompt: "select_account",
     state,
+    code_challenge: challenge,
+    code_challenge_method: "S256",
   });
   return res.redirect(`https://accounts.google.com/o/oauth2/v2/auth?${query}`);
 });
@@ -130,8 +137,11 @@ router.get("/google/callback", async (req, res) => {
     return res.redirect(errorUrl("Google sign-in could not be completed"));
   }
   try {
-    const claims = jwt.verify(state, env.jwtSecret) as { purpose?: string };
-    if (claims.purpose !== "google-oauth") throw new Error("Invalid OAuth state");
+    const expectedState = readCookie(req.headers.cookie, OAUTH_STATE_COOKIE);
+    const verifier = readCookie(req.headers.cookie, OAUTH_PKCE_COOKIE);
+    if (!expectedState || expectedState !== state || !verifier) throw new Error("Invalid OAuth state");
+    clearOAuthStateCookie(res);
+    clearOAuthPkceCookie(res);
     const tokenResponse = await fetch("https://oauth2.googleapis.com/token", {
       method: "POST",
       headers: { "Content-Type": "application/x-www-form-urlencoded" },
@@ -141,6 +151,7 @@ router.get("/google/callback", async (req, res) => {
         client_secret: env.googleClientSecret,
         redirect_uri: env.googleRedirectUri,
         grant_type: "authorization_code",
+        code_verifier: verifier,
       }),
     });
     if (!tokenResponse.ok) throw new Error("Google token exchange failed");
@@ -166,12 +177,7 @@ router.get("/google/callback", async (req, res) => {
     }
     const membership = await preferredMembership(user);
     const session = await sessionResponse(user, membership, req.get("user-agent"), res);
-    const fragment = new URLSearchParams({
-      token: session.token,
-      refreshToken: session.refreshToken,
-      next: session.next,
-    });
-    return res.redirect(`${env.appUrl.replace(/\/+$/, "")}/auth/google/callback#${fragment}`);
+    return res.redirect(`${env.appUrl.replace(/\/+$/, "")}/auth/google/callback?next=${encodeURIComponent(session.next)}`);
   } catch (error) {
     console.error("Google OAuth callback failed", error);
     return res.redirect(errorUrl("Google sign-in failed. Please try again."));

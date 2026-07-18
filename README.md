@@ -117,7 +117,7 @@ The server environment template documents the available settings:
 - `DATABASE_URL` — local or primary PostgreSQL connection string.
 - `SUPABASE_DATABASE_URL` — optional hosted PostgreSQL connection string tried first.
 - `DATABASE_CONNECT_TIMEOUT_MS`, `DATABASE_POOL_MAX`, and `DATABASE_IDLE_TIMEOUT_MS` — connection pool settings.
-- `JWT_SECRET` — signing key for access and refresh tokens.
+- `JWT_SECRET` — signing key for access and refresh tokens. Browser sessions use HttpOnly cookies; production also requires Google OAuth, Supabase Storage, and the outbox worker secret.
 - `OPENAI_API_KEY`, `OPENAI_BASE_URL`, `OPENAI_MODEL`, and `OPENAI_CHAT_MODEL` — optional AI provider settings.
 - `VITE_API_BASE_URL` — client build-time API base URL; defaults to `/api/v1` for same-origin deployments.
 

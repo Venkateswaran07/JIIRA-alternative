@@ -1,5 +1,7 @@
 import { Notification } from "../models/Operational.js";
 import { WorkspaceResource } from "../models/WorkspaceResource.js";
+import { User } from "../models/User.js";
+import { enqueueOutboxEvent } from "./outbox.js";
 
 const Resources = WorkspaceResource as any;
 
@@ -29,19 +31,40 @@ export function applyAction(action: unknown, ticket: any) {
 }
 
 async function notifyUsers(organization: string, users: string[], event: string, ticket: any, ruleName: string) {
-  await Promise.all([...new Set(users)].map((user) => Notification.create({
+  const uniqueUsers = [...new Set(users)];
+  const userRecords = await User.find({ _id: { $in: uniqueUsers } }).select("_id notificationPreferences");
+  const preference = event.toLowerCase().includes("assigned") ? "ticketAssignments" : event.toLowerCase().includes("comment") || event.toLowerCase().includes("mention") ? "mentionsAndComments" : event.toLowerCase().includes("risk") ? "sprintRiskAlerts" : null;
+  await Promise.all(userRecords.filter((user: any) => !preference || user.notificationPreferences?.[preference] !== false).map((user: any) => Notification.create({
     organization,
-    user,
+    user: user._id,
     type: "automation",
     title: ruleName,
     body: `${ticket.ticketId}: ${ticket.title}`,
     entityType: "ticket",
     entityId: String(ticket._id),
+    href: `/tickets/${encodeURIComponent(ticket.ticketId)}`,
     metadata: { event },
   })));
 }
 
 export async function applyWorkspaceRules(organization: string, event: string, ticket: any) {
+  await enqueueOutboxEvent({
+    organization,
+    eventType: event,
+    aggregateType: "ticket",
+    aggregateId: String(ticket._id),
+    payload: { ticketId: ticket.ticketId, title: ticket.title, status: ticket.status, priority: ticket.priority },
+  });
+  const defaultRecipients = event.toLowerCase().includes("comment")
+    ? [...ids(ticket.watchers || []), ...ids([ticket.assignee])]
+    : event.toLowerCase().includes("assigned") || event.toLowerCase().includes("created")
+      ? ids([ticket.assignee])
+      : event.toLowerCase().includes("status")
+        ? [...ids(ticket.watchers || []), ...ids([ticket.assignee])]
+        : [];
+  if (defaultRecipients.length) {
+    await notifyUsers(organization, defaultRecipients, event, ticket, `Ticket ${event.replaceAll(".", " ")}`);
+  }
   const [automations, notificationRules] = await Promise.all([
     Resources.find({ organization, kind: "automation-rule", status: "active" }),
     Resources.find({ organization, kind: "notification-rule", status: "active" }),

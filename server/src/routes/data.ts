@@ -20,6 +20,7 @@ import { applySlaState, cycleMetricsForTickets, normalizeSlaPolicy, slaFieldsFor
 import { filterReportRows } from "../services/reporting.js";
 import { applyWorkspaceRules } from "../services/rules.js";
 import { ensureWorkspaceRoles, publicRole } from "../services/roles.js";
+import { accessibleProjectIds, canAccessProject, canAccessTicket, canManageProject, hasWorkspaceWideAccess, projectScope, requireTicketAccess } from "../services/resourceAccess.js";
 
 const router = Router();
 router.use(requireAuth);
@@ -31,14 +32,15 @@ const userId = (req: AuthRequest) => req.user!.userId;
 const orgFilter = (req: AuthRequest) => ({ organization: orgId(req) });
 const escapeRegExp = (value: string) => value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 const Resources = WorkspaceResource as any;
-const projectScope = (req: AuthRequest) => req.user!.role === "admin" || req.user!.workspaceAccessSource === "group" ? {} : { members: userId(req) };
-const canManageProject = (req: AuthRequest, project: any) =>
-  req.user!.role === "admin" || req.user!.workspaceAccessSource === "group" || (req.user!.permissions?.includes("projects.manage") && project?.members?.map(String).includes(userId(req)));
-async function canAccessTicket(req: AuthRequest, ticket: any) {
-  if (!ticket) return false;
-  if (req.user!.role === "admin" || req.user!.workspaceAccessSource === "group") return true;
-  return Boolean(await Project.exists({ _id: ticket.project, organization: orgId(req), members: userId(req) }));
-}
+const allowedTicketSorts = new Set(["createdAt", "-createdAt", "updatedAt", "-updatedAt", "rank", "-rank", "title", "-title", "status", "-status", "priority", "-priority"]);
+const encodeTicketCursor = (page: number) => Buffer.from(JSON.stringify({ page }), "utf8").toString("base64url");
+const decodeTicketCursor = (value: string | undefined) => {
+  if (!value) return 1;
+  try {
+    const parsed = JSON.parse(Buffer.from(value, "base64url").toString("utf8"));
+    return Number.isInteger(parsed.page) && parsed.page > 0 ? parsed.page : 1;
+  } catch { return 1; }
+};
 
 function isDuplicateProjectKeyError(error: unknown) {
   return typeof error === "object"
@@ -82,6 +84,9 @@ router.get("/dashboard", async (req: AuthRequest, res) => {
     Invitation.find({ organization: orgId(req), status: "pending" }),
     ensureWorkspaceRoles(orgId(req)!),
   ]);
+  const visibleCycles = hasWorkspaceWideAccess(req)
+    ? cycles
+    : cycles.filter((cycle: any) => (cycle.sprints || []).some((sprint: any) => canAccessProject(req, sprint.project)));
   const activeSprint = sprints.find((sprint) => sprint.status === "active") ?? sprints[0];
   const blockedTickets = tickets.filter((ticket) => ticket.blocked);
   return res.json({
@@ -94,7 +99,7 @@ router.get("/dashboard", async (req: AuthRequest, res) => {
     },
     projects,
     sprints,
-    cycles,
+    cycles: visibleCycles,
     tickets,
     users: req.user!.permissions?.includes("team.view")
       ? [
@@ -120,10 +125,15 @@ router.get("/dashboard", async (req: AuthRequest, res) => {
 });
 
 router.get("/my-work", async (req: AuthRequest, res) => {
+  const visibleProjectIds = await accessibleProjectIds(req);
+  const scopedDeliveryFilter = {
+    ...orgFilter(req),
+    ...(visibleProjectIds ? { project: { $in: visibleProjectIds } } : {}),
+  };
   const [user, tickets, sprints] = await Promise.all([
     User.findById(userId(req)).select("name capacity"),
-    Ticket.find(orgFilter(req)),
-    Sprint.find(orgFilter(req)).sort("startDate"),
+    Ticket.find(scopedDeliveryFilter),
+    Sprint.find(scopedDeliveryFilter).sort("startDate"),
   ]);
   const now = new Date();
   const weekStart = new Date(now);
@@ -208,7 +218,11 @@ router.route("/projects/:id")
   });
 
 router.route("/sprints")
-  .get(async (req: AuthRequest, res) => res.json({ sprints: await Sprint.find(orgFilter(req)).populate("project", "key name organization") }))
+  .get(async (req: AuthRequest, res) => {
+    const visibleProjectIds = await accessibleProjectIds(req);
+    const sprints = await Sprint.find({ ...orgFilter(req), ...(visibleProjectIds ? { project: { $in: visibleProjectIds } } : {}) }).populate("project", "key name organization");
+    return res.json({ sprints });
+  })
   .post(requireRole(["admin", "manager"]), async (req: AuthRequest, res) => {
     const body = parseOr400(sprintSchema, req.body, res);
     if (!body) return;
@@ -222,13 +236,15 @@ router.route("/sprints")
 router.route("/cycles")
   .get(async (req: AuthRequest, res) => {
     const cycles = await Cycle.find(orgFilter(req)).sort("startDate").populate({ path: "sprints", select: "name status startDate endDate plannedPoints completedPoints riskScore organization project", populate: { path: "project", select: "key name organization" } });
-    return res.json({ cycles });
+    return res.json({ cycles: hasWorkspaceWideAccess(req) ? cycles : cycles.filter((cycle: any) => (cycle.sprints || []).some((sprint: any) => canAccessProject(req, sprint.project))) });
   })
   .post(requireRole(["admin", "manager"]), async (req: AuthRequest, res) => {
     const body = parseOr400(cycleSchema, req.body, res);
     if (!body) return;
-    const sprintCount = body.sprints.length ? await Sprint.countDocuments({ _id: { $in: body.sprints }, organization: orgId(req) }) : 0;
+    const selectedSprints = body.sprints.length ? await Sprint.find({ _id: { $in: body.sprints }, organization: orgId(req) }).populate("project", "organization members") : [];
+    const sprintCount = selectedSprints.length;
     if (sprintCount !== new Set(body.sprints).size) return res.status(400).json({ message: "One or more sprints are invalid" });
+    if (selectedSprints.some((sprint: any) => !canAccessProject(req, sprint.project))) return res.status(403).json({ message: "You do not have access to one or more sprint projects" });
     const cycle = await Cycle.create({ ...body, organization: orgId(req) });
     return res.status(201).json({ cycle: await cycle.populate({ path: "sprints", select: "name status startDate endDate plannedPoints completedPoints riskScore organization project", populate: { path: "project", select: "key name organization" } }) });
   });
@@ -236,19 +252,28 @@ router.route("/cycles")
 router.route("/cycles/:id")
   .get(async (req: AuthRequest, res) => {
     const cycle = await Cycle.findOne({ _id: req.params.id, organization: orgId(req) }).populate({ path: "sprints", select: "name status startDate endDate plannedPoints completedPoints riskScore organization project", populate: { path: "project", select: "key name organization" } });
+    if (cycle && !hasWorkspaceWideAccess(req) && !(cycle.sprints || []).some((sprint: any) => canAccessProject(req, sprint.project))) return res.status(403).json({ message: "You do not have access to this cycle" });
     return cycle ? res.json({ cycle }) : res.status(404).json({ message: "Cycle not found" });
   })
   .patch(requireRole(["admin", "manager"]), async (req: AuthRequest, res) => {
     const body = parseOr400(cycleSchema.partial(), req.body, res);
     if (!body) return;
     if (body.sprints) {
-      const sprintCount = body.sprints.length ? await Sprint.countDocuments({ _id: { $in: body.sprints }, organization: orgId(req) }) : 0;
+      const selectedSprints = body.sprints.length ? await Sprint.find({ _id: { $in: body.sprints }, organization: orgId(req) }).populate("project", "organization members") : [];
+      const sprintCount = selectedSprints.length;
       if (sprintCount !== new Set(body.sprints).size) return res.status(400).json({ message: "One or more sprints are invalid" });
+      if (selectedSprints.some((sprint: any) => !canAccessProject(req, sprint.project))) return res.status(403).json({ message: "You do not have access to one or more sprint projects" });
     }
+    const existing = await Cycle.findOne({ _id: req.params.id, organization: orgId(req) }).populate({ path: "sprints", populate: { path: "project", select: "organization members" } });
+    if (!existing) return res.status(404).json({ message: "Cycle not found" });
+    if (!hasWorkspaceWideAccess(req) && !(existing.sprints || []).some((sprint: any) => canAccessProject(req, sprint.project))) return res.status(403).json({ message: "You do not have access to this cycle" });
     const cycle = await Cycle.findOneAndUpdate({ _id: req.params.id, organization: orgId(req) }, body, { new: true }).populate({ path: "sprints", select: "name status startDate endDate plannedPoints completedPoints riskScore organization project", populate: { path: "project", select: "key name organization" } });
     return cycle ? res.json({ cycle }) : res.status(404).json({ message: "Cycle not found" });
   })
   .delete(requireRole(["admin", "manager"]), async (req: AuthRequest, res) => {
+    const existing = await Cycle.findOne({ _id: req.params.id, organization: orgId(req) }).populate({ path: "sprints", populate: { path: "project", select: "organization members" } });
+    if (!existing) return res.status(404).json({ message: "Cycle not found" });
+    if (!hasWorkspaceWideAccess(req) && !(existing.sprints || []).some((sprint: any) => canAccessProject(req, sprint.project))) return res.status(403).json({ message: "You do not have access to this cycle" });
     const cycle = await Cycle.findOneAndDelete({ _id: req.params.id, organization: orgId(req) });
     return cycle ? res.status(204).send() : res.status(404).json({ message: "Cycle not found" });
   });
@@ -257,12 +282,24 @@ router.route("/sprints/:id")
   .patch(requireRole(["admin", "manager"]), async (req: AuthRequest, res) => {
     const body = parseOr400(sprintSchema.partial(), req.body, res);
     if (!body) return;
-    if (body.project && !(await Project.exists({ _id: body.project, organization: orgId(req) }))) return res.status(404).json({ message: "Project not found" });
+    const existing = await Sprint.findOne({ _id: req.params.id, organization: orgId(req) });
+    if (!existing) return res.status(404).json({ message: "Sprint not found" });
+    const existingProject = await Project.findOne({ _id: existing.project, organization: orgId(req) });
+    if (!canManageProject(req, existingProject)) return res.status(403).json({ message: "You do not have access to this sprint" });
+    if (body.project) {
+      const targetProject = await Project.findOne({ _id: body.project, organization: orgId(req) });
+      if (!targetProject) return res.status(404).json({ message: "Project not found" });
+      if (!canManageProject(req, targetProject)) return res.status(403).json({ message: "You do not have access to the target project" });
+    }
     const sprint = await Sprint.findOneAndUpdate({ _id: req.params.id, organization: orgId(req) }, body, { new: true }).populate("project", "key name organization");
     if (!sprint) return res.status(404).json({ message: "Sprint not found" });
     return res.json({ sprint });
   })
   .delete(requireRole(["admin", "manager"]), async (req: AuthRequest, res) => {
+    const existing = await Sprint.findOne({ _id: req.params.id, organization: orgId(req) });
+    if (!existing) return res.status(404).json({ message: "Sprint not found" });
+    const project = await Project.findOne({ _id: existing.project, organization: orgId(req) });
+    if (!canManageProject(req, project)) return res.status(403).json({ message: "You do not have access to this sprint" });
     const sprint = await Sprint.findOneAndDelete({ _id: req.params.id, organization: orgId(req) });
     if (!sprint) return res.status(404).json({ message: "Sprint not found" });
     await Ticket.updateMany({ sprint: sprint._id, organization: orgId(req) }, { $unset: { sprint: "" } });
@@ -271,24 +308,25 @@ router.route("/sprints/:id")
 
 router.route("/tickets")
   .get(async (req: AuthRequest, res) => {
-    const querySchema = listQuerySchema.extend({ status: z.enum(ticketStatuses).optional(), priority: z.enum(priorityLevels).optional(), project: z.string().optional(), sprint: z.string().optional(), assignee: z.string().optional(), label: z.string().optional() });
+    const querySchema = listQuerySchema.extend({ cursor: z.string().max(500).optional(), q: z.string().trim().max(100).optional(), status: z.enum(ticketStatuses).optional(), priority: z.enum(priorityLevels).optional(), project: z.string().optional(), sprint: z.string().optional(), assignee: z.string().optional(), label: z.string().optional() });
     const query = parseOr400(querySchema, req.query, res);
     if (!query) return;
-    const searchPattern = query.search
-      ? new RegExp(escapeRegExp(query.search), "i")
+    const page = query.cursor ? decodeTicketCursor(query.cursor) : query.page;
+    const search = query.q || query.search;
+    const sort = allowedTicketSorts.has(query.sort) ? query.sort : "-createdAt";
+    const searchPattern = search
+      ? new RegExp(escapeRegExp(search), "i")
       : undefined;
     const labelPattern = query.label
       ? new RegExp(`^${escapeRegExp(query.label)}$`, "i")
       : undefined;
-    const accessibleProjectIds = req.user!.role === "admin"
-      ? null
-      : (await Project.find({ organization: orgId(req), members: userId(req) }).select("_id")).map((project) => project._id);
+    const visibleProjectIds = await accessibleProjectIds(req);
     const filter = {
       ...orgFilter(req),
-      ...(accessibleProjectIds ? { project: { $in: accessibleProjectIds } } : {}),
+      ...(visibleProjectIds ? { project: { $in: visibleProjectIds } } : {}),
       ...(query.status && { status: query.status }),
       ...(query.priority && { priority: query.priority }),
-      ...(query.project && { project: accessibleProjectIds ? { $in: accessibleProjectIds.filter((id) => String(id) === query.project) } : query.project }),
+      ...(query.project && { project: visibleProjectIds ? { $in: visibleProjectIds.filter((id) => String(id) === query.project) } : query.project }),
       ...(query.sprint && { sprint: query.sprint }),
       ...(query.assignee && { assignee: query.assignee }),
       ...(labelPattern && { labels: labelPattern }),
@@ -300,20 +338,22 @@ router.route("/tickets")
         ],
       }),
     };
-    const [tickets, total] = await Promise.all([Ticket.find(filter).sort(query.sort).skip((query.page - 1) * query.limit).limit(query.limit).populate(ticketPopulation), Ticket.countDocuments(filter)]);
-    return res.json({ tickets, meta: pageMeta(query.page, query.limit, total) });
+    const [tickets, total] = await Promise.all([Ticket.find(filter).sort(sort).skip((page - 1) * query.limit).limit(query.limit).populate(ticketPopulation), Ticket.countDocuments(filter)]);
+    const nextCursor = page * query.limit < total ? encodeTicketCursor(page + 1) : null;
+    return res.json({ items: tickets, tickets, nextCursor, total, meta: pageMeta(page, query.limit, total) });
   })
   .post(requireRole(["admin", "manager", "engineer", "designer"]), async (req: AuthRequest, res) => {
     const body = parseOr400(ticketSchema, req.body, res);
     if (!body) return;
     const [assignee, project, sprint, organization] = await measureAsync("tickets.create.validate", () => Promise.all([
-      OrganizationMembership.exists({ user: body.assignee, organization: orgId(req), status: "active" }),
+      body.assignee ? OrganizationMembership.exists({ user: body.assignee, organization: orgId(req), status: "active" }) : true,
       Project.findOne({ _id: body.project, organization: orgId(req) }),
-      Sprint.exists({ _id: body.sprint, organization: orgId(req) }),
+      body.sprint ? Sprint.findOne({ _id: body.sprint, organization: orgId(req) }) : null,
       Organization.findById(orgId(req)),
     ]));
-    if (!assignee || !project || !sprint) return res.status(404).json({ message: "Assignee, project, or sprint not found" });
-    if (req.user!.role !== "admin" && !project.members.map(String).includes(userId(req))) return res.status(403).json({ message: "You do not have access to this project" });
+    if ((body.assignee && !assignee) || !project || (body.sprint && !sprint)) return res.status(404).json({ message: "Assignee, project, or sprint not found" });
+    if (!canAccessProject(req, project)) return res.status(403).json({ message: "You do not have access to this project" });
+    if (sprint && String((sprint as any).project) !== String(project._id)) return res.status(400).json({ message: "Sprint does not belong to the selected project" });
     const now = new Date();
     const ticketId = await measureAsync("tickets.create.allocate_id", () => nextTicketId(req, { _id: String(project._id), key: project.key }));
     const ticket = await measureAsync("tickets.create.insert", () => Ticket.create({ ...body, ...slaFieldsForTicket(body.priority, now, organization?.settings?.slaPolicy), slaStatus: "healthy", organization: orgId(req), reporter: userId(req), ticketId, history: [{ event: "Created", createdAt: now }], statusTransitions: [statusTransition(undefined, body.status, now, userId(req))] }));
@@ -346,6 +386,13 @@ router.patch("/tickets/:id", requireRole(["admin", "manager", "engineer", "desig
     body.sprint ? Sprint.exists({ _id: body.sprint, organization: orgId(req), ...(body.project ? { project: body.project } : {}) }) : true,
   ]);
   if (checks.some((value) => !value)) return res.status(400).json({ message: "Assignee, project, or sprint is invalid for this organization" });
+  if (body.project) {
+    const targetProject = await Project.findOne({ _id: body.project, organization: orgId(req) });
+    if (!canAccessProject(req, targetProject)) return res.status(403).json({ message: "You do not have access to the target project" });
+  }
+  if (body.sprint && body.project && !(await Sprint.exists({ _id: body.sprint, project: body.project, organization: orgId(req) }))) return res.status(400).json({ message: "Sprint does not belong to the selected project" });
+  const previousStatus = existing.status;
+  const previousAssignee = String(existing.assignee || "");
   const update: Record<string, unknown> = { ...body };
   if (body.priority) {
     const organization = await Organization.findById(orgId(req));
@@ -354,6 +401,8 @@ router.patch("/tickets/:id", requireRole(["admin", "manager", "engineer", "desig
   const ticket = await Ticket.findOneAndUpdate({ _id: req.params.id, organization: orgId(req) }, update, { new: true }).populate(ticketPopulation);
   if (!ticket) return res.status(404).json({ message: "Ticket not found" });
   await applySlaState(ticket).save();
+  if (body.status && body.status !== previousStatus) await applyWorkspaceRules(orgId(req)!, "ticket.status.changed", ticket);
+  if (body.assignee !== undefined && String(body.assignee || "") !== previousAssignee) await applyWorkspaceRules(orgId(req)!, "ticket.assigned", ticket);
   return res.json({ ticket });
 });
 
@@ -392,12 +441,13 @@ router.post("/tickets/:id/comments", requireRole(["admin", "manager", "engineer"
   if (!body) return;
   const user = await User.findById(userId(req));
   const ticket = await Ticket.findOne({ _id: req.params.id, organization: orgId(req) });
-  if (!ticket) return res.status(404).json({ message: "Ticket not found" });
+  if (!(await requireTicketAccess(req, res, ticket)) || !ticket) return;
   const now = new Date();
   ticket.comments.push({ author: user?.name ?? req.user!.email, authorId: userId(req), body: body.body, createdAt: now });
   if (!ticket.firstRespondedAt) ticket.firstRespondedAt = now;
   applySlaState(ticket, now);
   await ticket.save();
+  await applyWorkspaceRules(orgId(req)!, "ticket.comment.created", ticket);
   return res.status(201).json({ ticket: await ticket.populate(ticketPopulation) });
 });
 
@@ -440,6 +490,8 @@ router.post("/tickets/:id/work-logs", requireRole(["admin", "manager", "engineer
   const body = parseOr400(z.object({ hours: z.number().min(0.25).max(24), note: z.string().min(1) }), req.body, res);
   if (!body) return;
   const user = await User.findById(userId(req));
+  const existing = await Ticket.findOne({ _id: req.params.id, organization: orgId(req) });
+  if (!(await requireTicketAccess(req, res, existing)) || !existing) return;
   const ticket = await Ticket.findOneAndUpdate(
     { _id: req.params.id, organization: orgId(req) },
     { $push: { workLogs: { author: user?.name ?? req.user!.email, authorId: userId(req), hours: body.hours, note: body.note, createdAt: new Date() } } },
@@ -452,6 +504,8 @@ router.post("/tickets/:id/work-logs", requireRole(["admin", "manager", "engineer
 router.patch("/tickets/:id/dependencies", requireRole(["admin", "manager"]), async (req: AuthRequest, res) => {
   const body = parseOr400(z.object({ dependencies: z.array(z.string()) }), req.body, res);
   if (!body) return;
+  const existing = await Ticket.findOne({ _id: req.params.id, organization: orgId(req) });
+  if (!(await requireTicketAccess(req, res, existing)) || !existing) return;
   const ticket = await Ticket.findOneAndUpdate({ _id: req.params.id, organization: orgId(req) }, { dependencies: body.dependencies, blocked: body.dependencies.length > 0 }, { new: true }).populate(ticketPopulation);
   if (!ticket) return res.status(404).json({ message: "Ticket not found" });
   return res.json({ ticket });

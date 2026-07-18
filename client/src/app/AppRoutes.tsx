@@ -28,10 +28,14 @@ function AdminOnly({ children }: { children: React.ReactNode }) {
 export function AppRoutes({
   density,
   setDensity,
+  theme,
+  setTheme,
   toast,
 }: {
   density: string;
   setDensity: (s: string) => void;
+  theme: string;
+  setTheme: (s: string) => void;
   toast: (s: string) => void;
 }) {
   return (
@@ -50,10 +54,10 @@ export function AppRoutes({
       <Route path="/sla" element={<SlaPage toast={toast} />} />
       <Route path="/sprints/new" element={<FormPage type="sprint" toast={toast} />} />
       <Route path="/sprints/risk" element={<RiskPage />} />
-      <Route path="/sprints/sprint-risk" element={<RiskPage />} />
-      <Route path="/sprints/sprint risk" element={<RiskPage />} />
-      <Route path="/sprint-risk" element={<RiskPage />} />
-      <Route path="/sprint risk" element={<RiskPage />} />
+      <Route path="/sprints/sprint-risk" element={<Navigate to="/sprints/risk" replace />} />
+      <Route path="/sprints/sprint risk" element={<Navigate to="/sprints/risk" replace />} />
+      <Route path="/sprint-risk" element={<Navigate to="/sprints/risk" replace />} />
+      <Route path="/sprint risk" element={<Navigate to="/sprints/risk" replace />} />
       <Route path="/sprints/:sprintId" element={<SprintDetail />} />
       <Route path="/sprints/:sprintId/risk" element={<RiskPage />} />
       <Route path="/sprints/:sprintId/complete" element={<CompleteSprint toast={toast} />} />
@@ -68,7 +72,7 @@ export function AppRoutes({
       <Route path="/resources/*" element={<ResourcesLive toast={toast} />} />
       <Route path="/organization" element={<AdminOnly><OrganizationLive toast={toast} /></AdminOnly>} />
       <Route path="/groups" element={<AdminOnly><GroupsLive toast={toast} /></AdminOnly>} />
-      <Route path="/settings/*" element={<Settings density={density} setDensity={setDensity} toast={toast} />} />
+      <Route path="/settings/*" element={<Settings theme={theme} setTheme={setTheme} density={density} setDensity={setDensity} toast={toast} />} />
       <Route path="/change-password" element={<ChangePasswordLive toast={toast} />} />
       <Route path="/sessions" element={<Sessions toast={toast} />} />
       <Route path="/integrations/*" element={<AdminOnly><IntegrationsLive toast={toast} /></AdminOnly>} />

@@ -2,7 +2,7 @@ import React, { useEffect, useState } from "react";
 import * as Icons from "lucide-react";
 import { useWorkspace } from "../workspace";
 import { api } from "../../api";
-import { clearSession, saveSession } from "../../api";
+import { clearSession } from "../../api";
 import { appConfirm, appForm, appPrompt } from "../components/AppDialog";
 import { Avatar, Badge, CardTitle, Empty, PageHead, Progress } from "../components/ui";
 import { SettingsNav } from "./SettingsPages";
@@ -241,11 +241,9 @@ export function OrganizationLive({ toast }: { toast: (s: string) => void }) {
   };
 
   const switchToCreatedWorkspace = async (workspace: any) => {
-    const session = await api<any>(`/workspaces/${workspace._id || workspace.id}/switch`, {
+    await api<any>(`/workspaces/${workspace._id || workspace.id}/switch`, {
       method: "POST",
-      body: JSON.stringify({ refreshToken: localStorage.getItem("itrack_refresh_token") }),
     });
-    saveSession(session);
     window.location.assign("/dashboard");
   };
 

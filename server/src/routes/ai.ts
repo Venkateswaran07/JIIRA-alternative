@@ -5,6 +5,7 @@ import type {
   ChatCompletionTool,
 } from "openai/resources/chat/completions";
 import { z } from "zod";
+import { aiRateLimit } from "../middleware/rateLimits.js";
 import { aiEndpointsForRole, canRoleAccessAiEndpoint, isConfirmationRequired, normalizeAiPath } from "../aiAccess.js";
 import { mutationContractFor, mutationContractGuidanceForRole } from "../aiContracts.js";
 import { apiCatalog } from "../apiCatalog.js";
@@ -22,6 +23,7 @@ import { OrganizationMembership } from "../models/WorkspaceAccess.js";
 import { generatedTicketSchema, normalizeGeneratedTicketPlan } from "../schemas/ai.js";
 
 const router = Router();
+router.use(aiRateLimit);
 router.use(requireAuth);
 router.use(requireWorkspace);
 router.use(enforceApiAccess);

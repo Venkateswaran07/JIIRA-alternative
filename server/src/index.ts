@@ -1,7 +1,7 @@
 import type { Request, Response } from "express";
 import { createApp } from "./app.js";
 import { connectDb } from "./config/db.js";
-import { env } from "./config/env.js";
+import { assertRuntimeConfig, env } from "./config/env.js";
 
 const app = createApp();
 let databaseConnection: Promise<void> | undefined;
@@ -16,6 +16,7 @@ function ensureDatabaseConnection() {
 
 export default async function handler(req: Request, res: Response) {
   try {
+    assertRuntimeConfig();
     await ensureDatabaseConnection();
     app(req, res);
   } catch (error) {
@@ -27,6 +28,7 @@ export default async function handler(req: Request, res: Response) {
 }
 
 if (!process.env.VERCEL) {
+  assertRuntimeConfig();
   await ensureDatabaseConnection();
   app.listen(env.port, () => {
     console.log(`I-TRACK API listening on http://localhost:${env.port}`);

@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from "react";
 import { useNavigate, useSearchParams, NavLink } from "react-router-dom";
 import * as Icons from "lucide-react";
-import { api, login, saveSession, getToken, googleLoginUrl } from "../../api";
+import { api, hasSession, login, googleLoginUrl } from "../../api";
 import { Badge } from "../components/ui";
 import { cx, fmt } from "../../utils/ui";
 import { appForm } from "../components/AppDialog";
@@ -69,7 +69,6 @@ export function AuthPageLive({ type }: { type: string }) {
           method: "POST",
           body: JSON.stringify({ email: otpChallenge.email, otp: data.get("otp"), purpose: otpChallenge.purpose }),
         });
-        saveSession(session);
         nav(session.next || "/dashboard");
         location.reload();
         return;
@@ -99,7 +98,6 @@ export function AuthPageLive({ type }: { type: string }) {
           setError("We sent a 6-digit verification code to your email.");
           return;
         }
-        saveSession(session);
         nav(session.next || "/onboarding/workspace");
         location.reload();
         return;
@@ -132,8 +130,6 @@ export function AuthPageLive({ type }: { type: string }) {
         method: "POST",
         body: JSON.stringify({ token, password, name: data.get("name") || undefined }),
       });
-      localStorage.setItem("itrack_token", session.token);
-      localStorage.setItem("itrack_refresh_token", session.refreshToken);
       nav("/dashboard");
       location.reload();
       return;
@@ -289,18 +285,17 @@ export function GoogleAuthCallback() {
   const nav = useNavigate();
   const [error, setError] = useState("");
   useEffect(() => {
-    const params = new URLSearchParams(window.location.hash.slice(1));
-    const token = params.get("token");
-    const refreshToken = params.get("refreshToken");
-    const next = params.get("next") || "/dashboard";
-    if (!token || !refreshToken) {
-      setError("Google sign-in did not return a valid session.");
-      return;
-    }
-    saveSession({ token, refreshToken });
-    window.history.replaceState(null, "", "/auth/google/callback");
-    nav(next, { replace: true });
-    window.location.reload();
+    const params = new URLSearchParams(window.location.search);
+    const requestedNext = params.get("next") || "/dashboard";
+    const next = requestedNext.startsWith("/") && !requestedNext.startsWith("//") ? requestedNext : "/dashboard";
+    hasSession()
+      .then((authenticated) => {
+        if (!authenticated) throw new Error("Google sign-in did not return a valid session.");
+        window.history.replaceState(null, "", "/auth/google/callback");
+        nav(next, { replace: true });
+        window.location.reload();
+      })
+      .catch((err) => setError(err instanceof Error ? err.message : "Google sign-in failed."));
   }, [nav]);
   return (
     <div className="app-loading">
@@ -328,16 +323,16 @@ export function InvitationAcceptPage() {
     try {
       if (preview.accountExists && otpStep === "login") {
         const session = await api<any>("/auth/verify-otp", { method: "POST", body: JSON.stringify({ email: preview.invitation.email, otp: values.get("otp"), purpose: "login" }) });
-        saveSession(session); setOtpStep("invite"); return;
+        setOtpStep("invite"); return;
       }
-      if (preview.accountExists && !getToken()) {
+      if (preview.accountExists && !(await hasSession())) {
         const session = await login(preview.invitation.email, String(values.get("password")));
         if (session.requiresOtp) { setOtpStep("login"); setError("We sent a login code to your email. Enter it to continue."); return; }
       }
       const password = String(values.get("password") || "");
       if (!preview.accountExists && password !== String(values.get("confirmPassword") || "")) throw new Error("Passwords do not match");
       const session = await api<any>("/auth/accept-invite", { method: "POST", body: JSON.stringify({ token, otp: values.get("otp"), ...(!preview.accountExists ? { name: values.get("name"), password } : {}) }) });
-      saveSession(session); window.location.assign("/dashboard");
+      window.location.assign("/dashboard");
     } catch (e) { setError(e instanceof Error ? e.message : "Unable to accept invitation"); } finally { setBusy(false); }
   };
 

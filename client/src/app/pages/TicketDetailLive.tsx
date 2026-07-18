@@ -32,10 +32,25 @@ export function TicketDetailLive({ toast }: { toast: (s: string) => void }) {
     resources,
   } = useWorkspace();
   const [tab, setTab] = useState("comments");
+  const [directTicket, setDirectTicket] = useState<any>(null);
+  const [detailLoading, setDetailLoading] = useState(true);
+  const [detailError, setDetailError] = useState("");
 
-  const raw = (dashboard?.tickets || []).find(
+  const dashboardTicket = (dashboard?.tickets || []).find(
     (item: any) => item.ticketId === ticketId,
   );
+  useEffect(() => {
+    let active = true;
+    setDetailLoading(true);
+    setDetailError("");
+    void api<any>(`/tickets/${encodeURIComponent(ticketId || "")}`)
+      .then((result) => { if (active) setDirectTicket(result.ticket); })
+      .catch((error) => { if (active) { setDirectTicket(null); setDetailError(error instanceof Error ? error.message : "Unable to load ticket"); } })
+      .finally(() => { if (active) setDetailLoading(false); });
+    return () => { active = false; };
+  }, [ticketId, dashboard?.tickets]);
+
+  const raw = directTicket || (!detailLoading && !detailError ? dashboardTicket : null);
 
   const [title, setTitle] = useState(raw?.title || "");
   const [desc, setDesc] = useState(raw?.description || "");
@@ -62,11 +77,12 @@ export function TicketDetailLive({ toast }: { toast: (s: string) => void }) {
     );
   }, [raw]);
 
+  if (detailLoading && !raw) return <div className="app-loading"><Icons.LoaderCircle className="spin" /><p>Loading ticket…</p></div>;
   if (!raw)
     return (
       <Empty
         title="Ticket not found"
-        body="This ticket does not exist in the current workspace."
+        body={detailError || "This ticket does not exist in the current workspace."}
         action={{ label: "Back to tickets", to: "/tickets" }}
       />
     );
@@ -299,23 +315,27 @@ export function TicketDetailLive({ toast }: { toast: (s: string) => void }) {
       return;
     }
     try {
-      const dataUrl = await new Promise<string>((resolve, reject) => {
-        const reader = new FileReader();
-        reader.onload = () => resolve(String(reader.result));
-        reader.onerror = () => reject(new Error("Unable to read this file"));
-        reader.readAsDataURL(file);
-      });
-      await mutate(() =>
-        api(`/tickets/${raw._id}/attachments`, {
+      try {
+        const presigned = await api<any>(`/tickets/${raw._id}/attachments/presign`, {
           method: "POST",
-          body: JSON.stringify({
-            name: file.name,
-            dataUrl,
-            mimeType: file.type || "application/octet-stream",
-            size: file.size,
-          }),
-        }),
-      );
+          body: JSON.stringify({ name: file.name, mimeType: file.type || "application/octet-stream", size: file.size }),
+        });
+        const uploadBody = new FormData();
+        uploadBody.append("cacheControl", "3600");
+        uploadBody.append("", file);
+        const uploadResponse = await fetch(presigned.upload.signedUrl, { method: "PUT", headers: { "x-upsert": "false" }, body: uploadBody });
+        if (!uploadResponse.ok) throw new Error("Direct storage upload failed");
+        await mutate(() => api(`/tickets/${raw._id}/attachments/${presigned.attachment.id}/complete`, { method: "POST" }));
+      } catch (presignError) {
+        if (!(presignError instanceof Error && /Signed attachment uploads require Supabase Storage|storage is unavailable/i.test(presignError.message))) throw presignError;
+        const dataUrl = await new Promise<string>((resolve, reject) => {
+          const reader = new FileReader();
+          reader.onload = () => resolve(String(reader.result));
+          reader.onerror = () => reject(new Error("Unable to read this file"));
+          reader.readAsDataURL(file);
+        });
+        await mutate(() => api(`/tickets/${raw._id}/attachments`, { method: "POST", body: JSON.stringify({ name: file.name, dataUrl, mimeType: file.type || "application/octet-stream", size: file.size }) }));
+      }
       toast("File uploaded and stored");
     } catch (err) {
       toast(err instanceof Error ? err.message : "Failed to add attachment");

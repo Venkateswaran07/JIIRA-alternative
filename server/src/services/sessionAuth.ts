@@ -96,5 +96,16 @@ export async function sessionResponse(user: any, membership?: any, userAgent?: s
     pendingInvitationsFor(user.email, company?.id),
   ]);
   if (response) setSessionCookies(response, tokens.token, tokens.refreshToken);
-  return { ...tokens, user: publicUser(user), company: publicCompany(company), companyRole: companyMembership?.role || null, organization: publicOrganization(organization), workspace: publicOrganization(organization), activeMembership: membership ? { id: membership.id, role: membership.role, status: membership.status || "active" } : null, memberships, pendingInvitations, next: membership ? (membership.role !== "admin" || organization?.onboardingCompletedAt ? "/dashboard" : "/onboarding/project") : "/onboarding/workspace" };
+  return {
+    ...(env.nodeEnv === "production" ? {} : tokens),
+    user: publicUser(user),
+    company: publicCompany(company),
+    companyRole: companyMembership?.role || null,
+    organization: publicOrganization(organization),
+    workspace: publicOrganization(organization),
+    activeMembership: membership ? { id: membership.id, role: membership.role, status: membership.status || "active" } : null,
+    memberships,
+    pendingInvitations,
+    next: membership ? (membership.role !== "admin" || organization?.onboardingCompletedAt ? "/dashboard" : "/onboarding/project") : "/onboarding/workspace",
+  };
 }

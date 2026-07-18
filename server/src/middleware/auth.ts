@@ -7,6 +7,9 @@ import type { UserRole } from "../models/User.js";
 import { OrganizationMembership } from "../models/WorkspaceAccess.js";
 import { CompanyGroupMember, CompanyMembership, WorkspaceGroupAccess } from "../models/Company.js";
 import { Organization } from "../models/Organization.js";
+import { Integration } from "../models/Operational.js";
+import { User } from "../models/User.js";
+import { hashSha256 } from "../lib/crypto.js";
 import { permissionsForRole, rolePriority } from "../services/roles.js";
 import { permissionForEndpoint, type Permission } from "../constants/permissions.js";
 
@@ -49,17 +52,30 @@ export function invalidateWorkspaceMembership(userId: string, organizationId: st
   workspaceMembershipLoads.delete(key);
 }
 
-export function requireAuth(req: AuthRequest, res: Response, next: NextFunction) {
+export async function requireAuth(req: AuthRequest, res: Response, next: NextFunction) {
   const header = req.headers.authorization;
-  const token = header?.startsWith("Bearer ") ? header.slice(7) : readCookie(req.headers.cookie, ACCESS_COOKIE);
+  const apiKeyHeader = req.headers["x-api-key"];
+  const apiKey = typeof apiKeyHeader === "string" ? apiKeyHeader : undefined;
+  const bearer = header?.startsWith("Bearer ") ? header.slice(7) : undefined;
+  const token = bearer || readCookie(req.headers.cookie, ACCESS_COOKIE);
+  const externalToken = apiKey || (bearer?.startsWith("itrk_") ? bearer : undefined);
+  if (externalToken) {
+    const integration = await Integration.findOne({ kind: "api-token", secretHash: hashSha256(externalToken), active: true });
+    if (!integration) return res.status(401).json({ error: { code: "UNAUTHENTICATED", message: "Authentication is required" } });
+    const user = await User.findById(integration.createdBy).select("email");
+    if (!user) return res.status(401).json({ error: { code: "UNAUTHENTICATED", message: "Authentication is required" } });
+    req.user = { userId: String(integration.createdBy), organizationId: String(integration.organization), email: user.email };
+    await Integration.findOneAndUpdate({ _id: integration._id }, { lastUsedAt: new Date() });
+    return next();
+  }
   if (!token) {
-    return res.status(401).json({ message: "Missing bearer token" });
+    return res.status(401).json({ error: { code: "UNAUTHENTICATED", message: "Authentication is required" } });
   }
   try {
     req.user = jwt.verify(token, env.jwtSecret) as AuthRequest["user"];
     return next();
   } catch {
-    return res.status(401).json({ message: "Invalid or expired token" });
+    return res.status(401).json({ error: { code: "UNAUTHENTICATED", message: "Authentication is required" } });
   }
 }
 

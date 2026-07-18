@@ -2,7 +2,7 @@ import React, { useState } from "react";
 import { useParams, useNavigate } from "react-router-dom";
 import * as Icons from "lucide-react";
 import { useWorkspace } from "../workspace";
-import { api, saveSession } from "../../api";
+import { api } from "../../api";
 import { appForm } from "../components/AppDialog";
 import { Badge, PageHead } from "../components/ui";
 import { fmt } from "../../utils/ui";
@@ -39,8 +39,8 @@ export function OnboardingFlow({ toast }: { toast: (message: string) => void }) 
     setBusy(true); setError(""); const values = new FormData(form);
     try {
       if (step === "workspace") {
-        const session = await api<any>("/workspaces", { method: "POST", body: JSON.stringify({ name: values.get("name") }) });
-        saveSession(session); await refetch(); nav("/onboarding/project");
+        await api<any>("/workspaces", { method: "POST", body: JSON.stringify({ name: values.get("name") }) });
+        await refetch(); nav("/onboarding/project");
       } else if (step === "project") {
         await api("/projects", { method: "POST", body: JSON.stringify({ name: values.get("name"), key: values.get("key"), description: values.get("description"), status: "active", progress: 0, riskLevel: "medium", activeSprint: "Planning", members: [] }) });
         nav("/onboarding/invite");
@@ -60,8 +60,7 @@ export function OnboardingFlow({ toast }: { toast: (message: string) => void }) 
     });
     const otp = values?.otp?.trim();
     if (!otp) return;
-    const session = await api<any>("/auth/accept-invite", { method: "POST", body: JSON.stringify({ invitationId, otp }) });
-    saveSession(session);
+    await api<any>("/auth/accept-invite", { method: "POST", body: JSON.stringify({ invitationId, otp }) });
     window.location.assign("/dashboard");
   };
 

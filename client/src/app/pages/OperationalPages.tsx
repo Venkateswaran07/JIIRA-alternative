@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from "react";
-import { NavLink, useNavigate } from "react-router-dom";
+import { NavLink, useNavigate, useSearchParams } from "react-router-dom";
 import * as Icons from "lucide-react";
 import { useWorkspace } from "../workspace";
 import { api, apiFetch } from "../../api";
@@ -369,7 +369,6 @@ export function IntegrationsLive({ toast }: { toast: (s: string) => void }) {
   );
 }
 
-import { useSearchParams } from "react-router-dom";
 export function BacklogLive({
   toast,
   projectFilter,
@@ -378,9 +377,23 @@ export function BacklogLive({
   projectFilter?: string;
 }) {
   const navigate = useNavigate();
-  const { tickets: wsTickets, role, labelOptions } = useWorkspace();
+  const [params] = useSearchParams();
+  const { role, labelOptions } = useWorkspace();
+  const [serverTickets, setServerTickets] = useState<Ticket[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
   const isLeader = role === "admin" || role === "manager";
-  const backlog = wsTickets.filter((ticket) => {
+  useEffect(() => {
+    let active = true;
+    const query = new URLSearchParams();
+    if (projectFilter) query.set("project", projectFilter);
+    if (params.get("q")) query.set("q", params.get("q")!);
+    if (params.get("label")) query.set("label", params.get("label")!);
+    setLoading(true); setError("");
+    void api<any>(`/backlog?${query.toString()}`).then((result) => { if (active) setServerTickets(result.tickets || result.items || []); }).catch((requestError) => { if (active) { setServerTickets([]); setError(requestError instanceof Error ? requestError.message : "Unable to load backlog"); } }).finally(() => { if (active) setLoading(false); });
+    return () => { active = false; };
+  }, [projectFilter, params]);
+  const backlog = serverTickets.filter((ticket) => {
     if (ticket.status !== "Backlog") return false;
     if (projectFilter && ticket.project !== projectFilter) return false;
     return true;
@@ -409,7 +422,7 @@ export function BacklogLive({
             <span>{backlog.length} tickets</span>
           </div>
         </div>
-        {backlog.length ? (
+        {loading ? <div className="empty-state"><Icons.LoaderCircle className="spin" /><p>Loading backlog…</p></div> : error ? <div className="empty-state"><Icons.CircleAlert /><p>{error}</p></div> : backlog.length ? (
           <TicketTable rows={backlog} />
         ) : (
           <Empty

@@ -216,10 +216,14 @@ export function RolesSettings({ toast }: { toast: (s: string) => void }) {
 
 // ── Settings ─────────────────────────────────────────────────────────────────
 export function Settings({
+  theme,
+  setTheme,
   density,
   setDensity,
   toast,
 }: {
+  theme: string;
+  setTheme: (s: string) => void;
   density: string;
   setDensity: (s: string) => void;
   toast: (s: string) => void;
@@ -236,7 +240,6 @@ export function Settings({
         ? "Roles & permissions"
         : "Workspace defaults";
 
-  const [theme, setTheme] = useState(localStorage.getItem("theme") || "light");
   const [profName, setProfName] = useState(currentUser?.name || "");
   const [profSkills, setProfSkills] = useState((currentUser?.skills || []).join(", "));
   const [profCapacity, setProfCapacity] = useState(currentUser?.capacity || 40);

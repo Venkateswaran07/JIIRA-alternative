@@ -80,6 +80,24 @@ function operationOverrides(method: string, path: string) {
       },
     };
   }
+  if (method === "GET" && path === "/tickets") {
+    return {
+      summary: "List accessible tickets with server-side filtering and cursor pagination",
+      parameters: [
+        { name: "cursor", in: "query", schema: { type: "string" } },
+        { name: "limit", in: "query", schema: { type: "integer", minimum: 1, maximum: 100, default: 25 } },
+        { name: "q", in: "query", schema: { type: "string" } },
+        { name: "status", in: "query", schema: { type: "string" } },
+        { name: "project", in: "query", schema: { type: "string" } },
+        { name: "label", in: "query", schema: { type: "string" } },
+        { name: "sort", in: "query", schema: { type: "string", default: "-createdAt" } },
+      ],
+      responses: { "200": { description: "Paginated ticket list", content: { "application/json": { schema: { type: "object", required: ["items", "nextCursor", "total"], properties: { items: { type: "array", items: { type: "object" } }, nextCursor: { type: ["string", "null"] }, total: { type: "integer" } } } } } } },
+    };
+  }
+  if (method === "POST" && path === "/integrations/:kind/:id/test") {
+    return { summary: "Test an integration without exposing its secret", requestBody: { required: false, content: { "application/json": { schema: { type: "object", additionalProperties: false } } } }, responses: { "200": { description: "Integration test result", content: { "application/json": { schema: { type: "object", required: ["ok", "status"], properties: { ok: { type: "boolean" }, status: { type: "string" } } } } } }, "502": { description: "Delivery failed", content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } } } } };
+  }
   return {};
 }
 
@@ -93,7 +111,7 @@ function operation(method: string, path: string, group: string) {
     summary: `${method[0]}${method.slice(1).toLowerCase()} ${path}`,
     operationId: `${method.toLowerCase()}_${path.replace(/[:/\-]+/g, "_").replace(/^_|_$/g, "")}`,
     ...(parameters.length ? { parameters } : {}),
-    ...(isPublic ? { security: [] } : { security: [{ bearerAuth: [] }], "x-allowed-roles": roles }),
+    ...(isPublic ? { security: [] } : { security: [{ sessionCookie: [] }, { bearerAuth: [] }], "x-allowed-roles": roles }),
     ...(isConfirmationRequired(method, path) ? { "x-requires-confirmation": true } : {}),
     ...(method !== "GET" && method !== "DELETE" ? { requestBody: { required: false, content: { "application/json": { schema: { type: "object", additionalProperties: true } } } } } : {}),
     responses: {
@@ -125,7 +143,7 @@ export const openApiDocument = {
   tags: Object.keys(apiCatalog.groups).map((name) => ({ name })),
   paths,
   components: {
-    securitySchemes: { bearerAuth: { type: "http", scheme: "bearer", bearerFormat: "JWT" } },
+    securitySchemes: { sessionCookie: { type: "apiKey", in: "cookie", name: "itrack_access" }, bearerAuth: { type: "http", scheme: "bearer", bearerFormat: "JWT", description: "Legacy compatibility authentication; browser clients use the HttpOnly session cookie." } },
     schemas: { Error: errorSchema, AiExecuteRequest: aiExecuteRequestSchema, AiEndpoint: aiEndpointSchema },
     responses: {
       BadRequest: { description: "Invalid request", content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } } },

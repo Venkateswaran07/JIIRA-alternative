@@ -197,8 +197,21 @@ export function TicketTable({ rows }: { rows?: Ticket[] }) {
 
 export function TicketList() {
   const nav = useNavigate();
+  const [params] = useSearchParams();
   const { role, labelOptions } = useWorkspace();
+  const [rows, setRows] = useState<Ticket[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
   const isLeader = role === "admin" || role === "manager";
+  useEffect(() => {
+    let active = true;
+    const query = new URLSearchParams({ limit: "50", q: params.get("q") || "", label: params.get("label") || "", sort: params.get("sort") === "desc" ? "-createdAt" : "createdAt" });
+    if (!query.get("q")) query.delete("q");
+    if (!query.get("label")) query.delete("label");
+    setLoading(true); setError("");
+    void api<any>(`/tickets?${query.toString()}`).then((result) => { if (active) setRows(result.items || result.tickets || []); }).catch((requestError) => { if (active) { setRows([]); setError(requestError instanceof Error ? requestError.message : "Unable to load tickets"); } }).finally(() => { if (active) setLoading(false); });
+    return () => { active = false; };
+  }, [params]);
   return (
     <>
       <PageHead
@@ -217,7 +230,7 @@ export function TicketList() {
         labelOptions={labelOptions}
       />
       <section className="card no-pad">
-        <TicketTable />
+        {loading ? <div className="empty-state"><Icons.LoaderCircle className="spin" /><p>Loading tickets…</p></div> : error ? <div className="empty-state"><Icons.CircleAlert /><p>{error}</p></div> : <TicketTable rows={rows} />}
       </section>
     </>
   );

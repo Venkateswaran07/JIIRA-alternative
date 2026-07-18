@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useEffect, useState } from "react";
 import { useNavigate, useSearchParams, useParams, useLocation, Navigate } from "react-router-dom";
 import * as Icons from "lucide-react";
 import { useWorkspace } from "../workspace";
@@ -377,6 +377,20 @@ export function ProjectDetail() {
   const loc = useLocation();
 
   const p = projects.find((x) => x.key === projectId);
+  const [milestones, setMilestones] = useState<any[]>([]);
+  const [milestonesLoading, setMilestonesLoading] = useState(false);
+  const [milestonesError, setMilestonesError] = useState("");
+  useEffect(() => {
+    if (!p?.id) return;
+    let active = true;
+    setMilestonesLoading(true);
+    setMilestonesError("");
+    void api<any>(`/resources/milestone?project=${encodeURIComponent(p.id)}`)
+      .then((result) => { if (active) setMilestones(result.resources || []); })
+      .catch((error) => { if (active) { setMilestones([]); setMilestonesError(error instanceof Error ? error.message : "Unable to load milestones"); } })
+      .finally(() => { if (active) setMilestonesLoading(false); });
+    return () => { active = false; };
+  }, [p?.id]);
   if (!p)
     return (
       <Empty
@@ -481,23 +495,20 @@ export function ProjectDetail() {
             </section>
             <section className="card">
               <CardTitle title="Milestones" />
-              <div className="timeline">
-                {[
-                  "Design system ready",
-                  "Private beta",
-                  "General availability",
-                ].map((x, i) => (
-                  <div key={x}>
-                    <i className={i === 0 ? "done" : ""} />
+              {milestonesLoading ? <div className="empty-state"><Icons.LoaderCircle className="spin" /><p>Loading milestones…</p></div> : milestonesError ? <div className="empty-state"><Icons.CircleAlert /><p>{milestonesError}</p></div> : milestones.length ? <div className="timeline">
+                {milestones.map((milestone: any) => {
+                  const config = milestone.config || {};
+                  const targetDate = config.targetDate || config.dueDate || config.releaseDate;
+                  const isDone = /done|complete|released|closed/i.test(String(milestone.status || ""));
+                  return <div key={milestone._id || milestone.id}>
+                    <i className={isDone ? "done" : ""} />
                     <span>
-                      <b>{x}</b>
-                      <small>
-                        {i === 0 ? "Completed 8 Jul" : `Due ${18 + i * 7} Jul`}
-                      </small>
+                      <b>{milestone.name}</b>
+                      <small>{targetDate ? `${isDone ? "Completed" : "Due"} ${new Date(targetDate).toLocaleDateString()}` : milestone.status || "No target date"}</small>
                     </span>
-                  </div>
-                ))}
-              </div>
+                  </div>;
+                })}
+              </div> : <Empty title="No milestones" body="Create milestones in project resources to track delivery targets." />}
             </section>
           </div>
         </>

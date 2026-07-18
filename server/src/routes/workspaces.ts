@@ -3,6 +3,7 @@ import crypto from "node:crypto";
 import { Router } from "express";
 import jwt from "jsonwebtoken";
 import { z } from "zod";
+import { invitationRateLimit } from "../middleware/rateLimits.js";
 import { env } from "../config/env.js";
 import { ACCESS_COOKIE, readCookie } from "../lib/authCookies.js";
 import { effectiveWorkspaceMembership, invalidateWorkspaceMembership, requireAuth, requireWorkspace, type AuthRequest } from "../middleware/auth.js";
@@ -90,7 +91,7 @@ router.get("/invitations/preview", async (req, res) => {
 
 router.get("/invitations/pending", requireAuth, async (req: AuthRequest, res) => { const user = await User.findById(req.user!.userId); return user ? res.json({ invitations: await pendingInvitationsFor(user.email) }) : res.status(404).json({ message: "User not found" }); });
 
-router.post("/invitations", requireAuth, requireWorkspace, async (req: AuthRequest, res) => {
+router.post("/invitations", invitationRateLimit, requireAuth, requireWorkspace, async (req: AuthRequest, res) => {
   if (req.user!.role !== "admin") return res.status(403).json({ message: "Only admins can invite teammates" });
   const parsed = invitationBody.safeParse(req.body); if (!parsed.success) return res.status(400).json({ message: "Name, valid email, role, and capacity are required" });
   await ensureWorkspaceRoles(req.user!.organizationId!);
@@ -108,7 +109,7 @@ router.post("/invitations", requireAuth, requireWorkspace, async (req: AuthReque
   return res.status(201).json({ invitation: { id: invitation.id, ...parsed.data, email, status: invitation.status, expiresAt: invitation.expiresAt }, inviteUrl: invitationUrl, mailSent, ...(!mailSent && env.nodeEnv !== "production" ? { verificationCode: otp } : {}) });
 });
 
-router.post("/invitations/:id/resend", requireAuth, requireWorkspace, async (req: AuthRequest, res) => {
+router.post("/invitations/:id/resend", invitationRateLimit, requireAuth, requireWorkspace, async (req: AuthRequest, res) => {
   if (req.user!.role !== "admin") return res.status(403).json({ message: "Only admins can resend invitations" });
   const token = rawToken(); const otp = rawOtp(); const invitation = await Invitation.findOneAndUpdate({ _id: req.params.id, organization: req.user!.organizationId, status: "pending" }, { tokenHash: hashToken(token), otpHash: hashToken(otp), otpExpiresAt: new Date(Date.now() + INVITE_OTP_TTL_MS), otpUsedAt: null, expiresAt: new Date(Date.now() + INVITE_TTL_MS) }, { new: true });
   if (!invitation) return res.status(404).json({ message: "Invitation not found" });
