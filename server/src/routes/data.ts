@@ -73,6 +73,8 @@ router.get("/me", async (req: AuthRequest, res) => {
 });
 
 router.get("/dashboard", async (req: AuthRequest, res) => {
+  // Reconcile legacy/stale aggregates before returning workspace planning data.
+  await refreshWorkspaceProgress(orgId(req)!);
   const projectFilter = { ...orgFilter(req), ...projectScope(req) };
   const projectIds = (await Project.find(projectFilter).select("_id")).map((project) => project._id);
   const deliveryFilter = req.user!.role === "admin" ? orgFilter(req) : { ...orgFilter(req), project: { $in: projectIds } };

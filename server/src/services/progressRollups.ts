@@ -31,13 +31,18 @@ export async function refreshWorkspaceProgress(organization: string) {
 
   for (const sprint of sprints) {
     const rollup = ticketPointRollup(included.filter((ticket) => id(ticket.sprint) === id(sprint._id)));
-    sprint.plannedPoints = rollup.plannedPoints;
-    sprint.completedPoints = rollup.completedPoints;
-    await sprint.save();
+    if (Number(sprint.plannedPoints) !== rollup.plannedPoints || Number(sprint.completedPoints) !== rollup.completedPoints) {
+      sprint.plannedPoints = rollup.plannedPoints;
+      sprint.completedPoints = rollup.completedPoints;
+      await sprint.save();
+    }
   }
   for (const project of projects) {
-    project.progress = ticketPointRollup(included.filter((ticket) => id(ticket.project) === id(project._id))).progress;
-    await project.save();
+    const progress = ticketPointRollup(included.filter((ticket) => id(ticket.project) === id(project._id))).progress;
+    if (Number(project.progress) !== progress) {
+      project.progress = progress;
+      await project.save();
+    }
   }
   for (const epic of epics) {
     const name = String(epic.name || "").trim().toLocaleLowerCase();
@@ -45,12 +50,17 @@ export async function refreshWorkspaceProgress(organization: string) {
     const rollup = ticketPointRollup(included.filter((ticket) =>
       String(ticket.epic || "").trim().toLocaleLowerCase() === name && (!project || id(ticket.project) === project),
     ));
-    epic.config = { ...(epic.config || {}), progress: rollup.progress, plannedPoints: rollup.plannedPoints, completedPoints: rollup.completedPoints };
-    await epic.save();
+    if (Number(epic.config?.progress) !== rollup.progress || Number(epic.config?.plannedPoints) !== rollup.plannedPoints || Number(epic.config?.completedPoints) !== rollup.completedPoints) {
+      epic.config = { ...(epic.config || {}), progress: rollup.progress, plannedPoints: rollup.plannedPoints, completedPoints: rollup.completedPoints };
+      await epic.save();
+    }
   }
   for (const cycle of cycles) {
     const sprintIds = new Set((cycle.sprints || []).map(id));
-    cycle.status = statusForCycle(sprints.filter((sprint) => sprintIds.has(id(sprint._id))) as Array<{ status?: string }>);
-    await cycle.save();
+    const status = statusForCycle(sprints.filter((sprint) => sprintIds.has(id(sprint._id))) as Array<{ status?: string }>);
+    if (cycle.status !== status) {
+      cycle.status = status;
+      await cycle.save();
+    }
   }
 }
