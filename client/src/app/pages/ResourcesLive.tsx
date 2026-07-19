@@ -13,7 +13,7 @@ import {
   ResourceKind,
 } from "../components/ResourceVisualBuilder";
 import { WorkflowVisualEditor } from "../components/WorkflowVisualEditor";
-import { Badge, CardTitle, Empty, FilterBar, PageHead, Progress } from "../components/ui";
+import { Badge, CardTitle, Empty, FilterBar, Input, PageHead, Progress, Tabs } from "../components/ui";
 import { fmt } from "../../utils/ui";
 import { resourceKinds } from "../../constants/resources";
 import { resourceDisplayName } from "../../constants/terminology";
@@ -388,16 +388,19 @@ export function ResourcesLive({ toast }: { toast: (s: string) => void }) {
       </div>
 
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: "16px", marginBottom: "16px" }}>
-        <div className="resource-category-tabs" style={{ margin: 0, padding: 0, border: "none" }}>
-          {RESOURCE_CATEGORIES.map((cat: any) => (
-            <button key={cat.id} className={`resource-tab-btn ${activeCategory === cat.id ? "active" : ""}`} onClick={() => setActiveCategory(cat.id)}>
-              {cat.label}<span className="resource-tab-badge">{cat.id === "all" ? 15 : cat.kinds?.length || 0}</span>
-            </button>
-          ))}
-        </div>
+        <Tabs
+          className="resource-category-tabs"
+          value={activeCategory}
+          onChange={setActiveCategory}
+          ariaLabel="Resource categories"
+          items={RESOURCE_CATEGORIES.map((cat: any) => ({
+            value: cat.id,
+            label: <>{cat.label}<span className="resource-tab-badge">{cat.id === "all" ? 15 : cat.kinds?.length || 0}</span></>,
+          }))}
+        />
         <div style={{ position: "relative", width: "240px" }}>
           <Icons.Search size={14} style={{ position: "absolute", left: "10px", top: "50%", transform: "translateY(-50%)", color: "var(--muted)" }} />
-          <input type="text" value={searchFilter} onChange={(e) => setSearchFilter(e.target.value)} placeholder="Filter features..." style={{ width: "100%", paddingLeft: "30px", paddingRight: "10px", height: "32px", fontSize: "12px", borderRadius: "16px", border: "1px solid var(--border)", background: "var(--surface)" }} />
+          <Input type="search" aria-label="Filter resource features" value={searchFilter} onChange={(e) => setSearchFilter(e.target.value)} placeholder="Filter features..." style={{ width: "100%", paddingLeft: "30px", paddingRight: "10px", height: "32px", fontSize: "12px", borderRadius: "16px", border: "1px solid var(--border)", background: "var(--surface)" }} />
         </div>
       </div>
 

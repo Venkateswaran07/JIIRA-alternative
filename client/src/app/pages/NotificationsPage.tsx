@@ -2,7 +2,7 @@ import React, { useState } from "react";
 import * as Icons from "lucide-react";
 import { useWorkspace } from "../workspace";
 import { api } from "../../api";
-import { Badge, PageHead, Empty } from "../components/ui";
+import { Badge, Button, PageHead, Empty, Tabs } from "../components/ui";
 
 function notificationTitle(title: string) {
   return title.replace(/^ticket ticket\b/i, "Ticket");
@@ -60,40 +60,27 @@ export function Notifications({ toast }: { toast: (s: string) => void }) {
   return (
     <div className="notifications-page">
       <PageHead title="Notifications" desc="Updates that need your attention.">
-        <button
-          className="btn"
+        <Button
           onClick={markAll}
           disabled={!unreadCount || markingAll}
-          aria-busy={markingAll}
+          loading={markingAll}
+          loadingLabel="Marking read…"
         >
           <Icons.CheckCheck />
-          {markingAll ? "Marking read…" : "Mark all as read"}
-        </button>
+          Mark all as read
+        </Button>
       </PageHead>
       <div className="notification-toolbar">
-        <div className="notification-tabs" role="tablist" aria-label="Notification filters">
-          <button
-            type="button"
-            role="tab"
-            aria-selected={!unreadOnly}
-            className={!unreadOnly ? "active" : ""}
-            onClick={() => setUnreadOnly(false)}
-          >
-            All <Badge tone="purple">{notifications.length}</Badge>
-          </button>
-          <button
-            type="button"
-            role="tab"
-            aria-selected={unreadOnly}
-            className={unreadOnly ? "active" : ""}
-            onClick={() => setUnreadOnly(true)}
-          >
-            Unread
-            <Badge tone={unreadCount > 0 ? "orange" : "neutral"}>
-              {unreadCount}
-            </Badge>
-          </button>
-        </div>
+        <Tabs
+          className="notification-tabs"
+          value={unreadOnly ? "unread" : "all"}
+          onChange={(value) => setUnreadOnly(value === "unread")}
+          ariaLabel="Notification filters"
+          items={[
+            { value: "all", label: <>All <Badge tone="purple">{notifications.length}</Badge></> },
+            { value: "unread", label: <>Unread <Badge tone={unreadCount > 0 ? "orange" : "neutral"}>{unreadCount}</Badge></> },
+          ]}
+        />
         <span className="notification-summary">
           {unreadCount ? `${unreadCount} unread notification${unreadCount === 1 ? "" : "s"}` : "You're all caught up"}
         </span>

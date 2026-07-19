@@ -3,7 +3,7 @@ import { useSearchParams } from "react-router-dom";
 import * as Icons from "lucide-react";
 import { useWorkspace } from "../workspace";
 import { api } from "../../api";
-import { PageHead, Empty, FilterBar, ViewToggle, MetricCard } from "../components/ui";
+import { PageHead, Empty, FilterBar, ViewToggle, MetricCard, Tabs } from "../components/ui";
 import { TicketTable } from "./TicketPages";
 import { Board } from "./SprintPages";
 import { matchesTicket } from "./TicketPages";
@@ -99,24 +99,18 @@ export function MyWork({ toast }: { toast: (message: string) => void }) {
           <span className="eyebrow">WORK QUEUE</span>
           <b>Choose a focus</b>
         </div>
-        <div className="scope-tabs" role="tablist" aria-label="My work scope">
-          {[
-            ["assigned", "Assigned", assignedTickets.length],
-            ["attention", "Needs attention", attentionTickets.length],
-            ["watched", "Watched", watchedTickets.length],
-            ["completed", "Completed", completedTickets.length],
-          ].map(([value, label, count]) => (
-            <button
-              key={String(value)}
-              className={scope === value ? "active" : ""}
-              onClick={() => setScope(String(value))}
-              role="tab"
-              aria-selected={scope === value}
-            >
-              {label}<span>{count}</span>
-            </button>
-          ))}
-        </div>
+        <Tabs
+          className="scope-tabs"
+          value={scope}
+          onChange={setScope}
+          ariaLabel="My work scope"
+          items={[
+            { value: "assigned", label: <>Assigned<span>{assignedTickets.length}</span></> },
+            { value: "attention", label: <>Needs attention<span>{attentionTickets.length}</span></> },
+            { value: "watched", label: <>Watched<span>{watchedTickets.length}</span></> },
+            { value: "completed", label: <>Completed<span>{completedTickets.length}</span></> },
+          ]}
+        />
       </div>
       <FilterBar placeholder="Search my work…" labelOptions={labelOptions} />
       {view === "list" ? (

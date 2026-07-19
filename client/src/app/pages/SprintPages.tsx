@@ -830,69 +830,6 @@ export function CompleteSprint({ toast }: { toast: (s: string) => void }) {
   );
 }
 
-export function BacklogLive({
-  toast,
-  projectFilter,
-}: {
-  toast: (s: string) => void;
-  projectFilter?: string;
-}) {
-  const navigate = useNavigate();
-  const { tickets: wsTickets, role, labelOptions } = useWorkspace();
-  const isLeader = role === "admin" || role === "manager";
-  const backlog = wsTickets.filter((ticket) => {
-    if (ticket.status !== "Backlog") return false;
-    if (projectFilter && ticket.project !== projectFilter) return false;
-    return true;
-  });
-  return (
-    <>
-      <PageHead
-        title="Backlog"
-        desc="Live unplanned work from the workspace API."
-      >
-        {isLeader && (
-          <button
-            className="btn primary"
-            onClick={() => navigate("/tickets/new")}
-          >
-            <Icons.Plus />
-            Create ticket
-          </button>
-        )}
-      </PageHead>
-      <FilterBar placeholder="Search backlog…" labelOptions={labelOptions} />
-      <div className="queue-summary">
-        <span className="queue-summary-icon"><Icons.ListTodo /></span>
-        <span><b>{backlog.length} unplanned {backlog.length === 1 ? "ticket" : "tickets"}</b><small>Prioritize the next piece of work before it enters a sprint.</small></span>
-        <NavLink className="text-btn" to="/board?filter=open">Open delivery board <Icons.ArrowRight /></NavLink>
-      </div>
-      <section className="sprint-group">
-        <div className="sprint-group-head">
-          <div>
-            <Icons.ChevronDown />
-            <h2>Backlog</h2>
-            <span>{backlog.length} tickets</span>
-          </div>
-        </div>
-        {backlog.length ? (
-          <TicketTable rows={backlog} />
-        ) : (
-          <Empty
-            title="Backlog is empty"
-            body="There is no unplanned work in this workspace."
-            action={
-              isLeader
-                ? { label: "Create ticket", to: "/tickets/new" }
-                : undefined
-            }
-          />
-        )}
-      </section>
-    </>
-  );
-}
-
 export function CyclesLive({ toast }: { toast: (s: string) => void }) {
   const { dashboard, refetch, role } = useWorkspace();
   const [creating, setCreating] = useState(false);

@@ -4,7 +4,7 @@ import * as Icons from "lucide-react";
 import { useWorkspace } from "../workspace";
 import { api, apiFetch } from "../../api";
 import { appConfirm, appForm, appPrompt } from "../components/AppDialog";
-import { Badge, Button, Empty, PageHead } from "../components/ui";
+import { Badge, Button, Empty, ErrorState, LoadingState, PageHead } from "../components/ui";
 import { TicketTable } from "./TicketPages";
 import { fmt } from "../../utils/ui";
 import { FilterBar } from "../components/ui";
@@ -395,10 +395,10 @@ export function BacklogLive({
     <>
       <PageHead title="Backlog" desc="Live unplanned work from the workspace API.">
         {isLeader && (
-          <button className="btn primary" onClick={() => navigate("/tickets/new")}>
+          <Button variant="primary" onClick={() => navigate("/tickets/new")}>
             <Icons.Plus />
             Create ticket
-          </button>
+          </Button>
         )}
       </PageHead>
       <FilterBar placeholder="Search backlog…" labelOptions={labelOptions} />
@@ -415,7 +415,7 @@ export function BacklogLive({
             <span>{backlog.length} tickets</span>
           </div>
         </div>
-        {loading ? <div className="empty-state"><Icons.LoaderCircle className="spin" /><p>Loading backlog…</p></div> : error ? <div className="empty-state"><Icons.CircleAlert /><p>{error}</p></div> : backlog.length ? (
+        {loading ? <LoadingState label="Loading backlog…" /> : error ? <ErrorState title="Unable to load backlog" body={error} /> : backlog.length ? (
           <TicketTable rows={backlog} />
         ) : (
           <Empty

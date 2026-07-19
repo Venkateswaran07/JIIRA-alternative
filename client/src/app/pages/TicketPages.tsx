@@ -4,7 +4,7 @@ import * as Icons from "lucide-react";
 import { normalizeTicket, useWorkspace } from "../workspace";
 import { api, apiResourceUrl } from "../../api";
 import { appPrompt, appForm, appConfirm } from "../components/AppDialog";
-import { Avatar, Badge, CardTitle, PageHead, Empty, ErrorState, FilterBar, LabelChips, LabelPicker, LoadingState, Pagination } from "../components/ui";
+import { Avatar, Badge, CardTitle, PageHead, Empty, ErrorState, FilterBar, LabelChips, LabelPicker, LoadingState, Pagination, Tabs } from "../components/ui";
 import { fmt } from "../../utils/ui";
 import type { Ticket } from "../../types/domain";
 
@@ -785,22 +785,17 @@ export function TicketDetailLive({ toast }: { toast: (s: string) => void }) {
             ))}
           </div>
           <div className="card">
-            <div className="tabs">
-              {[
-                ["comments", "Comments"],
-                ["workLogs", "Work logs"],
-                ["attachments", "Attachments"],
-                ["history", "History"],
-              ].map(([value, label]) => (
-                <button
-                  key={value}
-                  className={tab === value ? "active" : ""}
-                  onClick={() => setTab(value)}
-                >
-                  {label}
-                </button>
-              ))}
-            </div>
+            <Tabs
+              value={tab}
+              onChange={setTab}
+              ariaLabel="Ticket activity"
+              items={[
+                { value: "comments", label: "Comments" },
+                { value: "workLogs", label: "Work logs" },
+                { value: "attachments", label: "Attachments" },
+                { value: "history", label: "History" },
+              ]}
+            />
             {tab !== "history" && (
               <>
                 <button

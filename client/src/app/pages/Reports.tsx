@@ -6,7 +6,7 @@ import {
 } from "recharts";
 import { useWorkspace } from "../workspace";
 import { api } from "../../api";
-import { Avatar, CardTitle, PageHead, Progress } from "../components/ui";
+import { Avatar, Button, CardTitle, PageHead, Progress, Select, Tabs } from "../components/ui";
 import { TicketTable } from "./TicketPages";
 import { MiniDatePicker } from "../components/MiniDatePicker";
 
@@ -135,29 +135,19 @@ export function Reports() {
         desc="Understand delivery trends and make better planning decisions."
       >
         <div style={{ display: "flex", gap: "10px" }}>
-          <button className="btn" onClick={downloadJSON}>
+          <Button onClick={downloadJSON}>
             <Icons.Download />
             Export JSON
-          </button>
-          <button className="btn" onClick={downloadCSV}>
+          </Button>
+          <Button onClick={downloadCSV}>
             <Icons.Download />
             Export CSV
-          </button>
+          </Button>
         </div>
       </PageHead>
-      <div className="tabs">
-        {["Overview", "Velocity", "Delivery", "Workload", "Risk"].map((x) => (
-          <button
-            className={tab === x ? "active" : ""}
-            key={x}
-            onClick={() => setTab(x)}
-          >
-            {x}
-          </button>
-        ))}
-      </div>
+      <Tabs value={tab} onChange={setTab} ariaLabel="Report sections" items={["Overview", "Velocity", "Delivery", "Workload", "Risk"].map((value) => ({ value, label: value }))} />
       <div className="report-filters">
-        <select
+        <Select
           value={selectedProject}
           onChange={(e) => setSelectedProject(e.target.value)}
         >
@@ -165,8 +155,8 @@ export function Reports() {
           {(dashboard?.projects || []).map((p: any) => (
             <option key={p._id} value={p.name}>{p.name}</option>
           ))}
-        </select>
-        <select
+        </Select>
+        <Select
           value={selectedMember}
           onChange={(e) => setSelectedMember(e.target.value)}
         >
@@ -174,7 +164,7 @@ export function Reports() {
           {users.map((u: any) => (
             <option key={u._id} value={u.name}>{u.name}</option>
           ))}
-        </select>
+        </Select>
         <MiniDatePicker
           name="startDate"
           label=""

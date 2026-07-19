@@ -42,6 +42,9 @@ export const Input = React.forwardRef<HTMLInputElement, React.InputHTMLAttribute
 export const Textarea = React.forwardRef<HTMLTextAreaElement, React.TextareaHTMLAttributes<HTMLTextAreaElement>>(function Textarea(props, ref) {
   return <textarea ref={ref} {...props} />;
 });
+export const Select = React.forwardRef<HTMLSelectElement, React.SelectHTMLAttributes<HTMLSelectElement>>(function Select(props, ref) {
+  return <select ref={ref} {...props} />;
+});
 
 export const PasswordInput = React.forwardRef<HTMLInputElement, Omit<React.InputHTMLAttributes<HTMLInputElement>, "type"> & {
   label?: string;
@@ -268,6 +271,38 @@ export function ViewToggle({
         >
           {Icon && <Icon />}
           {label}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+export function Tabs<T extends string>({
+  value,
+  onChange,
+  items,
+  ariaLabel,
+  className = "tabs",
+}: {
+  value: T;
+  onChange: (value: T) => void;
+  items: Array<{ value: T; label: React.ReactNode; disabled?: boolean }>;
+  ariaLabel: string;
+  className?: string;
+}) {
+  return (
+    <div className={className} role="tablist" aria-label={ariaLabel}>
+      {items.map((item) => (
+        <button
+          type="button"
+          role="tab"
+          aria-selected={value === item.value}
+          className={value === item.value ? "active" : ""}
+          disabled={item.disabled}
+          onClick={() => onChange(item.value)}
+          key={item.value}
+        >
+          {item.label}
         </button>
       ))}
     </div>

@@ -1,20 +1,16 @@
 import React, { useEffect, useState } from "react";
-import { useNavigate, useSearchParams, useParams, useLocation, Navigate } from "react-router-dom";
+import { useNavigate, useSearchParams, useParams, useLocation } from "react-router-dom";
 import * as Icons from "lucide-react";
 import { useWorkspace } from "../workspace";
 import { api } from "../../api";
 import { appPrompt } from "../components/AppDialog";
-import { Avatar, Badge, CardTitle, PageHead, Progress, Empty, FilterBar } from "../components/ui";
+import { Avatar, Badge, Button, CardTitle, PageHead, Progress, Empty, ErrorState, FilterBar, LoadingState, Tabs } from "../components/ui";
 import { fmt } from "../../utils/ui";
 
 // Circular/shared page components import dynamically or statically:
-import { Board, BacklogLive, SprintsLive } from "./SprintPages";
+import { Board, SprintsLive } from "./SprintPages";
+import { BacklogLive } from "./OperationalPages";
 import { TicketTable } from "./TicketPages";
-
-export function AdminOnly({ children }: { children: React.ReactNode }) {
-  const { role } = useWorkspace();
-  return role === "admin" ? <>{children}</> : <Navigate to="/403" replace />;
-}
 
 export function Projects() {
   const { projects, people, role } = useWorkspace();
@@ -438,36 +434,23 @@ export function ProjectDetail() {
   return (
     <>
       <PageHead eyebrow={p.key} title={p.name} desc={p.description}>
-        <button className="btn" onClick={() => nav("/team")}>
+        <Button onClick={() => nav("/team")}>
           <Icons.UserPlus />
           Members
-        </button>
+        </Button>
         {role === "admin" || role === "manager" ? (
-          <button className="btn primary" onClick={() => nav("/tickets/new")}>
+          <Button variant="primary" onClick={() => nav("/tickets/new")}>
             <Icons.Plus />
             Add ticket
-          </button>
+          </Button>
         ) : null}
       </PageHead>
-      <div className="tabs">
-        {["Overview", "Board", "Backlog", "Sprints", "Tickets", "Settings"].map(
-          (x) => (
-            <button
-              className={x === tab ? "active" : ""}
-              onClick={() =>
-                nav(
-                  x === "Overview"
-                    ? `/projects/${p.key}`
-                    : `/projects/${p.key}/${x.toLowerCase()}`,
-                )
-              }
-              key={x}
-            >
-              {x}
-            </button>
-          ),
-        )}
-      </div>
+      <Tabs
+        value={tab}
+        ariaLabel="Project sections"
+        items={["Overview", "Board", "Backlog", "Sprints", "Tickets", "Settings"].map((value) => ({ value, label: value }))}
+        onChange={(value) => nav(value === "Overview" ? `/projects/${p.key}` : `/projects/${p.key}/${value.toLowerCase()}`)}
+      />
 
       {tab === "Overview" && (
         <>
@@ -515,7 +498,7 @@ export function ProjectDetail() {
             </section>
             <section className="card">
               <CardTitle title="Milestones" />
-              {milestonesLoading ? <div className="empty-state"><Icons.LoaderCircle className="spin" /><p>Loading milestones…</p></div> : milestonesError ? <div className="empty-state"><Icons.CircleAlert /><p>{milestonesError}</p></div> : milestones.length ? <div className="timeline">
+              {milestonesLoading ? <LoadingState label="Loading milestones…" /> : milestonesError ? <ErrorState title="Unable to load milestones" body={milestonesError} /> : milestones.length ? <div className="timeline">
                 {milestones.map((milestone: any) => {
                   const config = milestone.config || {};
                   const targetDate = config.targetDate || config.dueDate || config.releaseDate;
@@ -537,7 +520,7 @@ export function ProjectDetail() {
       {tab === "Board" && <Board toast={toast} projectFilter={p.name} />}
 
       {tab === "Backlog" && (
-        <BacklogLive toast={toast} projectFilter={p.name} />
+        <BacklogLive toast={toast} projectFilter={p._id || p.id} />
       )}
 
       {tab === "Sprints" && (

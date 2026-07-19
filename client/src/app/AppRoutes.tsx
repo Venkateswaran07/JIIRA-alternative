@@ -1,6 +1,7 @@
 import React from "react";
-import { Route, Routes, Navigate } from "react-router-dom";
+import { Navigate, Route, Routes } from "react-router-dom";
 import { LoadingState } from "./components/ui";
+import { RoleGuard } from "./components/RoleGuard";
 
 // Pages
 import { DashboardLive } from "./pages/Dashboard";
@@ -11,11 +12,9 @@ import { FormPage, ErrorPage, ImportExportLive } from "./pages/FormPage";
 import { BacklogLive, SlaPage, AuditLogsLive, IntegrationsLive } from "./pages/OperationalPages";
 import { Board, CyclesLive, SprintsLive, SprintDetail, CompleteSprint } from "./pages/SprintPages";
 import { RiskPage } from "./pages/RiskPage";
-import { TicketList } from "./pages/TicketPages";
-import { TicketDetailLive } from "./pages/TicketDetailLive";
+import { TicketDetailLive, TicketList } from "./pages/TicketPages";
 import { Team, UserDetail } from "./pages/TeamPages";
 import { OrganizationLive, GroupsLive } from "./pages/OrganizationPages";
-import { useWorkspace } from "./workspace";
 
 const Reports = React.lazy(() => import("./pages/Reports").then((module) => ({ default: module.Reports })));
 const AIPage = React.lazy(() => import("./pages/AIPage").then((module) => ({ default: module.AIPage })));
@@ -24,11 +23,6 @@ const WorkModelPage = React.lazy(() => import("./pages/WorkModelPage").then((mod
 const Settings = React.lazy(() => import("./pages/SettingsPages").then((module) => ({ default: module.Settings })));
 const Security = React.lazy(() => import("./pages/SettingsPages").then((module) => ({ default: module.Security })));
 const Sessions = React.lazy(() => import("./pages/SettingsPages").then((module) => ({ default: module.Sessions })));
-
-function AdminOnly({ children }: { children: React.ReactNode }) {
-  const { role } = useWorkspace();
-  return role === "admin" ? <>{children}</> : <Navigate to="/403" replace />;
-}
 
 export function AppRoutes({
   density,
@@ -77,15 +71,15 @@ export function AppRoutes({
       <Route path="/reports/*" element={<Reports />} />
       <Route path="/ai/*" element={<AIPage />} />
       <Route path="/resources/*" element={<ResourcesLive toast={toast} />} />
-      <Route path="/organization" element={<AdminOnly><OrganizationLive toast={toast} /></AdminOnly>} />
-      <Route path="/groups" element={<AdminOnly><GroupsLive toast={toast} /></AdminOnly>} />
+      <Route path="/organization" element={<RoleGuard roles={["admin"]}><OrganizationLive toast={toast} /></RoleGuard>} />
+      <Route path="/groups" element={<RoleGuard roles={["admin"]}><GroupsLive toast={toast} /></RoleGuard>} />
       <Route path="/settings/*" element={<Settings theme={theme} setTheme={setTheme} density={density} setDensity={setDensity} toast={toast} />} />
       <Route path="/change-password" element={<Security toast={toast} />} />
       <Route path="/sessions" element={<Sessions toast={toast} />} />
-      <Route path="/integrations/*" element={<AdminOnly><IntegrationsLive toast={toast} /></AdminOnly>} />
-      <Route path="/audit-logs" element={<AdminOnly><AuditLogsLive /></AdminOnly>} />
-      <Route path="/import" element={<AdminOnly><ImportExportLive toast={toast} /></AdminOnly>} />
-      <Route path="/export" element={<AdminOnly><ImportExportLive toast={toast} /></AdminOnly>} />
+      <Route path="/integrations/*" element={<RoleGuard roles={["admin"]}><IntegrationsLive toast={toast} /></RoleGuard>} />
+      <Route path="/audit-logs" element={<RoleGuard roles={["admin"]}><AuditLogsLive /></RoleGuard>} />
+      <Route path="/import" element={<RoleGuard roles={["admin"]}><ImportExportLive toast={toast} /></RoleGuard>} />
+      <Route path="/export" element={<RoleGuard roles={["admin"]}><ImportExportLive toast={toast} /></RoleGuard>} />
       <Route path="/403" element={<ErrorPage code="403" />} />
       <Route path="/500" element={<ErrorPage code="500" />} />
       <Route path="/offline" element={<ErrorPage code="Offline" />} />
